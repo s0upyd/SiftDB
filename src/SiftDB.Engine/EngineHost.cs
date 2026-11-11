@@ -112,10 +112,12 @@ public sealed class EngineHost : IAsyncDisposable
             {
                 if (r.TryRead(out var batch)) { _out.SendBatch(queryId, batch); return; }
             }
+            var b = s.Breakdown;
             Event(new
             {
                 type = "complete", queryId, totalRows = s.TotalRows,
                 engineFirstBatchMs = s.FirstBatchMs, engineTotalMs = s.TotalMs,
+                engineReadMs = b.ReadMs, engineAppendMs = b.AppendMs, engineWriteWaitMs = b.WriteWaitMs,
             });
         }
         catch (Exception ex) when (s.IsCancelled(ex))

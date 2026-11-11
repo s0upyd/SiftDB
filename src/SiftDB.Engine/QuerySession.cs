@@ -23,6 +23,7 @@ internal sealed class QuerySession
     private readonly CancellationTokenSource _cts;
     private readonly Stopwatch _sw;
     private long _firstBatchTicks = -1;
+    private long _readTicks, _appendTicks, _writeTicks;
 
     public int Id { get; }
 
@@ -33,6 +34,12 @@ internal sealed class QuerySession
     public long TotalRows { get; private set; }
     public double FirstBatchMs => _firstBatchTicks < 0 ? -1 : _firstBatchTicks * 1000.0 / Stopwatch.Frequency;
     public double TotalMs { get; private set; }
+
+    /// <summary>Where the producer spent its time: reading from the provider, encoding, waiting on the full channel.</summary>
+    public (double ReadMs, double AppendMs, double WriteWaitMs) Breakdown =>
+        (ToMs(_readTicks), ToMs(_appendTicks), ToMs(_writeTicks));
+
+    private static double ToMs(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
 
     public QuerySession(int id, DbDataReader reader, RowBatchWriter writer, CancellationTokenSource cts, Stopwatch sw)
     {
@@ -59,15 +66,23 @@ internal sealed class QuerySession
                 var rows = _writer.RowCount;
                 var data = _writer.Flush();
                 if (_firstBatchTicks < 0) _firstBatchTicks = _sw.ElapsedTicks;
+                var w0 = Stopwatch.GetTimestamp();
                 await Channel.Writer.WriteAsync(new EncodedBatch(seq++, start, rows, data), ct);
+                _writeTicks += Stopwatch.GetTimestamp() - w0;
                 start += rows;
                 TotalRows = start;
                 lastFlush = _sw.ElapsedMilliseconds;
             }
 
-            while (await _reader.ReadAsync(ct))
+            while (true)
             {
+                var t0 = Stopwatch.GetTimestamp();
+                var more = await _reader.ReadAsync(ct);
+                var t1 = Stopwatch.GetTimestamp();
+                _readTicks += t1 - t0;
+                if (!more) break;
                 _writer.AppendRow(_reader);
+                _appendTicks += Stopwatch.GetTimestamp() - t1;
                 var limit = seq == 0 ? FirstBatchRows : BatchRows;
                 if (_writer.RowCount >= limit || _writer.ApproxBytes >= BatchBytes
                     || _sw.ElapsedMilliseconds - lastFlush >= MaxBatchAgeMs)

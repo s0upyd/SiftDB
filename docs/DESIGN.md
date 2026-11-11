@@ -267,11 +267,12 @@ The spike succeeds if the first rows appear in under 1s, scrolling stays smooth,
 | Measure | Result | Target |
 |---|---|---|
 | Time to first batch / first paint | 187 ms / 189 ms | under 1 s |
-| Transfer complete (1M rows, 55 batches, 53.4 MB) | 5.1 s (engine reports 5.09 s) | none set |
+| Transfer complete (1M rows, 55 batches, 53.4 MB) | **1.07 s in Release** (engine 1.06 s: read 183 ms, encode 706 ms, blocked on UI 2 ms). 5.1 s in a Debug build. | none set |
+| Time to first batch / first paint, Release | 125 ms / 135 ms | under 1 s |
 | Scroll, top to bottom in 6 s | p50 8.3 ms, p95 8.5 ms, max 8.8 ms, 0 frames over 20 ms | smooth |
 | Draw time per frame | avg 0.51 ms, max 2.2 ms | – |
 | JS heap after load | 54 MB | bounded |
 
-Reading: first rows and scrolling pass comfortably. The UI side is not the bottleneck: the 5.1 s total is almost all spent in the engine/Postgres side (the client and engine totals differ by 11 ms). Memory scales linearly with rows (heap is about the size of the data), so it is only bounded once the spill-to-disk cap from §10 exists.
+Reading: first rows and scrolling pass comfortably. The bridge and UI add about 8 ms to the engine's own time, and the engine was blocked on the UI for only 2 ms, so the fetch loop does not stall the reader. The first measurement (5.1 s) was a Debug build; always benchmark in Release (`dotnet run -c Release`). Encoding text columns (one string per cell) is the largest remaining engine cost and the first thing to optimise if needed. For comparison, `psql` fetches the same rows in about 0.97 s. Engine-only numbers can be reproduced without the UI via the `StreamingBenchmark` test (set `SIFTDB_SPIKE_CONN`). Memory scales linearly with rows (heap is about the size of the data), so it is only bounded once the spill-to-disk cap from §10 exists.
 
 **Known spike limitations:** NULLs show as `0` / empty; no selection or copy; the scroll height is plain DOM, so it tops out around 33M px (about 1.5M rows at 22px); an oversized single row isn't specially handled; no spill-to-disk.

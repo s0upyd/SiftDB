@@ -26,7 +26,7 @@ let done = true;
 
 const m = {
   t0: 0, columns: -1, firstBatch: -1, firstPaint: -1, complete: -1,
-  bytes: 0, batches: 0, rows: 0, engineFirst: -1, engineTotal: -1, status: '', bench: '',
+  bytes: 0, batches: 0, rows: 0, engineFirst: -1, engineTotal: -1, engineSplit: '', status: '', bench: '',
 };
 
 function onEvent(e: BridgeEvent) {
@@ -46,6 +46,7 @@ function onEvent(e: BridgeEvent) {
       m.rows = e.totalRows;
       m.engineFirst = e.engineFirstBatchMs;
       m.engineTotal = e.engineTotalMs;
+      m.engineSplit = `read ${e.engineReadMs.toFixed(0)} ms · encode ${e.engineAppendMs.toFixed(0)} ms · blocked on UI ${e.engineWriteWaitMs.toFixed(0)} ms`;
       m.status = 'complete';
       grid.setRowHint(e.totalRows);
       finish();
@@ -86,7 +87,7 @@ async function run() {
   const t0 = performance.now();
   Object.assign(m, {
     t0, columns: -1, firstBatch: -1, firstPaint: -1, complete: -1,
-    bytes: 0, batches: 0, rows: 0, engineFirst: -1, engineTotal: -1, status: 'running',
+    bytes: 0, batches: 0, rows: 0, engineFirst: -1, engineTotal: -1, engineSplit: '', status: 'running',
   });
   store = new ResultStore();
   outstanding = 0;
@@ -158,6 +159,7 @@ setInterval(() => {
     (heap ? ` · JS heap ${(heap / 1048576).toFixed(0)} MB` : '') + '\n' +
     `columns ${ms(m.columns)} · first batch ${ms(m.firstBatch)} · first paint ${ms(m.firstPaint)} · transfer complete ${ms(m.complete)}` +
     ` · engine first/total ${ms(m.engineFirst)}/${ms(m.engineTotal)}\n` +
+    (m.engineSplit ? `engine split: ${m.engineSplit}\n` : '') +
     `draw avg ${d.avg.toFixed(2)} ms, max ${d.max.toFixed(1)} ms` + (m.bench ? ` · scroll: ${m.bench}` : '');
 }, 250);
 
