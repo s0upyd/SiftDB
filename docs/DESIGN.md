@@ -203,11 +203,17 @@ A lock button on the toolbar protects users who have write permissions from them
 ## 10. Open questions
 
 **Needed before building the editor features**
-- Is there a usable libpg_query binding for .NET, or does it need its own wrapper?
 - Default mode: Strict or Assisted, and global or per tab?
 - Variables with no inferable type: default to text, or ask?
 
 **Decided**
+- Parser: **`pgsqlparser` 2.1.0 (MIT, libpg_query 18.x) inside `SiftDB.Providers.Postgres` only**, behind a provider-neutral `ISqlParser` in Abstractions, so its types never leak and another engine (ScriptDom for SQL Server) can implement the same interface. Pin the version. Fallback if the wrapper is abandoned: our own P/Invoke over libpg_query (MSVC builds are supported upstream) or a fork. We do **not** write a full Postgres parser. Observed behaviour (see `PgSqlParserCharacterization` tests):
+  - Offsets are already UTF-16, which is what Monaco wants. Parse errors give a code-point position, with `GetCursorCharOffset` to convert.
+  - `SplitWithScanner` copes with half-typed statements (`... where o.`) and empty statements; `SplitWithParser` and `Parse` fail on them, so the editor uses the scanner split and keeps the parser for complete statements. Split ranges include leading whitespace and comments, so trim them using tokens when finding "the statement under the cursor".
+  - `Scan` fails for the whole input on an unterminated string, quoted identifier or `/*` comment, losing even the tokens before it. The editor needs a tolerant layer: re-scan the text before the error position and add a synthetic "unterminated" token.
+  - Quoted identifiers come back as `Ident` tokens whose text starts with `"`; keyword kinds (reserved, unreserved) are included. `"bob"` parses fine, so the resolver (§3) has to catch it, not the parser.
+  - Speed: split 1.5 ms and scan 9-20 ms for a 62 KB, 500-statement script; parsing a single statement is about 0.07 ms. Fast enough to re-scan the whole sheet on every keystroke.
+  - A small hand-written tolerant layer for autocomplete context (current clause, tables and aliases in scope) is still needed, because the real parser has no error recovery.
 - Front-end framework: **Solid** (fine-grained reactivity, no virtual DOM). The spike uses plain TypeScript, since it needs no framework.
 - Grid: **custom canvas grid**, read-only, with virtualised rows, column widths, selection and copy. Library grids (Glide is React-only, AG Grid has licence problems) were rejected to avoid framework mismatch and so the spike measures the real rendering ceiling.
 - Bridge transport: **WebView2 shared buffers** (`CreateSharedBuffer` + `PostSharedBufferToScript`) for row batches. `PostWebMessageAsArrayBuffer` does not exist in WebView2, so the earlier plan was wrong. Commands and events are JSON for now (MessagePack deferred; they're low volume). Row batches use a custom columnar binary layout (see `RowBatchWriter`): a header with column types and row count, then typed-array columns, 8-byte aligned so the UI can wrap them directly. The UI copies each batch out and releases the buffer straight away. Arrow can be revisited later for interop.

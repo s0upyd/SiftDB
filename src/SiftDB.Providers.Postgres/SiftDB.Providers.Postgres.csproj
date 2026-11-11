@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <PackageReference Include="Npgsql" Version="10.0.3" />
+    <PackageReference Include="pgsqlparser" Version="2.1.0" />
   </ItemGroup>
 
   <PropertyGroup>
