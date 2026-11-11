@@ -1,14 +1,5 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <ItemGroup>
-    <ProjectReference Include="..\SiftDB.Engine\SiftDB.Engine.csproj" />
-    <ProjectReference Include="..\SiftDB.Bridge\SiftDB.Bridge.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
-  </ItemGroup>
-
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
@@ -16,5 +7,21 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SiftDB.Engine\SiftDB.Engine.csproj" />
+    <ProjectReference Include="..\SiftDB.Bridge\SiftDB.Bridge.csproj" />
+    <!-- Spike: referenced directly. Real plugin loading (AssemblyLoadContext) comes later. -->
+    <ProjectReference Include="..\SiftDB.Providers.Postgres\SiftDB.Providers.Postgres.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
+  </ItemGroup>
+
+  <!-- The bundled UI: run `npm run build` in src/ui first. Served locally, never from a remote URL. -->
+  <ItemGroup>
+    <Content Include="..\ui\dist\**" Link="ui\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 
 </Project>

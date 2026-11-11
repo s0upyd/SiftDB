@@ -1,3 +1,38 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>SiftDB</title></head>
-<body style="margin:0"><canvas id="grid"></canvas><script type="module" src="/src/main.ts"></script></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SiftDB</title>
+  <style>
+    :root { --bg:#fff; --fg:#1f2328; --dim:#57606a; --panel:#f6f8fa; --line:#d0d7de; --accent:#0969da; }
+    :root[data-theme="dark"] { --bg:#0d1117; --fg:#e6edf3; --dim:#8b949e; --panel:#151b23; --line:#30363d; --accent:#4493f8; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body { display: flex; flex-direction: column; background: var(--bg); color: var(--fg); font: 13px "Segoe UI", sans-serif; }
+    .bar { display: flex; gap: 8px; align-items: center; padding: 8px; background: var(--panel); border-bottom: 1px solid var(--line); }
+    .bar input[type=text] { flex: 1; min-width: 0; padding: 4px 6px; }
+    button { padding: 4px 12px; cursor: pointer; }
+    textarea { width: 100%; height: 72px; resize: vertical; border: 0; border-bottom: 1px solid var(--line);
+               padding: 8px; font: 13px Consolas, monospace; background: var(--bg); color: var(--fg); }
+    input, textarea, button { color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
+    #stats { padding: 6px 8px; background: var(--panel); border-bottom: 1px solid var(--line); color: var(--dim);
+             font: 12px Consolas, monospace; white-space: pre-wrap; min-height: 3.6em; }
+    #grid { flex: 1; min-height: 0; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <input id="conn" type="text" placeholder="Host=localhost;Username=postgres;Password=…;Database=postgres" spellcheck="false">
+    <button id="connect">Connect</button>
+    <button id="run" disabled>Run</button>
+    <button id="cancel" disabled>Cancel</button>
+    <label><input id="fetchAll" type="checkbox" checked> fetch all</label>
+    <button id="bench" disabled>Scroll benchmark</button>
+  </div>
+  <textarea id="sql" spellcheck="false"></textarea>
+  <div id="stats">Not connected.</div>
+  <div id="grid"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

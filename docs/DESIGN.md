@@ -210,7 +210,7 @@ A lock button on the toolbar protects users who have write permissions from them
 **Decided**
 - Front-end framework: **Solid** (fine-grained reactivity, no virtual DOM). The spike uses plain TypeScript, since it needs no framework.
 - Grid: **custom canvas grid**, read-only, with virtualised rows, column widths, selection and copy. Library grids (Glide is React-only, AG Grid has licence problems) were rejected to avoid framework mismatch and so the spike measures the real rendering ceiling.
-- Bridge transport: **WebView2 `PostWebMessageAsArrayBuffer`**. Commands and events use MessagePack. Row batches use a custom columnar binary layout (small header with column types and row count, then typed-array buffers). Arrow can be revisited later for interop. If the ArrayBuffer path can't hit the spike's targets, that is the key finding.
+- Bridge transport: **WebView2 shared buffers** (`CreateSharedBuffer` + `PostSharedBufferToScript`) for row batches. `PostWebMessageAsArrayBuffer` does not exist in WebView2, so the earlier plan was wrong. Commands and events are JSON for now (MessagePack deferred; they're low volume). Row batches use a custom columnar binary layout (see `RowBatchWriter`): a header with column types and row count, then typed-array columns, 8-byte aligned so the UI can wrap them directly. The UI copies each batch out and releases the buffer straight away. Arrow can be revisited later for interop.
 - Large results: **stream with fetch-on-scroll**. The engine reads ahead from the `DbDataReader` into a capped buffer and pauses when the UI isn't consuming (backpressure). Fetched rows are kept in memory up to a cap, then spilled to a temp file, so scrolling back is instant. The UI shows a "fetched N rows, still loading" state, and cancel is instant. There is no hard row limit by default.
 - Grid editing: none for now. The grid is read-only. Revisit later (it would interact with transactions and the lock).
 - Export formats: CSV and JSON are enough for now. Import is not decided.
@@ -256,3 +256,11 @@ Prove the riskiest part before building anything else:
 5. Measure the time to first rows, total transfer time, memory use, and how smooth scrolling feels
 
 The spike succeeds if the first rows appear in under 1s, scrolling stays smooth, and memory stays bounded.
+
+**Running it**
+1. `cd src/ui && npm install && npm run build`
+2. Optionally set `SIFTDB_SPIKE_CONN` to a Npgsql connection string (it prefills the box).
+3. `dotnet run --project src/SiftDB.Host` (rebuild the host after each UI build, since the bundle is copied to its output).
+4. Connect, Run, and use "Scroll benchmark". The stats line shows time to first batch, first paint, transfer complete, bytes, JS heap and draw/scroll frame times.
+
+**Known spike limitations:** NULLs show as `0` / empty; no selection or copy; the scroll height is plain DOM, so it tops out around 33M px (about 1.5M rows at 22px); an oversized single row isn't specially handled; no spill-to-disk.
