@@ -63,6 +63,22 @@ public class CompletionWireTests
     }
 
     [Fact]
+    public async Task A_quiet_introspect_still_fills_the_cache_that_completion_reads()
+    {
+        // A newly opened sheet refreshes its own session's schema without sending the schema to the UI again.
+        var cap = new Capture();
+        await using var engine = new EngineHost([new InMemoryProvider(Schema)], cap);
+        await engine.HandleCommandAsync("""{"type":"connect","id":1,"provider":"postgres","connectionString":"x"}""");
+        await engine.HandleCommandAsync("""{"type":"introspect","id":2,"connectionId":1,"send":false}""");
+        Assert.DoesNotContain(cap.Events, e => e.Contains("\"schema\""));
+
+        await engine.HandleCommandAsync(Command("select * from per", 17));
+
+        using var doc = JsonDocument.Parse(cap.Events.Single(e => e.Contains("\"completions\"")));
+        Assert.Equal("Person", doc.RootElement.GetProperty("items").EnumerateArray().Single().GetProperty("label").GetString());
+    }
+
+    [Fact]
     public async Task Without_a_loaded_schema_it_answers_with_no_items_instead_of_failing()
     {
         var (engine, cap) = await Connected(introspect: false);

@@ -111,7 +111,7 @@ public sealed class PostgresSqlParser : ISqlParser
     public SqlSyntaxError? Validate(string statement)
     {
         var r = PgSqlParser.Parser.Parse(statement, new PgSqlParser.ParserOptions());
-        return r.Error is null ? null : new SqlSyntaxError(r.Error.Message, ErrorOffset(r.Error, statement));
+        return r.Error is null ? null : new SqlSyntaxError(r.Error.Message ?? "Syntax error", ErrorOffset(r.Error, statement));
     }
 
     private static int ErrorOffset(PgSqlParser.Error error, string sql) =>

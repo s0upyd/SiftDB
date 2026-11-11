@@ -72,7 +72,13 @@ public sealed class EngineHost : IAsyncDisposable
                         root.GetProperty("offset").GetInt32());
                     break;
                 case "introspect":
-                    await IntrospectAsync(id, root.GetProperty("connectionId").GetInt32());
+                    // "send": false refreshes this session's schema cache (completions, the resolver) without shipping the
+                    // whole schema to the UI again; only the sidebar needs a copy.
+                    await IntrospectAsync(id, root.GetProperty("connectionId").GetInt32(),
+                        send: !root.TryGetProperty("send", out var send) || send.GetBoolean());
+                    break;
+                case "disconnect":
+                    await DisconnectAsync(id, root.GetProperty("connectionId").GetInt32());
                     break;
                 case "fetchBatch":
                     await FetchAsync(root.GetProperty("queryId").GetInt32());
@@ -137,12 +143,31 @@ public sealed class EngineHost : IAsyncDisposable
         });
     }
 
-    private async Task IntrospectAsync(int id, int connectionId)
+    private async Task IntrospectAsync(int id, int connectionId, bool send)
     {
         if (!_connections.TryGetValue(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
         var schema = await state.Connection.IntrospectAsync(CancellationToken.None);
         state.Schema = schema; // completions are answered from this cache, never by querying the database
-        Event(new { type = "schema", replyTo = id, connectionId, schema });
+        if (send) Event(new { type = "schema", replyTo = id, connectionId, schema });
+        else Event(new { type = "ok", replyTo = id });
+    }
+
+    /// <summary>
+    /// Ends a session (a closed tab). A running statement is cancelled and given time to wind down first. Closing the
+    /// connection rolls back anything uncommitted: that is the point of warning the user before they close.
+    /// </summary>
+    private async Task DisconnectAsync(int id, int connectionId)
+    {
+        if (!_connections.TryRemove(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
+        if (state.Active is { } active)
+        {
+            active.Cancel();
+            _queries.TryRemove(active.Id, out _);
+        }
+        await state.SessionLock.WaitAsync();
+        try { await state.Connection.DisposeAsync(); }
+        finally { state.SessionLock.Release(); }
+        Event(new { type = "ok", replyTo = id });
     }
 
     /// <summary>Suggestions at a cursor offset. Pure CPU over the cached schema, so it is safe to call on every keystroke.</summary>
@@ -169,6 +194,8 @@ public sealed class EngineHost : IAsyncDisposable
         var handedOver = false;
         try
         {
+            // The statement it replaced has wound down; if nobody drained it, free it now.
+            if (state.Active is { } previous) _queries.TryRemove(previous.Id, out _);
             var sw = Stopwatch.StartNew();
             var cts = new CancellationTokenSource();
             DbDataReader reader;
@@ -282,14 +309,17 @@ public sealed class EngineHost : IAsyncDisposable
                 engineFirstBatchMs = s.FirstBatchMs, engineTotalMs = s.TotalMs,
                 engineReadMs = b.ReadMs, engineAppendMs = b.AppendMs, engineWriteWaitMs = b.WriteWaitMs,
             });
+            _queries.TryRemove(queryId, out _); // drained: nothing more can be fetched from it
         }
         catch (Exception ex) when (s.IsCancelled(ex))
         {
             Event(new { type = "cancelled", queryId });
+            _queries.TryRemove(queryId, out _);
         }
         catch (Exception ex)
         {
             Event(new { type = "error", queryId, message = ex.Message });
+            _queries.TryRemove(queryId, out _);
         }
     }
 
