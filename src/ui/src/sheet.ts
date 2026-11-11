@@ -41,6 +41,7 @@ const TEMPLATE = `
     <button class="txRollback" title="Roll back (Ctrl+Shift+R)">Rollback</button>
   </div>
   <div class="editor"></div>
+  <div class="splitter" role="separator" aria-orientation="horizontal" aria-label="Resize editor and results" tabindex="0" title="Drag to resize (or use the up and down arrow keys)"></div>
   <div class="msg" hidden role="status"><span class="msgIcon" aria-hidden="true"></span><span class="msgText"></span></div>
   <div class="resulttabs" role="tablist" aria-label="Results"></div>
   <div class="results"><div class="empty">Run a statement (F5) to see its results here.</div></div>
@@ -78,7 +79,7 @@ export class Sheet {
     fetchAll: HTMLInputElement; bench: HTMLButtonElement;
     txBar: HTMLElement; txIcon: HTMLElement; txLabel: HTMLElement; txDetail: HTMLElement;
     txEnd: HTMLButtonElement; txCommit: HTMLButtonElement; txRollback: HTMLButtonElement;
-    editor: HTMLElement; msg: HTMLElement; msgIcon: HTMLElement; msgText: HTMLElement; tabs: HTMLElement; results: HTMLElement; empty: HTMLElement;
+    editor: HTMLElement; splitter: HTMLElement; msg: HTMLElement; msgIcon: HTMLElement; msgText: HTMLElement; tabs: HTMLElement; results: HTMLElement; empty: HTMLElement;
   };
   private readonly resultsCtx: ResultsContext;
 
@@ -93,7 +94,7 @@ export class Sheet {
       fetchAll: $('.fetchAll'), bench: $('.bench'),
       txBar: $('.txbar'), txIcon: $('.txIcon'), txLabel: $('.txLabel'), txDetail: $('.txDetail'),
       txEnd: $('.txEnd'), txCommit: $('.txCommit'), txRollback: $('.txRollback'),
-      editor: $('.editor'), msg: $('.msg'), msgIcon: $('.msgIcon'), msgText: $('.msgText'), tabs: $('.resulttabs'), results: $('.results'), empty: $('.empty'),
+      editor: $('.editor'), splitter: $('.splitter'), msg: $('.msg'), msgIcon: $('.msgIcon'), msgText: $('.msgText'), tabs: $('.resulttabs'), results: $('.results'), empty: $('.empty'),
     };
     scrollTabsWithWheel(this.el.tabs);
     this.resultsCtx = {
@@ -126,11 +127,42 @@ export class Sheet {
     // Strict: the text you write is the text that runs. Assisted: the editor shows (and runs) the quoting the database needs.
     // Both choices are always visible and the current one is highlighted: a single button that changes its own label
     // reads as "click for Strict" when it actually means "you are in Strict".
+    this.initSplitter();
     this.el.modeAssisted.onclick = () => this.setMode('assisted');
     this.el.modeStrict.onclick = () => this.setMode('strict');
 
     this.setMessage('Not connected. Enter a connection string above and press Connect.', 'warning');
     this.updateButtons();
+  }
+
+  /** The editor keeps the height it is given; the results take the rest. Dragging, or arrow keys on the focused bar. */
+  private initSplitter() {
+    const { splitter, editor: box } = this.el;
+    const MIN_EDITOR = 80, MIN_RESULTS = 140;
+    const setHeight = (px: number) => {
+      const room = this.root.clientHeight - box.offsetTop - MIN_RESULTS;
+      box.style.height = `${Math.round(Math.max(MIN_EDITOR, Math.min(px, room)))}px`;
+      this.editor.layout();
+    };
+    let startY = 0, startH = 0;
+    splitter.onpointerdown = (e) => {
+      splitter.setPointerCapture(e.pointerId);
+      splitter.classList.add('dragging');
+      startY = e.clientY; startH = box.offsetHeight;
+      e.preventDefault();
+    };
+    splitter.onpointermove = (e) => { if (splitter.hasPointerCapture(e.pointerId)) setHeight(startH + e.clientY - startY); };
+    const end = (e: PointerEvent) => { splitter.classList.remove('dragging'); splitter.releasePointerCapture?.(e.pointerId); };
+    splitter.onpointerup = end;
+    splitter.onpointercancel = end;
+    splitter.ondblclick = () => setHeight(190);
+    splitter.onkeydown = (e) => {
+      const step = e.shiftKey ? 80 : 20;
+      if (e.key === 'ArrowUp') setHeight(box.offsetHeight - step);
+      else if (e.key === 'ArrowDown') setHeight(box.offsetHeight + step);
+      else return;
+      e.preventDefault();
+    };
   }
 
   // ---- the session ----------------------------------------------------------------------------------------------

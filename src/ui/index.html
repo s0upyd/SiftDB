@@ -90,7 +90,12 @@
     .txDetail { color: var(--dim); }
     .txbar .grow { flex: 1; }
 
-    .editor { height: 190px; min-height: 80px; resize: vertical; overflow: hidden; border-bottom: 1px solid var(--line); flex: none; }
+    .editor { height: 190px; min-height: 80px; overflow: hidden; flex: none; }
+    /* Drag to give the editor or the results more room. The line is 1px; the hit area is wider. */
+    .splitter { flex: none; height: 5px; margin: -2px 0; position: relative; z-index: 2; cursor: row-resize; touch-action: none; }
+    .splitter::after { content: ""; position: absolute; left: 0; right: 0; top: 2px; height: 1px; background: var(--line); }
+    .splitter:hover::after, .splitter:focus-visible::after, .splitter.dragging::after { background: var(--accent); top: 1px; height: 3px; }
+    .splitter:focus-visible { outline: none; }
     .run-glyph { cursor: pointer; }
     .run-glyph::before { content: "▶"; display: flex; align-items: center; justify-content: center; height: 100%;
                          font-size: 10px; color: var(--accent); }
