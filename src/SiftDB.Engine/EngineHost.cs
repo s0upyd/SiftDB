@@ -16,7 +16,11 @@ public interface IEngineOutput
 /// <summary>Headless engine. Commands arrive as JSON text; results leave through <see cref="IEngineOutput"/>.</summary>
 public sealed class EngineHost : IAsyncDisposable
 {
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    // Web defaults give camelCase properties; enums go out as camelCase strings ("materializedView").
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
 
     private readonly Dictionary<string, IDatabaseProvider> _providers = new();
     private readonly IEngineOutput _out;
@@ -54,6 +58,9 @@ public sealed class EngineHost : IAsyncDisposable
                     await ExecuteAsync(id, root.GetProperty("connectionId").GetInt32(),
                         root.GetProperty("sql").GetString()!);
                     break;
+                case "introspect":
+                    await IntrospectAsync(id, root.GetProperty("connectionId").GetInt32());
+                    break;
                 case "fetchBatch":
                     await FetchAsync(root.GetProperty("queryId").GetInt32());
                     break;
@@ -78,6 +85,13 @@ public sealed class EngineHost : IAsyncDisposable
         var connId = Interlocked.Increment(ref _nextConnection);
         _connections[connId] = new ConnectionState(conn);
         Event(new { type = "connected", replyTo = id, connectionId = connId });
+    }
+
+    private async Task IntrospectAsync(int id, int connectionId)
+    {
+        if (!_connections.TryGetValue(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
+        var schema = await state.Connection.IntrospectAsync(CancellationToken.None);
+        Event(new { type = "schema", replyTo = id, connectionId, schema });
     }
 
     private async Task ExecuteAsync(int id, int connectionId, string sql)

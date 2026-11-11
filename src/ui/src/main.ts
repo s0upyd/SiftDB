@@ -1,6 +1,7 @@
-import { BatchMeta, Bridge, BridgeEvent, Column, connectBridge } from './bridge';
+import { BatchMeta, Bridge, BridgeEvent, Column, DatabaseSchema, connectBridge } from './bridge';
 import { Grid, darkTheme, lightTheme } from './grid';
 import { ResultStore, decodeBatch } from './store';
+import { SchemaTree } from './tree';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const connEl = $<HTMLInputElement>('conn');
@@ -14,6 +15,9 @@ const fetchAll = $<HTMLInputElement>('fetchAll');
 sqlEl.value = 'select i, i::bigint * 3 as big, random() as r, md5(i::text) as hash\nfrom generate_series(1, 1000000) as i';
 
 const grid = new Grid($('grid'));
+const treeFilter = $<HTMLInputElement>('treeFilter');
+const refreshBtn = $<HTMLButtonElement>('refresh');
+const tree = new SchemaTree($('tree'), $('treeSummary'));
 const MAX_OUTSTANDING = 3;
 const LOOKAHEAD_ROWS = 100_000;
 
@@ -116,7 +120,25 @@ $('connect').onclick = async () => {
   runBtn.disabled = false;
   benchBtn.disabled = false;
   statsEl.textContent = 'Connected. Press Run.';
+  treeFilter.disabled = false;
+  refreshBtn.disabled = false;
+  await loadSchema();
 };
+
+async function loadSchema() {
+  tree.clear('Loading schema…');
+  refreshBtn.disabled = true;
+  const t0 = performance.now();
+  const r = await bridge.request({ type: 'introspect', connectionId });
+  refreshBtn.disabled = false;
+  if (r.type === 'error') { tree.clear(`Schema failed: ${r.message}`); return; }
+  tree.setSchema(r.schema as DatabaseSchema);
+  tree.setFilter(treeFilter.value);
+  console.log(`schema loaded in ${(performance.now() - t0).toFixed(0)} ms`);
+}
+
+refreshBtn.onclick = loadSchema;
+treeFilter.addEventListener('input', () => tree.setFilter(treeFilter.value));
 runBtn.onclick = run;
 cancelBtn.onclick = () => bridge.send({ type: 'cancel', queryId });
 sqlEl.addEventListener('keydown', (e) => {

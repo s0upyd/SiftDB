@@ -31,7 +31,10 @@ public class EngineTests
                 for (var i = 0; i < rows; i++) t.Rows.Add(i, (long)i * 3, i / 2.0, i % 7 == 0 ? null : $"row é{i}");
                 return Task.FromResult<DbDataReader>(t.CreateDataReader());
             }
-            public Task<DatabaseSchema> IntrospectAsync(CancellationToken ct) => Task.FromResult(new DatabaseSchema([]));
+            public Task<DatabaseSchema> IntrospectAsync(CancellationToken ct) => Task.FromResult(new DatabaseSchema([
+                new SchemaInfo("public", [
+                    new RelationInfo("OrderItems", RelationKind.MaterializedView,
+                        [new ColumnInfo("id", "integer", false, null)], ["id"], [], [])])]));
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
     }
@@ -94,6 +97,38 @@ public class EngineTests
         var dataStart = so + 11 * 4;
         Assert.Equal("row é3", Encoding.UTF8.GetString(d, dataStart + Str(3), Str(4) - Str(3)));
         Assert.Equal(0, Str(1) - Str(0)); // row 0 is null -> empty
+    }
+
+    [Fact]
+    public async Task Introspect_replies_with_a_camelCase_schema_event()
+    {
+        var cap = new Capture();
+        await using var engine = new EngineHost([new FakeProvider(1)], cap);
+        await engine.HandleCommandAsync("""{"type":"connect","id":1,"provider":"fake","connectionString":"x"}""");
+        await engine.HandleCommandAsync("""{"type":"introspect","id":7,"connectionId":1}""");
+
+        using var doc = JsonDocument.Parse(cap.Events.Single(e => e.Contains("\"schema\"")));
+        var root = doc.RootElement;
+        Assert.Equal("schema", root.GetProperty("type").GetString());
+        Assert.Equal(7, root.GetProperty("replyTo").GetInt32());
+        Assert.Equal(1, root.GetProperty("connectionId").GetInt32());
+
+        var rel = root.GetProperty("schema").GetProperty("schemas")[0].GetProperty("relations")[0];
+        Assert.Equal("OrderItems", rel.GetProperty("name").GetString());
+        Assert.Equal("materializedView", rel.GetProperty("kind").GetString());
+        var col = rel.GetProperty("columns")[0];
+        Assert.Equal("integer", col.GetProperty("dataType").GetString());
+        Assert.False(col.GetProperty("isNullable").GetBoolean());
+        Assert.Equal("id", rel.GetProperty("primaryKey")[0].GetString());
+    }
+
+    [Fact]
+    public async Task Introspect_on_an_unknown_connection_replies_with_an_error()
+    {
+        var cap = new Capture();
+        await using var engine = new EngineHost([new FakeProvider(1)], cap);
+        await engine.HandleCommandAsync("""{"type":"introspect","id":3,"connectionId":99}""");
+        Assert.Contains(cap.Events, e => e.Contains("\"error\"") && e.Contains("\"replyTo\":3"));
     }
 
     [Fact]
