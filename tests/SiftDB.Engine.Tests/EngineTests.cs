@@ -104,8 +104,8 @@ public class EngineTests
         Assert.Equal(10u, BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(4)));
         Assert.Equal(4u, BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(8)));
 
-        uint Kind(int c) => BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(12 + c * 12));
-        int Off(int c) => (int)BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(16 + c * 12));
+        uint Kind(int c) => BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(12 + c * 20));
+        int Off(int c) => (int)BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(16 + c * 20));
         Assert.Equal([1u, 2u, 3u, 0u], new[] { Kind(0), Kind(1), Kind(2), Kind(3) });
         Assert.All(new[] { 0, 1, 2, 3 }, c => Assert.Equal(0, Off(c) % 8));
 

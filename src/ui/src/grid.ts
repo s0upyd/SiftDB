@@ -5,7 +5,8 @@ const ROW_H = 22;
 const HEADER_H = 28;
 const GUTTER_W = 76;
 const FONT = '13px Consolas, "Cascadia Mono", monospace';
-const HEADER_FONT = '600 13px "Segoe UI", sans-serif';
+const NULL_FONT = 'italic 12px Consolas, "Cascadia Mono", monospace';
+const HEADER_FONT ='600 13px "Segoe UI", sans-serif';
 
 export interface GridTheme { bg: string; altBg: string; fg: string; dim: string; headerBg: string; line: string }
 
@@ -119,7 +120,17 @@ export class Grid {
         ctx.clip();
         const right = this.columns[c].kind !== Kind.Text;
         ctx.textAlign = right ? 'right' : 'left';
-        ctx.fillText(cellText(batch, c, local), right ? x + cw - 8 : x + 8, y + ROW_H / 2);
+        const value = cellText(batch, c, local);
+        if (value === null) {
+          // NULL is a value of its own: dim and italic so it can never be mistaken for the text "NULL", 0 or ''.
+          ctx.fillStyle = th.dim;
+          ctx.font = NULL_FONT;
+          ctx.fillText('NULL', right ? x + cw - 8 : x + 8, y + ROW_H / 2);
+          ctx.font = FONT;
+          ctx.fillStyle = th.fg;
+        } else {
+          ctx.fillText(value, right ? x + cw - 8 : x + 8, y + ROW_H / 2);
+        }
         ctx.restore();
       }
     }

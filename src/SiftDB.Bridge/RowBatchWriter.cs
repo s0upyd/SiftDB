@@ -11,17 +11,21 @@ namespace SiftDB.Bridge;
 ///
 /// Layout (little-endian):
 ///   u32 magic "SFTB" | u32 rowCount | u32 colCount
-///   colCount x { u32 kind, u32 offset, u32 length }   (offsets absolute, 8-byte aligned)
+///   colCount x { u32 kind, u32 offset, u32 length, u32 nullOffset, u32 nullLength }   (offsets absolute, 8-byte aligned)
 ///   column data:
 ///     Int32   rowCount x i32
 ///     Int64   rowCount x i64
 ///     Float64 rowCount x f64
 ///     Text    (rowCount+1) x i32 offsets, then UTF-8 bytes
-/// Spike limitation: NULLs are encoded as 0 / empty string.
+///   null bitmap (only for columns that contain a NULL; nullLength is 0 otherwise):
+///     ceil(rowCount/8) bytes, bit (row % 8) of byte (row / 8) set = that row is NULL.
+///     A NULL row holds 0 (numbers) or an empty string (text) in the data above, so a reader that ignores the bitmap
+///     still gets well-formed data.
 /// </summary>
 public sealed class RowBatchWriter
 {
     public const uint Magic = 0x42544653; // "SFTB" read as little-endian u32
+    private const int TableEntryBytes = 20;
 
     private sealed class Col
     {
@@ -33,6 +37,8 @@ public sealed class RowBatchWriter
         public byte[] B = [];
         public int[] Off = [];
         public int BLen;
+        public byte[] Nulls = [];   // allocated on the first NULL in the column
+        public bool HasNull;
     }
 
     private readonly Col[] _cols;
@@ -75,6 +81,7 @@ public sealed class RowBatchWriter
         {
             var col = _cols[c];
             var isNull = r.IsDBNull(c);
+            if (isNull) MarkNull(col, row);
             switch (col.Kind)
             {
                 case ColumnKind.Int32:
@@ -113,13 +120,24 @@ public sealed class RowBatchWriter
         RowCount++;
     }
 
+    private void MarkNull(Col col, int row)
+    {
+        if (col.Nulls.Length == 0) col.Nulls = new byte[NullBytes(_capacity)];
+        col.Nulls[row >> 3] |= (byte)(1 << (row & 7));
+        col.HasNull = true;
+    }
+
+    private static int NullBytes(int rows) => (rows + 7) / 8;
+
     /// <summary>Encodes the accumulated rows into a new array and clears the writer for reuse.</summary>
     public byte[] Flush()
     {
         var n = RowCount;
-        var pos = Align8(12 + _cols.Length * 12);
+        var pos = Align8(12 + _cols.Length * TableEntryBytes);
         var offsets = new int[_cols.Length];
         var lengths = new int[_cols.Length];
+        var nullOffsets = new int[_cols.Length];
+        var nullLengths = new int[_cols.Length];
         for (var c = 0; c < _cols.Length; c++)
         {
             var col = _cols[c];
@@ -131,6 +149,12 @@ public sealed class RowBatchWriter
             };
             offsets[c] = pos;
             pos = Align8(pos + lengths[c]);
+            if (col.HasNull)
+            {
+                nullLengths[c] = NullBytes(n);
+                nullOffsets[c] = pos;
+                pos = Align8(pos + nullLengths[c]);
+            }
         }
 
         var buf = new byte[pos];
@@ -140,10 +164,12 @@ public sealed class RowBatchWriter
         for (var c = 0; c < _cols.Length; c++)
         {
             var col = _cols[c];
-            var e = 12 + c * 12;
+            var e = 12 + c * TableEntryBytes;
             BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(e), (uint)col.Kind);
             BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(e + 4), (uint)offsets[c]);
             BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(e + 8), (uint)lengths[c]);
+            BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(e + 12), (uint)nullOffsets[c]);
+            BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(e + 16), (uint)nullLengths[c]);
             var dest = buf.AsSpan(offsets[c], lengths[c]);
             switch (col.Kind)
             {
@@ -157,6 +183,12 @@ public sealed class RowBatchWriter
                     break;
                 default:
                     throw new InvalidOperationException($"Unknown column kind {col.Kind}");
+            }
+            if (col.HasNull)
+            {
+                col.Nulls.AsSpan(0, nullLengths[c]).CopyTo(buf.AsSpan(nullOffsets[c], nullLengths[c]));
+                Array.Clear(col.Nulls, 0, nullLengths[c]); // the next batch starts with no NULLs
+                col.HasNull = false;
             }
         }
 
@@ -183,6 +215,7 @@ public sealed class RowBatchWriter
                 default:
                     throw new InvalidOperationException($"Unknown column kind {col.Kind}");
             }
+            if (col.Nulls.Length > 0) Array.Resize(ref col.Nulls, NullBytes(capacity));
         }
         _capacity = capacity;
     }
