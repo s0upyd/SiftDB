@@ -71,6 +71,74 @@ const MARKER_OWNER = 'siftdb';
 
 interface Fix { start: number; end: number; text: string; title: string }
 
+/** Monaco's completion and quick-fix providers are global to a language. With several editors on the page they must be
+ * registered once and route by model, or every suggestion would appear once per open sheet. */
+const editors = new Map<string, SqlEditor>();
+let providersRegistered = false;
+let editorCounter = 0;
+
+function ensureProviders() {
+  if (providersRegistered) return;
+  providersRegistered = true;
+
+  const Kind = monaco.languages.CompletionItemKind;
+  const kinds = { schema: Kind.Module, table: Kind.Class, view: Kind.Interface, column: Kind.Field, alias: Kind.Variable };
+  monaco.languages.registerCompletionItemProvider('pgsql', {
+    // Space matters most (right after FROM or JOIN); the engine answers "nothing" wherever nothing fits.
+    triggerCharacters: [' ', '.', '"', ','],
+    provideCompletionItems: async (model, position) => {
+      const editor = editors.get(model.uri.toString());
+      const r = editor ? await editor.completeAt(model.getValue(), model.getOffsetAt(position)) : null;
+      if (!r || r.items.length === 0) return { suggestions: [] };
+      const from = model.getPositionAt(r.start);
+      const to = model.getPositionAt(r.end);
+      const range = new monaco.Range(from.lineNumber, from.column, to.lineNumber, to.column);
+      return {
+        // The engine filters by what was typed, so ask again as typing continues.
+        incomplete: true,
+        suggestions: r.items.map((i) => ({
+          label: i.label,
+          kind: kinds[i.kind],
+          insertText: i.insertText,
+          filterText: i.filterText,
+          sortText: i.sortText,
+          detail: i.detail ?? undefined,
+          range,
+          // "shop." should open the list of shop's tables straight away.
+          command: i.kind === 'schema' ? { id: 'editor.action.triggerSuggest', title: '' } : undefined,
+        })),
+      };
+    },
+  });
+
+  // The lightbulb: offers whichever of that editor's current fixes overlap the cursor or selection.
+  monaco.languages.registerCodeActionProvider('pgsql', {
+    provideCodeActions: (model, range) => {
+      const editor = editors.get(model.uri.toString());
+      if (!editor) return { actions: [], dispose: () => {} };
+      const from = model.getOffsetAt(range.getStartPosition());
+      const to = model.getOffsetAt(range.getEndPosition());
+      const actions = editor.fixesIn(from, to).map((f) => {
+        const a = model.getPositionAt(f.start);
+        const b = model.getPositionAt(f.end);
+        return {
+          title: f.title,
+          kind: 'quickfix',
+          isPreferred: true,
+          edit: {
+            edits: [{
+              resource: model.uri,
+              versionId: undefined,
+              textEdit: { range: new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column), text: f.text },
+            }],
+          },
+        };
+      });
+      return { actions, dispose: () => {} };
+    },
+  });
+}
+
 /**
  * Monaco configured for SQL. Statement boundaries and identifier problems come from the engine (never from looking for
  * ';' or guessing at quoting): after each pause in typing or cursor movement it is asked to analyze the sheet, and the
@@ -112,24 +180,31 @@ export class SqlEditor {
       suggestOnTriggerCharacters: true,
       tabCompletion: 'on',
     });
-    this.registerCompletions();
-    this.registerQuickFixes();
     this.model = this.editor.getModel()!;
+    editors.set(this.model.uri.toString(), this);
+    ensureProviders();
     // One line-ending convention, so offsets we send to the engine always match offsets Monaco reports.
     this.model.setEOL(monaco.editor.EndOfLineSequence.LF);
     this.decorations = this.editor.createDecorationsCollection();
 
+    // Monaco keybindings are global to the page, not per editor: with several sheets open, the last editor created would own
+    // F5 for all of them. Each editor tags its own context with a unique id, and each binding only applies under that tag.
+    const uid = `siftdb-editor-${++editorCounter}`;
+    this.editor.createContextKey<string>('siftdbEditor', uid);
+    const mine = `siftdbEditor == '${uid}'`;
+
     const { KeyCode, KeyMod } = monaco;
-    this.editor.addCommand(KeyCode.F5, () => cb.run());
-    this.editor.addCommand(KeyMod.CtrlCmd | KeyCode.Enter, () => cb.run());
-    this.editor.addCommand(KeyMod.CtrlCmd | KeyCode.Period, () => cb.cancel());
+    this.editor.addCommand(KeyCode.F5, () => cb.run(), mine);
+    this.editor.addCommand(KeyMod.CtrlCmd | KeyCode.Enter, () => cb.run(), mine);
+    this.editor.addCommand(KeyMod.CtrlCmd | KeyCode.Period, () => cb.cancel(), mine);
     // Ctrl+. is Cancel (design section 6), so the quick fix menu gets Alt+Enter instead of Monaco's default.
-    this.editor.addCommand(KeyMod.Alt | KeyCode.Enter, () => this.editor.trigger('siftdb', 'editor.action.quickFix', {}));
+    this.editor.addCommand(KeyMod.Alt | KeyCode.Enter, () => this.editor.trigger('siftdb', 'editor.action.quickFix', {}), mine);
     this.editor.addAction({
       id: 'siftdb.acceptAll',
       label: 'Accept all identifier corrections',
       keybindings: [KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyQ],
       contextMenuGroupId: 'modification',
+      precondition: mine,
       run: () => this.acceptAll(),
     });
 
@@ -149,67 +224,24 @@ export class SqlEditor {
     this.schedule(0);
   }
 
-  private registerCompletions() {
-    const Kind = monaco.languages.CompletionItemKind;
-    const kinds = { schema: Kind.Module, table: Kind.Class, view: Kind.Interface, column: Kind.Field, alias: Kind.Variable };
-    monaco.languages.registerCompletionItemProvider('pgsql', {
-      // Space matters most (right after FROM or JOIN); the engine answers "nothing" wherever nothing fits.
-      triggerCharacters: [' ', '.', '"', ','],
-      provideCompletionItems: async (model, position) => {
-        const r = await this.cb.complete(model.getValue(), model.getOffsetAt(position));
-        if (!r || r.items.length === 0) return { suggestions: [] };
-        const from = model.getPositionAt(r.start);
-        const to = model.getPositionAt(r.end);
-        const range = new monaco.Range(from.lineNumber, from.column, to.lineNumber, to.column);
-        return {
-          // The engine filters by what was typed, so ask again as typing continues.
-          incomplete: true,
-          suggestions: r.items.map((i) => ({
-            label: i.label,
-            kind: kinds[i.kind],
-            insertText: i.insertText,
-            filterText: i.filterText,
-            sortText: i.sortText,
-            detail: i.detail ?? undefined,
-            range,
-            // "shop." should open the list of shop's tables straight away.
-            command: i.kind === 'schema' ? { id: 'editor.action.triggerSuggest', title: '' } : undefined,
-          })),
-        };
-      },
-    });
-  }
-
-  /** The lightbulb: offers whichever of the current fixes overlap the cursor or selection. */
-  private registerQuickFixes() {
-    monaco.languages.registerCodeActionProvider('pgsql', {
-      provideCodeActions: (model, range) => {
-        const from = model.getOffsetAt(range.getStartPosition());
-        const to = model.getOffsetAt(range.getEndPosition());
-        const actions = this.fixes
-          .filter((f) => f.start <= to && f.end >= from)
-          .map((f) => {
-            const a = model.getPositionAt(f.start);
-            const b = model.getPositionAt(f.end);
-            return {
-              title: f.title,
-              kind: 'quickfix',
-              isPreferred: true,
-              edit: {
-                edits: [{
-                  resource: model.uri,
-                  versionId: undefined,
-                  textEdit: { range: new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column), text: f.text },
-                }],
-              },
-            };
-          });
-        return { actions, dispose: () => {} };
-      },
-    });
-  }
-
   setTheme(dark: boolean) { monaco.editor.setTheme(dark ? 'vs-dark' : 'vs'); }
+
+  /** For the global completion provider: suggestions for this editor's text. */
+  completeAt(text: string, offset: number) { return this.cb.complete(text, offset); }
+
+  /** For the global quick-fix provider: this editor's current fixes that touch [from, to]. */
+  fixesIn(from: number, to: number): Fix[] { return this.fixes.filter((f) => f.start <= to && f.end >= from); }
+
+  /** Re-measure after the editor's container became visible (switching sheets). */
+  layout() { this.editor.layout(); }
+
+  /** Frees the editor and its document when its sheet is closed. */
+  dispose() {
+    window.clearTimeout(this.timer);
+    editors.delete(this.model.uri.toString());
+    this.editor.dispose();
+    this.model.dispose();
+  }
   setCursor(line: number, column = 1) { this.editor.setPosition({ lineNumber: line, column }); }
   focus() { this.editor.focus(); }
 
