@@ -16,6 +16,9 @@ public interface IDatabaseProvider
     /// <summary>The dialect's lexer, statement splitter and grammar check.</summary>
     ISqlParser Parser { get; }
 
+    /// <summary>The dialect's identifier quoting rules.</summary>
+    IIdentifierPolicy Identifiers { get; }
+
     Task<IProviderConnection> OpenAsync(string connectionString, CancellationToken ct);
 }
 

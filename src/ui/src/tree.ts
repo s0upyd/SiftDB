@@ -116,9 +116,10 @@ export class SchemaTree {
     this.root.replaceChildren(frag);
     const first = this.root.firstElementChild as HTMLElement | null;
     if (first) first.tabIndex = 0; // roving tabindex: one tab stop for the whole tree
+    const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
     this.summary.textContent = f
-      ? `${matched} of ${total} relations match`
-      : `${schema.schemas.length} schemas · ${total} relations`;
+      ? `${matched} of ${plural(total, 'relation')} match`
+      : `${plural(schema.schemas.length, 'schema')} · ${plural(total, 'relation')}`;
   }
 
   private *columnRows(schemaName: string, r: RelationInfo) {

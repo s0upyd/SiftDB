@@ -65,6 +65,46 @@ public sealed class PostgresSqlParser : ISqlParser
             }
         }
         if (invalid && Trim(sql, tokens, tailStart, sql.Length) is { } tail) ranges.Add(tail);
+
+        // The wrapper's splitter silently drops an unfinished statement in some cases (an open parenthesis, as in
+        // "insert into t ("). If anything meaningful lies beyond what it returned, trust our own token split instead.
+        return Covers(ranges, tokens, sql) ? ranges : SplitByTokens(sql, tokens);
+    }
+
+    private static bool Covers(List<SqlRange> ranges, IReadOnlyList<SqlToken> tokens, string sql)
+    {
+        var lastSignificant = -1;
+        foreach (var t in tokens) if (IsSignificant(t, sql)) lastSignificant = t.End;
+        if (lastSignificant < 0) return true;
+        return ranges.Count > 0 && ranges[^1].End >= lastSignificant;
+    }
+
+    private static bool IsSignificant(SqlToken t, string sql) =>
+        t.Kind != SqlTokenKind.Comment && !IsSemicolon(t, sql) && !IsUnterminatedComment(t, sql);
+
+    private static bool IsUnterminatedComment(SqlToken t, string sql) =>
+        t.Kind == SqlTokenKind.Invalid && string.CompareOrdinal(sql, t.Start, "/*", 0, 2) == 0;
+
+    /// <summary>Splits at every ';' token, ignoring nesting. Used only when the wrapper's splitter cannot be trusted.</summary>
+    private static List<SqlRange> SplitByTokens(string sql, IReadOnlyList<SqlToken> tokens)
+    {
+        var ranges = new List<SqlRange>();
+        int first = -1, last = -1;
+
+        void Close()
+        {
+            if (first >= 0) ranges.Add(new SqlRange(first, last - first));
+            first = last = -1;
+        }
+
+        foreach (var t in tokens)
+        {
+            if (IsSemicolon(t, sql)) { Close(); continue; }
+            if (!IsSignificant(t, sql)) continue;
+            if (first < 0) first = t.Start;
+            last = t.End;
+        }
+        Close();
         return ranges;
     }
 
@@ -90,7 +130,7 @@ public sealed class PostgresSqlParser : ISqlParser
             if (t.Start >= end) break;
             if (t.Kind == SqlTokenKind.Comment) continue;
             if (IsSemicolon(t, sql)) continue;
-            if (t.Kind == SqlTokenKind.Invalid && string.CompareOrdinal(sql, t.Start, "/*", 0, 2) == 0) continue; // unterminated comment
+            if (IsUnterminatedComment(t, sql)) continue;
             if (first < 0) first = t.Start;
             last = t.End;
         }

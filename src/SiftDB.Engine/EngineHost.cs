@@ -58,6 +58,14 @@ public sealed class EngineHost : IAsyncDisposable
                     await ExecuteAsync(id, root.GetProperty("connectionId").GetInt32(),
                         root.GetProperty("sql").GetString()!);
                     break;
+                case "analyzeSheet":
+                    AnalyzeSheet(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("text").GetString()!,
+                        root.GetProperty("selectionStart").GetInt32(), root.GetProperty("selectionEnd").GetInt32());
+                    break;
+                case "complete":
+                    Complete(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("text").GetString()!,
+                        root.GetProperty("offset").GetInt32());
+                    break;
                 case "introspect":
                     await IntrospectAsync(id, root.GetProperty("connectionId").GetInt32());
                     break;
@@ -83,15 +91,44 @@ public sealed class EngineHost : IAsyncDisposable
         if (!_providers.TryGetValue(provider, out var p)) { Error(id, $"No provider '{provider}'"); return; }
         var conn = await p.OpenAsync(connectionString, CancellationToken.None);
         var connId = Interlocked.Increment(ref _nextConnection);
-        _connections[connId] = new ConnectionState(conn);
+        _connections[connId] = new ConnectionState(p, conn);
         Event(new { type = "connected", replyTo = id, connectionId = connId });
+    }
+
+    /// <summary>
+    /// Splits a sheet into statements with the connection's dialect and says which one the cursor/selection would run.
+    /// Offsets are UTF-16, matching the editor. Cheap enough to call on every pause in typing.
+    /// </summary>
+    private void AnalyzeSheet(int id, int connectionId, string text, int selectionStart, int selectionEnd)
+    {
+        if (!_connections.TryGetValue(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
+        var statements = state.Provider.Parser.Split(text);
+        var pick = StatementPicker.Pick(text, statements, selectionStart, selectionEnd);
+        Event(new
+        {
+            type = "sheetAnalysis", replyTo = id,
+            statements = statements.Select(s => new { start = s.Start, length = s.Length }),
+            pick = new { start = pick.Range?.Start ?? 0, length = pick.Range?.Length ?? 0, reason = pick.Reason },
+        });
     }
 
     private async Task IntrospectAsync(int id, int connectionId)
     {
         if (!_connections.TryGetValue(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
         var schema = await state.Connection.IntrospectAsync(CancellationToken.None);
+        state.Schema = schema; // completions are answered from this cache, never by querying the database
         Event(new { type = "schema", replyTo = id, connectionId, schema });
+    }
+
+    /// <summary>Suggestions at a cursor offset. Pure CPU over the cached schema, so it is safe to call on every keystroke.</summary>
+    private void Complete(int id, int connectionId, string text, int offset)
+    {
+        if (!_connections.TryGetValue(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
+        var schema = state.Schema;
+        var result = schema is null
+            ? new CompletionResult(offset, offset, [])
+            : CompletionEngine.Complete(schema, state.Provider.Parser, state.Provider.Identifiers, text, offset);
+        Event(new { type = "completions", replyTo = id, start = result.Start, end = result.End, items = result.Items });
     }
 
     private async Task ExecuteAsync(int id, int connectionId, string sql)
@@ -153,9 +190,11 @@ public sealed class EngineHost : IAsyncDisposable
         foreach (var c in _connections.Values) await c.Connection.DisposeAsync();
     }
 
-    private sealed class ConnectionState(IProviderConnection connection)
+    private sealed class ConnectionState(IDatabaseProvider provider, IProviderConnection connection)
     {
+        public IDatabaseProvider Provider { get; } = provider;
         public IProviderConnection Connection { get; } = connection;
         public QuerySession? Active { get; set; }
+        public DatabaseSchema? Schema { get; set; }
     }
 }

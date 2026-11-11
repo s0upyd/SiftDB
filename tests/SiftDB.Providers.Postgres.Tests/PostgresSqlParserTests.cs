@@ -144,6 +144,18 @@ public class PostgresSqlParserTests
         Assert.Equal(expected, Statements(sql));
     }
 
+    [Theory]
+    [InlineData("insert into t (", new[] { "insert into t (" })]
+    [InlineData("insert into t (a, ", new[] { "insert into t (a," })]
+    [InlineData("select 1; insert into t (a, ", new[] { "select 1", "insert into t (a," })]
+    [InlineData("select (1; select 2", new[] { "select (1", "select 2" })]
+    [InlineData("select 1 from orders where id in (select customer_id from ", new[] { "select 1 from orders where id in (select customer_id from" })]
+    [InlineData("insert into t (a; -- c\nselect 2;", new[] { "insert into t (a", "select 2" })]
+    public void Split_does_not_lose_a_statement_with_an_open_parenthesis(string sql, string[] expected)
+    {
+        Assert.Equal(expected, Statements(sql));
+    }
+
     [Fact]
     public void Split_offsets_are_utf16_after_non_ascii_text()
     {

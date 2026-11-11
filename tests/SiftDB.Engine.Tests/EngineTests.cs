@@ -15,9 +15,30 @@ public class EngineTests
     {
         public string Id => "fake";
         public int ContractVersion => ProviderContract.CurrentVersion;
-        public ISqlParser Parser => throw new NotSupportedException();
+        public ISqlParser Parser { get; } = new SemicolonParser();
+        public IIdentifierPolicy Identifiers => throw new NotSupportedException();
         public Task<IProviderConnection> OpenAsync(string cs, CancellationToken ct) =>
             Task.FromResult<IProviderConnection>(new Conn(rows));
+
+        /// <summary>Toy dialect: statements are separated by ';' (no quoting rules).</summary>
+        private sealed class SemicolonParser : ISqlParser
+        {
+            public IReadOnlyList<SqlToken> Tokenize(string sql) => [];
+            public SqlSyntaxError? Validate(string statement) => null;
+            public IReadOnlyList<SqlRange> Split(string sql)
+            {
+                var list = new List<SqlRange>();
+                var pos = 0;
+                foreach (var chunk in sql.Split(';'))
+                {
+                    var lead = chunk.Length - chunk.TrimStart().Length;
+                    var body = chunk.Trim();
+                    if (body.Length > 0) list.Add(new SqlRange(pos + lead, body.Length));
+                    pos += chunk.Length + 1;
+                }
+                return list;
+            }
+        }
 
         private sealed class Conn(int rows) : IProviderConnection
         {
@@ -123,6 +144,56 @@ public class EngineTests
     }
 
     [Fact]
+    public async Task AnalyzeSheet_returns_statement_ranges_and_the_pick()
+    {
+        var cap = new Capture();
+        await using var engine = new EngineHost([new FakeProvider(1)], cap);
+        await engine.HandleCommandAsync("""{"type":"connect","id":1,"provider":"fake","connectionString":"x"}""");
+
+        const string sheet = "select 1;\nselect 2;\n";
+        // Cursor inside the second statement.
+        var cursor = sheet.IndexOf("select 2", StringComparison.Ordinal) + 3;
+        await engine.HandleCommandAsync(
+            $$"""{"type":"analyzeSheet","id":5,"connectionId":1,"text":"select 1;\nselect 2;\n","selectionStart":{{cursor}},"selectionEnd":{{cursor}}}""");
+
+        using var doc = JsonDocument.Parse(cap.Events.Single(e => e.Contains("sheetAnalysis")));
+        var root = doc.RootElement;
+        Assert.Equal(5, root.GetProperty("replyTo").GetInt32());
+
+        var statements = root.GetProperty("statements").EnumerateArray().ToArray();
+        Assert.Equal(2, statements.Length);
+        Assert.Equal(0, statements[0].GetProperty("start").GetInt32());
+        Assert.Equal(8, statements[0].GetProperty("length").GetInt32());
+
+        var pick = root.GetProperty("pick");
+        Assert.Equal("cursorStatement", pick.GetProperty("reason").GetString());
+        Assert.Equal(sheet.IndexOf("select 2", StringComparison.Ordinal), pick.GetProperty("start").GetInt32());
+        Assert.Equal(8, pick.GetProperty("length").GetInt32());
+    }
+
+    [Fact]
+    public async Task AnalyzeSheet_reports_none_when_there_is_nothing_to_run()
+    {
+        var cap = new Capture();
+        await using var engine = new EngineHost([new FakeProvider(1)], cap);
+        await engine.HandleCommandAsync("""{"type":"connect","id":1,"provider":"fake","connectionString":"x"}""");
+        await engine.HandleCommandAsync("""{"type":"analyzeSheet","id":2,"connectionId":1,"text":"  \n","selectionStart":1,"selectionEnd":1}""");
+
+        using var doc = JsonDocument.Parse(cap.Events.Single(e => e.Contains("sheetAnalysis")));
+        Assert.Equal("none", doc.RootElement.GetProperty("pick").GetProperty("reason").GetString());
+        Assert.Empty(doc.RootElement.GetProperty("statements").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task AnalyzeSheet_on_an_unknown_connection_replies_with_an_error()
+    {
+        var cap = new Capture();
+        await using var engine = new EngineHost([new FakeProvider(1)], cap);
+        await engine.HandleCommandAsync("""{"type":"analyzeSheet","id":4,"connectionId":42,"text":"x","selectionStart":0,"selectionEnd":0}""");
+        Assert.Contains(cap.Events, e => e.Contains("\"error\"") && e.Contains("\"replyTo\":4"));
+    }
+
+    [Fact]
     public async Task Introspect_on_an_unknown_connection_replies_with_an_error()
     {
         var cap = new Capture();
@@ -144,6 +215,7 @@ public class EngineTests
         public string Id => "bad";
         public int ContractVersion => 99;
         public ISqlParser Parser => throw new NotSupportedException();
+        public IIdentifierPolicy Identifiers => throw new NotSupportedException();
         public Task<IProviderConnection> OpenAsync(string c, CancellationToken ct) => throw new NotSupportedException();
     }
 }

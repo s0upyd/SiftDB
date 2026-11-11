@@ -1,1 +1,13 @@
-{ "compilerOptions": { "target": "ES2022", "module": "ESNext", "moduleResolution": "bundler", "strict": true, "lib": ["ES2022","DOM","DOM.Iterable"], "skipLibCheck": true }, "include": ["src"] }
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": { "@monaco/*": ["node_modules/monaco-editor/esm/vs/*"] }
+  },
+  "include": ["src"]
+}

@@ -8,7 +8,15 @@ public sealed class PostgresProvider : IDatabaseProvider
 {
     public string Id => "postgres";
     public int ContractVersion => ProviderContract.CurrentVersion;
-    public ISqlParser Parser { get; } = new PostgresSqlParser();
+    public ISqlParser Parser { get; }
+    public IIdentifierPolicy Identifiers { get; }
+
+    public PostgresProvider()
+    {
+        var parser = new PostgresSqlParser();
+        Parser = parser;
+        Identifiers = new PostgresIdentifierPolicy(parser);
+    }
 
     public async Task<IProviderConnection> OpenAsync(string connectionString, CancellationToken ct)
     {

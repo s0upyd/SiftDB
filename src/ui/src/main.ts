@@ -1,18 +1,26 @@
 import { BatchMeta, Bridge, BridgeEvent, Column, DatabaseSchema, connectBridge } from './bridge';
+import { CompletionResponse, SheetAnalysis, SqlEditor } from './editor';
 import { Grid, darkTheme, lightTheme } from './grid';
 import { ResultStore, decodeBatch } from './store';
 import { SchemaTree } from './tree';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const connEl = $<HTMLInputElement>('conn');
-const sqlEl = $<HTMLTextAreaElement>('sql');
 const statsEl = $('stats');
 const runBtn = $<HTMLButtonElement>('run');
 const cancelBtn = $<HTMLButtonElement>('cancel');
 const benchBtn = $<HTMLButtonElement>('bench');
 const fetchAll = $<HTMLInputElement>('fetchAll');
 
-sqlEl.value = 'select i, i::bigint * 3 as big, random() as r, md5(i::text) as hash\nfrom generate_series(1, 1000000) as i';
+const INITIAL_SHEET = [
+  '-- Put the cursor in a statement and press F5 or Ctrl+Enter. Select text to run just that.',
+  '-- Ctrl+. cancels. The ▶ in the margin runs a statement with the mouse.',
+  'select i, i::bigint * 3 as big, random() as r, md5(i::text) as hash',
+  'from generate_series(1, 1000000) as i;',
+  '',
+  'select * from "Person";',
+  '',
+].join('\n');
 
 const grid = new Grid($('grid'));
 const treeFilter = $<HTMLInputElement>('treeFilter');
@@ -38,6 +46,7 @@ function onEvent(e: BridgeEvent) {
     document.documentElement.dataset.theme = e.dark ? 'dark' : 'light';
     grid.theme = e.dark ? darkTheme : lightTheme;
     grid.invalidate();
+    sqlEditor.setTheme(!!e.dark);
     if (e.defaultConnection) connEl.value = e.defaultConnection;
     return;
   }
@@ -87,7 +96,7 @@ function finish() {
   cancelBtn.disabled = true;
 }
 
-async function run() {
+async function run(sql: string) {
   const t0 = performance.now();
   Object.assign(m, {
     t0, columns: -1, firstBatch: -1, firstPaint: -1, complete: -1,
@@ -99,7 +108,7 @@ async function run() {
   runBtn.disabled = true;
   cancelBtn.disabled = false;
 
-  const r = await bridge.request({ type: 'execute', connectionId, sql: sqlEl.value });
+  const r = await bridge.request({ type: 'execute', connectionId, sql });
   if (r.type === 'error') { done = true; m.status = `error: ${r.message}`; finish(); return; }
   queryId = r.queryId!;
   m.columns = performance.now() - t0;
@@ -119,9 +128,11 @@ $('connect').onclick = async () => {
   connectionId = r.connectionId;
   runBtn.disabled = false;
   benchBtn.disabled = false;
-  statsEl.textContent = 'Connected. Press Run.';
+  statsEl.textContent = 'Connected. Press F5 in the editor.';
   treeFilter.disabled = false;
   refreshBtn.disabled = false;
+  sqlEditor.refresh();
+  sqlEditor.focus();
   await loadSchema();
 };
 
@@ -139,11 +150,43 @@ async function loadSchema() {
 
 refreshBtn.onclick = loadSchema;
 treeFilter.addEventListener('input', () => tree.setFilter(treeFilter.value));
-runBtn.onclick = run;
-cancelBtn.onclick = () => bridge.send({ type: 'cancel', queryId });
-sqlEl.addEventListener('keydown', (e) => {
-  if (e.key === 'F5' || (e.key === 'Enter' && e.ctrlKey)) { e.preventDefault(); if (!runBtn.disabled) run(); }
-});
+runBtn.onclick = () => void runFromEditor();
+cancelBtn.onclick = cancelQuery;
+
+function cancelQuery() {
+  if (!cancelBtn.disabled) bridge.send({ type: 'cancel', queryId });
+}
+
+/** The engine owns the dialect-aware parts of "what does F5 run": splitting the sheet and picking the statement. */
+async function analyze(text: string, selectionStart: number, selectionEnd: number): Promise<SheetAnalysis | null> {
+  if (!connectionId) return null;
+  const r = await bridge.request({ type: 'analyzeSheet', connectionId, text, selectionStart, selectionEnd });
+  return r.type === 'sheetAnalysis' ? (r as unknown as SheetAnalysis) : null;
+}
+
+async function runFromEditor() {
+  const target = await sqlEditor.statementToRun();
+  switch (target.kind) {
+    case 'run': void run(target.sql); break;
+    case 'none': m.status = 'nothing to run: put the cursor in a statement, or select some text'; break;
+    case 'disconnected': statsEl.textContent = 'Connect first. The connection decides which SQL dialect splits your statements.'; break;
+  }
+}
+
+/** Suggestions are computed by the engine from its cached schema, so this is one cheap round trip per request. */
+async function complete(text: string, offset: number): Promise<CompletionResponse | null> {
+  if (!connectionId) return null;
+  const r = await bridge.request({ type: 'complete', connectionId, text, offset });
+  return r.type === 'completions' ? (r as unknown as CompletionResponse) : null;
+}
+
+const sqlEditor = new SqlEditor($('editor'), analyze, {
+  run: () => void runFromEditor(),
+  cancel: cancelQuery,
+  runSql: (sql) => void run(sql),
+  complete,
+}, INITIAL_SHEET);
+sqlEditor.setCursor(3); // on the first statement
 
 /** Scrolls top to bottom over a fixed time and records frame intervals. */
 benchBtn.onclick = () => {
