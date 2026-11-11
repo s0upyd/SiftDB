@@ -258,9 +258,8 @@ Prove the riskiest part before building anything else:
 The spike succeeds if the first rows appear in under 1s, scrolling stays smooth, and memory stays bounded.
 
 **Running it**
-1. `cd src/ui && npm install && npm run build`
-2. Optionally set `SIFTDB_SPIKE_CONN` to a Npgsql connection string (it prefills the box).
-3. `dotnet run --project src/SiftDB.Host` (rebuild the host after each UI build, since the bundle is copied to its output).
-4. Connect, Run, and use "Scroll benchmark". The stats line shows time to first batch, first paint, transfer complete, bytes, JS heap and draw/scroll frame times.
+1. Optionally set `SIFTDB_SPIKE_CONN` to a Npgsql connection string (it prefills the box).
+2. `dotnet run --project src/SiftDB.Host`. The .NET build runs `npm install` and `npm run build` itself when a UI source file is newer than the last bundle, then copies the bundle next to the exe. After a UI change, close the app and run again. Use `-p:SkipUiBuild=true` to skip the npm step.
+3. Connect, Run, and use "Scroll benchmark". The stats line shows time to first batch, first paint, transfer complete, bytes, JS heap and draw/scroll frame times.
 
 **Known spike limitations:** NULLs show as `0` / empty; no selection or copy; the scroll height is plain DOM, so it tops out around 33M px (about 1.5M rows at 22px); an oversized single row isn't specially handled; no spill-to-disk.

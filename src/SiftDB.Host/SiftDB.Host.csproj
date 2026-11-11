@@ -19,9 +19,32 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
   </ItemGroup>
 
-  <!-- The bundled UI: run `npm run build` in src/ui first. Served locally, never from a remote URL. -->
+  <!--
+    The bundled UI (served locally, never from a remote URL). The .NET build runs the npm build itself:
+    `npm install` + `npm run build` whenever a UI source file is newer than dist/index.html, then the
+    bundle is copied to the output under ui/. Pass -p:SkipUiBuild=true to skip (e.g. CI that built it already).
+  -->
+  <PropertyGroup>
+    <UiDir>$(MSBuildProjectDirectory)\..\ui\</UiDir>
+  </PropertyGroup>
+
   <ItemGroup>
-    <Content Include="..\ui\dist\**" Link="ui\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <UiSource Include="$(UiDir)src\**;$(UiDir)index.html;$(UiDir)package.json;$(UiDir)vite.config.ts;$(UiDir)tsconfig.json" />
   </ItemGroup>
+
+  <Target Name="BuildUi" BeforeTargets="AssignTargetPaths;BeforeBuild"
+          Inputs="@(UiSource)" Outputs="$(UiDir)dist\index.html"
+          Condition="'$(SkipUiBuild)' != 'true'">
+    <Exec Command="npm install" WorkingDirectory="$(UiDir)" />
+    <Exec Command="npm run build" WorkingDirectory="$(UiDir)" />
+  </Target>
+
+  <!-- Separate target so the bundle is picked up even when dist/ didn't exist at evaluation time. -->
+  <Target Name="IncludeUi" BeforeTargets="AssignTargetPaths" DependsOnTargets="BuildUi">
+    <ItemGroup>
+      <UiOutput Include="$(UiDir)dist\**" />
+      <Content Include="@(UiOutput)" Link="ui\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
 
 </Project>
