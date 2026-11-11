@@ -60,6 +60,8 @@ The engine's resolver matches identifiers against the schema, ignoring case, and
 - You type `OrderItems` and the editor shows `"OrderItems"`, with the quotes greyed out (Monaco injected-text decorations that can't be edited and that the cursor skips).
 - What's executed is exactly what's displayed.
 
+**The mode switch shows both options.** Each sheet toolbar has an `Assisted | Strict` segmented control with the active option filled. An earlier single button changed its own label to the current mode, which read as "click for Strict". That made a correctly blocked Strict run look like Assisted failing. Mode is per sheet, and switching clears a stale "not run" message.
+
 **Rules for both modes**
 - Copy and save output the corrected SQL, or ask first.
 - An "Accept all" command turns greyed corrections into real text.

@@ -60,6 +60,13 @@
     .sheetbar { display: flex; gap: 8px; align-items: center; padding: 6px 8px; background: var(--panel); border-bottom: 1px solid var(--line); }
     .sheetbar .bench { margin-left: auto; }
 
+    /* Assisted | Strict: both options always shown, the active one filled, so the current mode is never a guess. */
+    .modes { display: inline-flex; }
+    .modes button { border-radius: 0; margin: 0; }
+    .modes button:first-child { border-radius: 4px 0 0 4px; }
+    .modes button:last-child { border-radius: 0 4px 4px 0; margin-left: -1px; }
+    .modes button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; position: relative; }
+
     /* Transaction bar (design section 7). State is shown three ways: colour, icon and words. */
     :root { --tx-open: #1a7f37; --tx-changed: #9a6700; --tx-failed: #cf222e;
             --tx-open-bg: #dafbe1; --tx-changed-bg: #fff8c5; --tx-failed-bg: #ffebe9; }

@@ -24,7 +24,10 @@ const TEMPLATE = `
     <button class="run" disabled title="Run the statement under the cursor (F5 or Ctrl+Enter)">Run</button>
     <button class="cancel" disabled title="Cancel the running statement (Ctrl+.)">Cancel</button>
     <button class="begin" disabled title="Begin a transaction. You can also just type BEGIN: the bar follows the server either way.">Begin</button>
-    <button class="mode" aria-pressed="false" title="Assisted: quotes are added for you and shown greyed; what runs is what you see. Strict: the text you write is the text that runs; problems are squiggles with quick fixes (Alt+Enter) and block running.">Assisted</button>
+    <div class="modes" role="group" aria-label="How identifiers are quoted">
+      <button class="modeAssisted" aria-pressed="true" title="Assisted: write loosely. The quotes the database needs are added for you and shown greyed, and what runs is exactly what you see.">Assisted</button>
+      <button class="modeStrict" aria-pressed="false" title="Strict: the text you write is the text that runs. Quoting problems are squiggles with quick fixes (Alt+Enter), and a statement with any is not run.">Strict</button>
+    </div>
     <label><input class="fetchAll" type="checkbox" checked> fetch all</label>
     <button class="bench" disabled>Scroll benchmark</button>
   </div>
@@ -66,7 +69,8 @@ export class Sheet {
   private running: ResultView | null = null;
 
   private readonly el: {
-    run: HTMLButtonElement; cancel: HTMLButtonElement; begin: HTMLButtonElement; mode: HTMLButtonElement;
+    run: HTMLButtonElement; cancel: HTMLButtonElement; begin: HTMLButtonElement;
+    modeAssisted: HTMLButtonElement; modeStrict: HTMLButtonElement;
     fetchAll: HTMLInputElement; bench: HTMLButtonElement;
     txBar: HTMLElement; txIcon: HTMLElement; txLabel: HTMLElement; txDetail: HTMLElement;
     txEnd: HTMLButtonElement; txCommit: HTMLButtonElement; txRollback: HTMLButtonElement;
@@ -81,7 +85,8 @@ export class Sheet {
     parent.append(this.root);
     const $ = <T extends HTMLElement = HTMLElement>(selector: string) => this.root.querySelector(selector) as T;
     this.el = {
-      run: $('.run'), cancel: $('.cancel'), begin: $('.begin'), mode: $('.mode'), fetchAll: $('.fetchAll'), bench: $('.bench'),
+      run: $('.run'), cancel: $('.cancel'), begin: $('.begin'), modeAssisted: $('.modeAssisted'), modeStrict: $('.modeStrict'),
+      fetchAll: $('.fetchAll'), bench: $('.bench'),
       txBar: $('.txbar'), txIcon: $('.txIcon'), txLabel: $('.txLabel'), txDetail: $('.txDetail'),
       txEnd: $('.txEnd'), txCommit: $('.txCommit'), txRollback: $('.txRollback'),
       editor: $('.editor'), msg: $('.msg'), msgIcon: $('.msgIcon'), msgText: $('.msgText'), tabs: $('.resulttabs'), results: $('.results'), empty: $('.empty'),
@@ -115,12 +120,10 @@ export class Sheet {
     this.el.txRollback.onclick = () => void this.txAction('rollback');
     this.el.bench.onclick = () => this.activeResult?.runScrollBenchmark();
     // Strict: the text you write is the text that runs. Assisted: the editor shows (and runs) the quoting the database needs.
-    this.el.mode.onclick = () => {
-      const next: QueryMode = this.editor.getMode() === 'assisted' ? 'strict' : 'assisted';
-      this.editor.setMode(next);
-      this.el.mode.textContent = next === 'assisted' ? 'Assisted' : 'Strict';
-      this.el.mode.setAttribute('aria-pressed', String(next === 'strict'));
-    };
+    // Both choices are always visible and the current one is highlighted: a single button that changes its own label
+    // reads as "click for Strict" when it actually means "you are in Strict".
+    this.el.modeAssisted.onclick = () => this.setMode('assisted');
+    this.el.modeStrict.onclick = () => this.setMode('strict');
 
     this.setMessage('Not connected. Enter a connection string above and press Connect.', 'warning');
     this.updateButtons();
@@ -186,6 +189,14 @@ export class Sheet {
   }
 
   focusEditor() { this.editor.focus(); }
+
+  /** Switches how this sheet treats identifier problems, and shows which is active. A blocked-run message is cleared: it described the old mode. */
+  private setMode(mode: QueryMode) {
+    this.editor.setMode(mode);
+    this.el.modeAssisted.setAttribute('aria-pressed', String(mode === 'assisted'));
+    this.el.modeStrict.setAttribute('aria-pressed', String(mode === 'strict'));
+    if (this.el.msg.dataset.kind === 'warning' && this.el.msgText.textContent?.startsWith('not run:')) this.setMessage('');
+  }
 
   setTheme(dark: boolean) {
     this.editor.setTheme(dark);
