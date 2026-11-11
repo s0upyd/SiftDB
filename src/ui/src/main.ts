@@ -262,6 +262,43 @@ treeFilter.addEventListener('input', () => tree.setFilter(treeFilter.value));
 $('newSheet').onclick = () => addSheet();
 $('newTab').onclick = () => addSheet();
 
+// ---- schema tree width -------------------------------------------------------------------------------------------
+
+/** Dragging (or arrow keys) resizes the tree; the sheets take the rest. The width is remembered between runs. */
+function initSideSplitter() {
+  const side = $('side'), split = $('sidesplit');
+  const DEFAULT = 300, MIN = 160;
+  const KEY = 'siftdb.sideWidth';
+  const setWidth = (px: number, save = true) => {
+    const max = Math.max(MIN, $('main').clientWidth - 640); // leave the sheets room for their toolbar
+    const w = Math.round(Math.max(MIN, Math.min(px, max)));
+    side.style.width = `${w}px`;
+    if (save) try { localStorage.setItem(KEY, String(w)); } catch { /* private window or blocked storage: fine */ }
+  };
+  try { const saved = Number(localStorage.getItem(KEY)); if (saved) setWidth(saved, false); } catch { /* ignore */ }
+
+  let startX = 0, startW = 0;
+  split.onpointerdown = (e) => {
+    split.setPointerCapture(e.pointerId);
+    split.classList.add('dragging');
+    startX = e.clientX; startW = side.offsetWidth;
+    e.preventDefault();
+  };
+  split.onpointermove = (e) => { if (split.hasPointerCapture(e.pointerId)) setWidth(startW + e.clientX - startX); };
+  const end = (e: PointerEvent) => { split.classList.remove('dragging'); split.releasePointerCapture?.(e.pointerId); };
+  split.onpointerup = end;
+  split.onpointercancel = end;
+  split.ondblclick = () => setWidth(DEFAULT);
+  split.onkeydown = (e) => {
+    const step = e.shiftKey ? 80 : 20;
+    if (e.key === 'ArrowLeft') setWidth(side.offsetWidth - step);
+    else if (e.key === 'ArrowRight') setWidth(side.offsetWidth + step);
+    else return;
+    e.preventDefault();
+  };
+}
+initSideSplitter();
+
 // ---- keyboard ----------------------------------------------------------------------------------------------------
 // Capture phase and stopPropagation: Monaco binds some of these itself (Ctrl+Shift+Enter is "insert line above"), so it
 // must not also see them.

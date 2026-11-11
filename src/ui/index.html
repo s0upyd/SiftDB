@@ -24,7 +24,12 @@
     .bar input[type=text] { flex: 1; min-width: 0; padding: 4px 6px; }
 
     #main { flex: 1; min-height: 0; display: flex; }
-    #side { width: 300px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--bg); }
+    #side { width: 300px; min-width: 160px; flex: none; display: flex; flex-direction: column; background: var(--bg); }
+    /* Drag to resize the schema tree. The line is 1px; the hit area is wider. */
+    #sidesplit { flex: none; width: 5px; margin: 0 -2px; position: relative; z-index: 2; cursor: col-resize; touch-action: none; }
+    #sidesplit::after { content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--line); }
+    #sidesplit:hover::after, #sidesplit:focus-visible::after, #sidesplit.dragging::after { background: var(--accent); left: 1px; width: 3px; }
+    #sidesplit:focus-visible { outline: none; }
     #side header { display: flex; gap: 6px; align-items: center; padding: 6px 8px; background: var(--panel); border-bottom: 1px solid var(--line); }
     #side header input { flex: 1; min-width: 0; padding: 3px 6px; }
     #refresh { padding: 3px 8px; }
@@ -173,6 +178,7 @@
       <div id="treeSummary">Not connected.</div>
       <div id="tree"></div>
     </aside>
+    <div id="sidesplit" role="separator" aria-orientation="vertical" aria-label="Resize schema browser" tabindex="0" title="Drag to resize (or use the left and right arrow keys). Double-click to reset."></div>
     <div id="work">
       <div class="tabstrip">
         <div id="tabs" role="tablist" aria-label="Sheets"></div>
