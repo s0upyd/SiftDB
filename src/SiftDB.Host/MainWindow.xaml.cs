@@ -1,6 +1,8 @@
 ﻿using System.IO;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Win32;
 using SiftDB.Engine;
@@ -25,6 +27,7 @@ public partial class MainWindow : Window, IEngineOutput
     {
         InitializeComponent();
         _engine = new EngineHost([new PostgresProvider()], this);
+        SourceInitialized += (_, _) => ApplyTitleBarTheme(IsDarkTheme());
         Loaded += async (_, _) => await InitWebAsync();
         Closing += OnClosing;
         Closed += async (_, _) => await _engine.DisposeAsync();
@@ -101,6 +104,21 @@ public partial class MainWindow : Window, IEngineOutput
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
             core.PostSharedBufferToScript(buf, CoreWebView2SharedBufferAccess.ReadOnly, meta);
         });
+
+    // The title bar belongs to Windows, not to the page, so it has to be asked to match. 20 is the documented attribute
+    // (Windows 10 20H1 and later); 19 is the same switch on early Windows 10 builds. Failure just leaves a light title bar.
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+    private void ApplyTitleBarTheme(bool dark)
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero) return;
+        var on = dark ? 1 : 0;
+        if (DwmSetWindowAttribute(hwnd, 20, ref on, sizeof(int)) != 0) DwmSetWindowAttribute(hwnd, 19, ref on, sizeof(int));
+        // Until the page has loaded, WebView2 shows white; match it so a dark window does not flash.
+        Web.DefaultBackgroundColor = dark ? System.Drawing.Color.FromArgb(13, 17, 23) : System.Drawing.Color.White;
+    }
 
     private static bool IsDarkTheme()
     {
