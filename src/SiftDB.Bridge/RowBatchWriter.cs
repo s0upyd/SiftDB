@@ -90,7 +90,7 @@ public sealed class RowBatchWriter
                     col.D[row] = isNull ? 0 : col.Source == typeof(double) ? r.GetDouble(c) : r.GetFloat(c);
                     ApproxBytes += 8;
                     break;
-                default:
+                case ColumnKind.Text:
                     if (!isNull)
                     {
                         var s = col.Source == typeof(string)
@@ -106,6 +106,8 @@ public sealed class RowBatchWriter
                     col.Off[row + 1] = col.BLen;
                     ApproxBytes += 4;
                     break;
+                default:
+                    throw new InvalidOperationException($"Unknown column kind {col.Kind}");
             }
         }
         RowCount++;
@@ -125,7 +127,7 @@ public sealed class RowBatchWriter
             {
                 ColumnKind.Int32 => n * 4,
                 ColumnKind.Int64 or ColumnKind.Float64 => n * 8,
-                _ => (n + 1) * 4 + col.BLen,
+                _ => (n + 1) * 4 + col.BLen
             };
             offsets[c] = pos;
             pos = Align8(pos + lengths[c]);
@@ -148,11 +150,13 @@ public sealed class RowBatchWriter
                 case ColumnKind.Int32: MemoryMarshal.AsBytes(col.I.AsSpan(0, n)).CopyTo(dest); break;
                 case ColumnKind.Int64: MemoryMarshal.AsBytes(col.L.AsSpan(0, n)).CopyTo(dest); break;
                 case ColumnKind.Float64: MemoryMarshal.AsBytes(col.D.AsSpan(0, n)).CopyTo(dest); break;
-                default:
+                case ColumnKind.Text:
                     MemoryMarshal.AsBytes(col.Off.AsSpan(0, n + 1)).CopyTo(dest);
                     col.B.AsSpan(0, col.BLen).CopyTo(dest[((n + 1) * 4)..]);
                     col.BLen = 0;
                     break;
+                default:
+                    throw new InvalidOperationException($"Unknown column kind {col.Kind}");
             }
         }
 
@@ -172,10 +176,12 @@ public sealed class RowBatchWriter
                 case ColumnKind.Int32: Array.Resize(ref col.I, capacity); break;
                 case ColumnKind.Int64: Array.Resize(ref col.L, capacity); break;
                 case ColumnKind.Float64: Array.Resize(ref col.D, capacity); break;
-                default:
+                case ColumnKind.Text:
                     Array.Resize(ref col.Off, capacity + 1);
                     if (col.B.Length == 0) col.B = new byte[4096];
                     break;
+                default:
+                    throw new InvalidOperationException($"Unknown column kind {col.Kind}");
             }
         }
         _capacity = capacity;
