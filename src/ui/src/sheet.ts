@@ -38,7 +38,7 @@ const TEMPLATE = `
     <button class="txRollback" title="Roll back (Ctrl+Shift+R)">Rollback</button>
   </div>
   <div class="editor"></div>
-  <div class="msg" hidden role="status"></div>
+  <div class="msg" hidden role="status"><span class="msgIcon" aria-hidden="true"></span><span class="msgText"></span></div>
   <div class="resulttabs" role="tablist" aria-label="Results"></div>
   <div class="results"><div class="empty">Run a statement (F5) to see its results here.</div></div>
 `;
@@ -70,7 +70,7 @@ export class Sheet {
     fetchAll: HTMLInputElement; bench: HTMLButtonElement;
     txBar: HTMLElement; txIcon: HTMLElement; txLabel: HTMLElement; txDetail: HTMLElement;
     txEnd: HTMLButtonElement; txCommit: HTMLButtonElement; txRollback: HTMLButtonElement;
-    editor: HTMLElement; msg: HTMLElement; tabs: HTMLElement; results: HTMLElement; empty: HTMLElement;
+    editor: HTMLElement; msg: HTMLElement; msgIcon: HTMLElement; msgText: HTMLElement; tabs: HTMLElement; results: HTMLElement; empty: HTMLElement;
   };
   private readonly resultsCtx: ResultsContext;
 
@@ -84,7 +84,7 @@ export class Sheet {
       run: $('.run'), cancel: $('.cancel'), begin: $('.begin'), mode: $('.mode'), fetchAll: $('.fetchAll'), bench: $('.bench'),
       txBar: $('.txbar'), txIcon: $('.txIcon'), txLabel: $('.txLabel'), txDetail: $('.txDetail'),
       txEnd: $('.txEnd'), txCommit: $('.txCommit'), txRollback: $('.txRollback'),
-      editor: $('.editor'), msg: $('.msg'), tabs: $('.resulttabs'), results: $('.results'), empty: $('.empty'),
+      editor: $('.editor'), msg: $('.msg'), msgIcon: $('.msgIcon'), msgText: $('.msgText'), tabs: $('.resulttabs'), results: $('.results'), empty: $('.empty'),
     };
     scrollTabsWithWheel(this.el.tabs);
     this.resultsCtx = {
@@ -95,6 +95,7 @@ export class Sheet {
       onFinished: (v) => {
         if (this.running === v) this.running = null;
         this.updateButtons();
+        this.renderResultTabs(); // a failed statement is marked on its tab
       },
     };
 
@@ -121,7 +122,7 @@ export class Sheet {
       this.el.mode.setAttribute('aria-pressed', String(next === 'strict'));
     };
 
-    this.setMessage('Not connected. Enter a connection string above and press Connect.');
+    this.setMessage('Not connected. Enter a connection string above and press Connect.', 'warning');
     this.updateButtons();
   }
 
@@ -134,7 +135,7 @@ export class Sheet {
     this.setMessage('Connecting…');
     const r = await this.ctx.bridge.request({ type: 'connect', provider: 'postgres', connectionString });
     if (r.type === 'error') {
-      this.setMessage(`Connect failed: ${r.message}`);
+      this.setMessage(`Connect failed: ${r.message}`, 'error');
       return { ok: false, schema: null, error: r.message };
     }
     this.connectionId = r.connectionId;
@@ -218,10 +219,10 @@ export class Sheet {
   private handleTarget(target: RunTarget) {
     switch (target.kind) {
       case 'run': void this.runSql(target.sql); break;
-      case 'blocked': this.setMessage(`not run: ${target.reason}`); break;
+      case 'blocked': this.setMessage(`not run: ${target.reason}`, 'warning'); break;
       case 'none': this.setMessage('nothing to run: put the cursor in a statement, or select some text'); break;
       case 'disconnected':
-        this.setMessage('Not connected. Connect first: the connection decides which SQL dialect splits your statements.');
+        this.setMessage('Not connected. Connect first: the connection decides which SQL dialect splits your statements.', 'warning');
         break;
     }
   }
@@ -278,8 +279,17 @@ export class Sheet {
       tab.className = 'rtab';
       tab.setAttribute('role', 'tab');
       tab.setAttribute('aria-selected', String(view === this.activeResult));
-      tab.title = view.panel.title;
+      tab.dataset.state = view.state;
+      // A failure is visible without opening the tab: a red marker here, and the reason on hover.
+      tab.title = view.state === 'error' ? `${view.errorHeadline}\n\n${view.panel.title}` : view.panel.title;
+      if (view.state === 'error') tab.setAttribute('aria-label', `Failed: ${view.label}`);
       tab.onclick = () => this.showResult(view);
+
+      const mark = document.createElement('span');
+      mark.className = 'mark';
+      mark.setAttribute('aria-hidden', 'true');
+      mark.textContent = view.state === 'error' ? '✖' : view.state === 'running' ? '⟳' : '';
+      mark.hidden = mark.textContent === '';
 
       const label = document.createElement('span');
       label.className = 'label';
@@ -299,7 +309,7 @@ export class Sheet {
       close.setAttribute('aria-label', 'Close this result');
       close.onclick = (e) => { e.stopPropagation(); this.closeResult(view); };
 
-      tab.append(label, pin, close);
+      tab.append(mark, label, pin, close);
       return tab;
     }));
     revealSelectedTab(this.el.tabs);
@@ -354,13 +364,21 @@ export class Sheet {
   async txAction(action: 'begin' | 'commit' | 'rollback') {
     if (!this.connected) return;
     const r = await this.ctx.bridge.request({ type: 'transaction', connectionId: this.connectionId, action });
-    if (r.type === 'error') this.setMessage(`${action} failed: ${r.message}`);
+    if (r.type === 'error') this.setMessage(`${action} failed: ${r.message}`, 'error');
   }
 
   // ---- small things ---------------------------------------------------------------------------------------------
 
-  setMessage(text: string) {
-    this.el.msg.textContent = text;
+  /**
+   * The message bar between the editor and the results. Its tone says how much it matters: amber for "this cannot run yet"
+   * (not connected, blocked), red when something failed (a connection), neutral for the rest. The icon repeats the tone so
+   * it never depends on colour alone.
+   */
+  setMessage(text: string, kind: 'info' | 'warning' | 'error' = 'info') {
+    this.el.msgText.textContent = text;
+    this.el.msgIcon.textContent = kind === 'warning' ? '⚠' : kind === 'error' ? '✖' : 'ⓘ';
+    this.el.msg.dataset.kind = kind;
+    this.el.msg.setAttribute('role', kind === 'error' ? 'alert' : 'status');
     this.el.msg.hidden = !text;
   }
 

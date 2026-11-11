@@ -87,7 +87,15 @@
     .action-widget { min-width: 280px; }
     .current-statement { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 
-    .msg { padding: 5px 10px; color: var(--dim); background: var(--panel); border-bottom: 1px solid var(--line); }
+    /* The message bar between the editor and the results. Amber: cannot run yet. Red: failed. Neutral: information. */
+    .msg { display: flex; align-items: flex-start; gap: 10px; padding: 6px 10px; color: var(--dim); background: var(--panel);
+           border-bottom: 1px solid var(--line); border-left: 5px solid var(--line); line-height: 20px; }
+    .msgIcon { flex: none; width: 1.2em; text-align: center; font-size: 14px; }
+    .msgText { min-width: 0; overflow-wrap: anywhere; user-select: text; }
+    .msg[data-kind="warning"] { color: var(--fg); background: var(--tx-changed-bg); border-left-color: var(--tx-changed); }
+    .msg[data-kind="warning"] .msgIcon { color: var(--tx-changed); }
+    .msg[data-kind="error"] { color: var(--fg); background: var(--tx-failed-bg); border-left-color: var(--tx-failed); }
+    .msg[data-kind="error"] .msgIcon { color: var(--tx-failed); }
 
     /* Results: a tab per statement, labelled with the start of its SQL. Pinning keeps one past the next run. */
     .resulttabs { display: flex; align-items: flex-end; gap: 2px; padding: 4px 6px 1px; background: var(--panel); box-shadow: inset 0 -1px 0 var(--line);
@@ -102,8 +110,33 @@
     .results { flex: 1; min-height: 0; position: relative; }
     .results .empty { padding: 16px; color: var(--dim); }
     .resultpanel { position: absolute; inset: 0; display: flex; flex-direction: column; }
-    .stats { padding: 6px 8px; background: var(--panel); border-bottom: 1px solid var(--line); color: var(--dim);
-             font: 12px Consolas, monospace; white-space: pre-wrap; min-height: 3.6em; flex: none; }
+    /* The status bar above a result: one line saying what happened. A failure is red, with an icon and words as well. */
+    .status { flex: none; background: var(--panel); border-bottom: 1px solid var(--line); border-left: 5px solid var(--line); }
+    .statusMain { display: flex; align-items: flex-start; gap: 10px; padding: 6px 10px; }
+    .statusIcon { flex: none; width: 1.2em; text-align: center; font-size: 15px; line-height: 20px; color: var(--dim); }
+    .statusText { flex: 1; min-width: 0; line-height: 20px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+    .headline { font-weight: 600; }
+    .extra { margin-left: 10px; color: var(--dim); }
+    .statusToggle { flex: none; padding: 1px 9px; font-size: 12px; }
+    .details { margin: 0; padding: 5px 10px 7px 35px; border-top: 1px solid var(--line); color: var(--dim);
+               font: 12px Consolas, monospace; white-space: pre-wrap; }
+    .status[data-state="running"] { border-left-color: var(--accent); }
+    .status[data-state="running"] .statusIcon { color: var(--accent); display: inline-block; animation: spin 1s linear infinite; }
+    .status[data-state="complete"] { border-left-color: var(--tx-open); }
+    .status[data-state="complete"] .statusIcon { color: var(--tx-open); }
+    .status[data-state="cancelled"] { border-left-color: var(--tx-changed); }
+    .status[data-state="error"] { background: var(--tx-failed-bg); border-left-color: var(--tx-failed); }
+    .status[data-state="error"] .statusIcon { color: var(--tx-failed); }
+    .status[data-state="error"] .extra, .status[data-state="error"] .details { color: var(--fg); opacity: 0.75; }
+    .status[data-state="error"] .details { border-top-color: var(--tx-failed); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .status[data-state="running"] .statusIcon, .rtab[data-state="running"] .mark { animation: none; } }
+
+    /* The same cues on a result's tab, so a failure shows with several tabs open. */
+    .rtab .mark { flex: none; font-size: 11px; margin-right: 5px; }
+    .rtab[data-state="error"] { border-top: 2px solid var(--tx-failed); }
+    .rtab[data-state="error"] .mark { color: var(--tx-failed); }
+    .rtab[data-state="running"] .mark { color: var(--accent); display: inline-block; animation: spin 1s linear infinite; }
     .grid { flex: 1; min-height: 0; }
   </style>
 </head>

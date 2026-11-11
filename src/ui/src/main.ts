@@ -64,7 +64,7 @@ function onEvent(e: BridgeEvent) {
       connections.get(e.connectionId)?.onTransaction(e as unknown as Parameters<Sheet['onTransaction']>[0]);
       return;
     case 'transactionUnknown':
-      connections.get(e.connectionId)?.setMessage(`transaction state unavailable: ${e.message}`);
+      connections.get(e.connectionId)?.setMessage(`transaction state unavailable: ${e.message}`, 'warning');
       return;
   }
   if (e.queryId !== undefined) queries.get(e.queryId)?.onEvent(e);
