@@ -15,6 +15,7 @@ public class EngineTests
     {
         public string Id => "fake";
         public int ContractVersion => ProviderContract.CurrentVersion;
+        public ISqlParser Parser => throw new NotSupportedException();
         public Task<IProviderConnection> OpenAsync(string cs, CancellationToken ct) =>
             Task.FromResult<IProviderConnection>(new Conn(rows));
 
@@ -30,6 +31,7 @@ public class EngineTests
                 for (var i = 0; i < rows; i++) t.Rows.Add(i, (long)i * 3, i / 2.0, i % 7 == 0 ? null : $"row é{i}");
                 return Task.FromResult<DbDataReader>(t.CreateDataReader());
             }
+            public Task<DatabaseSchema> IntrospectAsync(CancellationToken ct) => Task.FromResult(new DatabaseSchema([]));
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
     }
@@ -106,6 +108,7 @@ public class EngineTests
     {
         public string Id => "bad";
         public int ContractVersion => 99;
+        public ISqlParser Parser => throw new NotSupportedException();
         public Task<IProviderConnection> OpenAsync(string c, CancellationToken ct) => throw new NotSupportedException();
     }
 }

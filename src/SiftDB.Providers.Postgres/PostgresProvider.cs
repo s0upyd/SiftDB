@@ -8,16 +8,26 @@ public sealed class PostgresProvider : IDatabaseProvider
 {
     public string Id => "postgres";
     public int ContractVersion => ProviderContract.CurrentVersion;
+    public ISqlParser Parser { get; } = new PostgresSqlParser();
 
     public async Task<IProviderConnection> OpenAsync(string connectionString, CancellationToken ct)
     {
         var conn = new NpgsqlConnection(connectionString);
         await conn.OpenAsync(ct);
-        return new PostgresConnection(conn);
+        return new PostgresConnection(conn, connectionString);
     }
 
-    private sealed class PostgresConnection(NpgsqlConnection conn) : IProviderConnection
+    private sealed class PostgresConnection(NpgsqlConnection conn, string connectionString) : IProviderConnection
     {
+        // Metadata gets its own connection: this one may be streaming a query or holding an open transaction,
+        // and Npgsql allows one command at a time per connection.
+        public async Task<DatabaseSchema> IntrospectAsync(CancellationToken ct)
+        {
+            await using var meta = new NpgsqlConnection(connectionString);
+            await meta.OpenAsync(ct);
+            return await PostgresIntrospector.ReadAsync(meta, ct);
+        }
+
         public async Task<DbDataReader> ExecuteReaderAsync(string sql, CancellationToken ct)
         {
             var cmd = new NpgsqlCommand(sql, conn);
