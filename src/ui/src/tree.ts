@@ -11,13 +11,27 @@ const KIND: Record<RelationKind, { letter: string; label: string }> = {
 /** Rendering thousands of rows per keystroke isn't useful; past this the user should refine the filter. */
 const MAX_RELATIONS_SHOWN = 500;
 
+/** One connection in the tree. Sheets that connected with the same connection string share one root. */
+export interface TreeRoot {
+  id: string;
+  label: string;
+  /** Shown dimmed after the label, e.g. the user name when two roots would otherwise look identical. */
+  detail: string;
+  /** Null while the first schema load is still running. */
+  schema: DatabaseSchema | null;
+  /** True for the root the visible sheet is connected to. */
+  current: boolean;
+}
+
 /**
- * Schema browser: schemas, then relations, then columns. A flat list of rows (indentation by depth), rebuilt on every
- * change. Children are only built for expanded nodes, so a 2,000-table database stays cheap.
+ * Schema browser: one root per distinct connection, then schemas, relations, columns. A flat list of rows (indentation
+ * by depth), rebuilt on every change. Children are only built for expanded nodes, so a 2,000-table database stays cheap.
  */
 export class SchemaTree {
-  private schema: DatabaseSchema | null = null;
+  private roots: TreeRoot[] = [];
+  private emptyMessage = 'Not connected.';
   private expanded = new Set<string>();
+  private seen = new Set<string>();
   private filter = '';
 
   constructor(private root: HTMLElement, private summary: HTMLElement) {
@@ -29,18 +43,20 @@ export class SchemaTree {
     root.addEventListener('keydown', (e) => this.onKey(e));
   }
 
-  setSchema(schema: DatabaseSchema) {
-    this.schema = schema;
-    this.expanded.clear();
-    const first = schema.schemas.find((s) => s.name === 'public') ?? schema.schemas.find((s) => s.relations.length);
-    if (first) this.expanded.add(`s:${first.name}`);
+  /** Replaces the roots. Expansion survives; a root seen for the first time opens, with its main schema. */
+  setRoots(roots: TreeRoot[], emptyMessage = 'Not connected.') {
+    this.roots = roots;
+    this.emptyMessage = emptyMessage;
+    for (const r of roots) {
+      if (!this.seen.has(r.id)) { this.seen.add(r.id); this.expanded.add(`n:${r.id}`); }
+      if (r.schema && !this.seen.has(`schema:${r.id}`)) {
+        this.seen.add(`schema:${r.id}`);
+        const s = r.schema.schemas;
+        const first = s.find((x) => x.name === 'public') ?? s.find((x) => x.relations.length);
+        if (first) this.expanded.add(`s:${r.id}:${first.name}`);
+      }
+    }
     this.render();
-  }
-
-  clear(message: string) {
-    this.schema = null;
-    this.root.replaceChildren();
-    this.summary.textContent = message;
   }
 
   setFilter(text: string) {
@@ -76,36 +92,51 @@ export class SchemaTree {
   }
 
   private render() {
-    const schema = this.schema;
-    if (!schema) return;
     const f = this.filter;
     const frag = document.createDocumentFragment();
     let shown = 0, matched = 0, total = 0;
 
-    for (const s of schema.schemas) {
-      total += s.relations.length;
-      const rels = f
-        ? s.relations.filter((r) => r.name.toLowerCase().includes(f) || `${s.name}.${r.name}`.toLowerCase().includes(f))
-        : s.relations;
-      matched += rels.length;
-      if (f && !rels.length) continue;
+    for (const root of this.roots) {
+      const nKey = `n:${root.id}`;
+      const schema = root.schema;
+      let relCount = 0, relMatched = 0;
+      const rows: HTMLElement[] = [];
+      const nOpen = f ? true : this.expanded.has(nKey);
 
-      const sKey = `s:${s.name}`;
-      const sOpen = f ? true : this.expanded.has(sKey);
-      frag.append(this.row(sKey, 0, sOpen, [this.text(s.name), this.dim(`${rels.length}`)], 'Schema'));
-      if (!sOpen) continue;
+      for (const s of schema?.schemas ?? []) {
+        relCount += s.relations.length;
+        const rels = f
+          ? s.relations.filter((r) => r.name.toLowerCase().includes(f) || `${s.name}.${r.name}`.toLowerCase().includes(f))
+          : s.relations;
+        relMatched += rels.length;
+        if (!nOpen || (f && !rels.length)) continue;
 
-      for (const r of rels) {
-        if (shown >= MAX_RELATIONS_SHOWN) break;
-        shown++;
-        const rKey = `r:${s.name}.${r.name}`;
-        const rOpen = this.expanded.has(rKey);
-        frag.append(this.row(rKey, 1, rOpen, [this.badge(KIND[r.kind].letter, KIND[r.kind].label), this.text(r.name)], KIND[r.kind].label));
-        if (rOpen) for (const c of this.columnRows(s.name, r)) frag.append(c);
+        const sKey = `s:${root.id}:${s.name}`;
+        const sOpen = f ? true : this.expanded.has(sKey);
+        rows.push(this.row(sKey, 1, sOpen, [this.text(s.name), this.dim(`${rels.length}`)], 'Schema'));
+        if (!sOpen) continue;
+
+        for (const r of rels) {
+          if (shown >= MAX_RELATIONS_SHOWN) break;
+          shown++;
+          const rKey = `r:${root.id}:${s.name}.${r.name}`;
+          const rOpen = this.expanded.has(rKey);
+          rows.push(this.row(rKey, 2, rOpen, [this.badge(KIND[r.kind].letter, KIND[r.kind].label), this.text(r.name)], KIND[r.kind].label));
+          if (rOpen) for (const c of this.columnRows(root.id, s.name, r)) rows.push(c);
+        }
       }
+      total += relCount;
+      matched += relMatched;
+      if (f && schema && !relMatched) continue; // a filter hides connections with nothing that matches
+
+      const head = this.row(nKey, 0, nOpen, [this.text(root.label), this.dim(schema ? `${relCount}` : 'loading…')], 'Connection');
+      head.classList.add('root');
+      if (root.detail) head.append(this.dim(root.detail));
+      head.classList.toggle('current', root.current);
+      frag.append(head, ...rows);
     }
 
-    if (matched > shown) {
+    if (matched > shown && this.roots.some((r) => r.schema)) {
       const note = document.createElement('div');
       note.className = 'row dim';
       note.style.paddingLeft = '30px';
@@ -117,12 +148,12 @@ export class SchemaTree {
     const first = this.root.firstElementChild as HTMLElement | null;
     if (first) first.tabIndex = 0; // roving tabindex: one tab stop for the whole tree
     const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-    this.summary.textContent = f
-      ? `${matched} of ${plural(total, 'relation')} match`
-      : `${plural(schema.schemas.length, 'schema')} · ${plural(total, 'relation')}`;
+    this.summary.textContent = !this.roots.length ? this.emptyMessage
+      : f ? `${matched} of ${plural(total, 'relation')} match`
+      : `${plural(this.roots.length, 'connection')} · ${plural(total, 'relation')}`;
   }
 
-  private *columnRows(schemaName: string, r: RelationInfo) {
+  private *columnRows(rootId: string, schemaName: string, r: RelationInfo) {
     const pk = new Set(r.primaryKey);
     for (const c of r.columns) {
       const fk = r.foreignKeys.find((k) => k.columns.includes(c.name));
@@ -132,7 +163,7 @@ export class SchemaTree {
         const target = `${fk.referencedSchema}.${fk.referencedRelation}(${fk.referencedColumns.join(', ')})`;
         parts.push(this.badge('FK', `Foreign key → ${target}`));
       }
-      yield this.row(`c:${schemaName}.${r.name}.${c.name}`, 2, null, parts, c.default ? `Default: ${c.default}` : '');
+      yield this.row(`c:${rootId}:${schemaName}.${r.name}.${c.name}`, 3, null, parts, c.default ? `Default: ${c.default}` : '');
     }
   }
 

@@ -61,6 +61,10 @@ function elapsed(ms: number): string {
 export class Sheet {
   readonly root = document.createElement('section');
   connectionId = 0;
+  /** The connection string this sheet's session was opened with; null while not connected. Sheets with the same string share a tree root. */
+  connectionString: string | null = null;
+  /** What the connection box held for this sheet the last time it was visible, connected or not. */
+  draft = '';
   readonly tx = { state: 'none' as TxState, startedAt: null as string | null, statements: 0, rowsChanged: 0 };
 
   private readonly editor: SqlEditor;
@@ -142,6 +146,7 @@ export class Sheet {
       return { ok: false, schema: null, error: r.message };
     }
     this.connectionId = r.connectionId;
+    this.connectionString = connectionString;
     this.ctx.registerConnection(this.connectionId, this);
     this.updateButtons();
 
@@ -165,6 +170,7 @@ export class Sheet {
     const id = this.connectionId;
     this.ctx.unregisterConnection(id); // stop routing events to a session that is going away
     this.connectionId = 0;
+    this.connectionString = null;
     this.setTx('none', null, 0, 0);
     await this.ctx.bridge.request({ type: 'disconnect', connectionId: id });
     this.updateButtons();

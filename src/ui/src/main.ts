@@ -2,7 +2,7 @@ import { BatchMeta, Bridge, BridgeEvent, DatabaseSchema, connectBridge } from '.
 import { ResultView } from './results';
 import { Sheet, SheetContext, TxState } from './sheet';
 import { revealSelectedTab, scrollTabsWithWheel } from './tabs';
-import { SchemaTree } from './tree';
+import { SchemaTree, TreeRoot } from './tree';
 
 // The app shell: connection, tabs, the schema sidebar, and routing of engine events to the sheet (or result tab) they
 // belong to. Everything about one sheet lives in sheet.ts, and everything about one result in results.ts.
@@ -29,8 +29,16 @@ const INITIAL_SHEET = [
 
 let bridge: Bridge;
 let dark = false;
-/** The connection string the sheets share. Each sheet opens its own session on it. Null until a connect succeeds. */
-let connectionString: string | null = null;
+/**
+ * One entry per distinct connection string in use. Sheets that connected with the same string share an entry, and so a
+ * root in the schema tree; each of them still has its own session. The string (with its password) never reaches the DOM.
+ */
+interface ConnectionEntry { id: string; schema: DatabaseSchema | null }
+const connectionsByString = new Map<string, ConnectionEntry>();
+/** Connection strings with a connect in flight: they show in the tree as "loading…". */
+const connecting = new Set<string>();
+let connectionSeq = 0;
+let connectNote = 'Not connected.';
 const sheets: Sheet[] = [];
 let active: Sheet | null = null;
 let sheetCounter = 0;
@@ -58,7 +66,10 @@ function onEvent(e: BridgeEvent) {
       dark = !!e.dark;
       document.documentElement.dataset.theme = dark ? 'dark' : 'light';
       sheets.forEach((s) => s.setTheme(dark));
-      if (e.defaultConnection) connEl.value = e.defaultConnection;
+      if (e.defaultConnection) {
+        connEl.value = e.defaultConnection;
+        for (const s of sheets) if (!s.draft && !s.connectionString) s.draft = e.defaultConnection;
+      }
       return;
     case 'transaction':
       connections.get(e.connectionId)?.onTransaction(e as unknown as Parameters<Sheet['onTransaction']>[0]);
@@ -114,17 +125,21 @@ function renderTabs() {
 function activate(sheet: Sheet) {
   active = sheet;
   sheets.forEach((s) => s.setActive(s === sheet));
+  connEl.value = sheet.draft; // the connection box always describes the visible sheet
   renderTabs();
+  rebuildTree();
   sheet.focusEditor();
 }
 
 function addSheet(first = false): Sheet {
+  // A new sheet starts on the connection of the sheet you were looking at, with a session of its own.
+  const inherit = active?.connectionString ?? null;
   const sheet = new Sheet(ctx, sheetsEl, `Sheet ${++sheetCounter}`, first ? INITIAL_SHEET : '', first ? 3 : 1);
+  sheet.draft = inherit ?? connEl.value;
   sheets.push(sheet);
   activate(sheet);
   sheet.setTheme(dark);
-  // A new sheet gets its own session on the same connection, right away.
-  if (connectionString) void sheet.connect(connectionString, false);
+  if (inherit) void connectSheet(sheet, inherit);
   return sheet;
 }
 
@@ -135,6 +150,7 @@ async function closeSheet(sheet: Sheet) {
   sheets.splice(at, 1);
   const wasActive = active === sheet;
   await sheet.close();
+  rebuildTree(); // the last sheet on a connection takes its root with it
   if (sheets.length === 0) addSheet();
   else if (wasActive) activate(sheets[Math.min(at, sheets.length - 1)]);
   else renderTabs();
@@ -156,52 +172,91 @@ function updateHostState() {
 
 // ---- connection and schema ---------------------------------------------------------------------------------------
 
-async function connectAll() {
-  const pending = sheets.filter((s) => s.txPending);
-  if (pending.length &&
-      !window.confirm(`Connecting again closes every sheet's session. ${pending.length} ` +
-        `${pending.length === 1 ? 'sheet has' : 'sheets have'} changes that are not committed and would be rolled back.\n\nContinue?`)) return;
-
-  const cs = connEl.value;
-  connectBtn.disabled = true;
-  tree.clear('Connecting…');
-  await Promise.all(sheets.map((s) => s.disconnect()));
-
-  // Every sheet opens its own session. Only the visible one sends its schema back for the sidebar.
-  const results = await Promise.all(sheets.map((s) => s.connect(cs, s === active)));
-  connectBtn.disabled = false;
-  connectionString = results.some((r) => r.ok) ? cs : null;
-
-  const mine = results[sheets.indexOf(active!)];
-  if (mine?.ok && mine.schema) {
-    showSchema(mine.schema);
-  } else {
-    tree.clear(`Connect failed: ${mine?.error ?? 'unknown error'}`);
-    treeFilter.disabled = true;
-    refreshBtn.disabled = true;
+const parseConnection = (cs: string) => {
+  const parts = new Map<string, string>();
+  for (const part of cs.split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0) parts.set(part.slice(0, i).trim().toLowerCase(), part.slice(i + 1).trim());
   }
-  active?.focusEditor();
-}
+  const pick = (...keys: string[]) => keys.map((k) => parts.get(k)).find(Boolean) ?? '';
+  const host = pick('host', 'server', 'data source') || 'localhost';
+  const port = pick('port');
+  return { label: `${port ? `${host}:${port}` : host} / ${pick('database', 'initial catalog', 'db') || '(default)'}`, user: pick('username', 'user id', 'user', 'uid') };
+};
 
-function showSchema(schema: DatabaseSchema) {
-  treeFilter.disabled = false;
-  refreshBtn.disabled = false;
-  tree.setSchema(schema);
+/** Rebuilds the tree's roots from what the sheets are connected to. Roots nobody uses any more disappear. */
+function rebuildTree() {
+  const used = new Set<string>(connecting);
+  for (const s of sheets) if (s.connectionString) used.add(s.connectionString);
+  for (const cs of [...connectionsByString.keys()]) if (!used.has(cs)) connectionsByString.delete(cs);
+
+  const infos = [...used].map((cs) => ({ cs, entry: connectionsByString.get(cs)!, ...parseConnection(cs) })).filter((i) => i.entry);
+  const roots: TreeRoot[] = infos.map((i) => ({
+    id: i.entry.id, label: i.label, schema: i.entry.schema,
+    // Two connections that read the same (different users, say) are told apart by the user name.
+    detail: infos.some((o) => o !== i && o.label === i.label) ? i.user : '',
+    current: active?.connectionString === i.cs,
+  }));
+  tree.setRoots(roots, connectNote);
+  const any = roots.some((r) => r.schema);
+  treeFilter.disabled = !any;
+  refreshBtn.disabled = !active?.connectionString;
   tree.setFilter(treeFilter.value);
 }
 
-async function refreshSchema() {
-  refreshBtn.disabled = true;
-  tree.clear('Loading schema…');
-  // Every session refreshes its own cache (completion reads it); the visible sheet also feeds the sidebar.
-  const all = await Promise.all(sheets.map((s) => s.refreshSchema(s === active)));
-  const mine = all[sheets.indexOf(active!)];
-  refreshBtn.disabled = false;
-  if (mine) showSchema(mine);
-  else tree.clear('Schema unavailable.');
+/** Opens a session for one sheet and shows (or reuses) its connection's schema in the tree. */
+async function connectSheet(sheet: Sheet, cs: string) {
+  let entry = connectionsByString.get(cs);
+  if (!entry) connectionsByString.set(cs, entry = { id: `c${++connectionSeq}`, schema: null });
+  connecting.add(cs);
+  rebuildTree();
+  // Only the first session on a connection brings its schema over for the tree; later ones just fill their own cache.
+  const r = await sheet.connect(cs, !entry.schema);
+  connecting.delete(cs);
+  if (r.ok) {
+    sheet.draft = cs;
+    if (r.schema) entry.schema = r.schema;
+    connectNote = 'Not connected.';
+  } else {
+    connectNote = `Connect failed: ${r.error ?? 'unknown error'}`;
+  }
+  rebuildTree();
+  return r;
 }
 
-connectBtn.onclick = () => void connectAll();
+/** Connect acts on the visible sheet only: other sheets keep their sessions, on whatever they were connected to. */
+async function connectActive() {
+  const sheet = active;
+  const cs = connEl.value.trim();
+  if (!sheet || !cs) return;
+  if (sheet.txPending &&
+      !window.confirm(`"${sheet.title}" has changes that are not committed. Connecting again closes its session and rolls them back.
+
+Continue?`)) return;
+  sheet.draft = cs;
+  connectBtn.disabled = true;
+  await sheet.disconnect();
+  rebuildTree();
+  await connectSheet(sheet, cs);
+  connectBtn.disabled = false;
+  sheet.focusEditor();
+}
+
+/** Reloads the visible sheet's connection: every session on it refreshes its cache, and the tree takes the new schema. */
+async function refreshSchema() {
+  const cs = active?.connectionString;
+  const entry = cs ? connectionsByString.get(cs) : undefined;
+  if (!active || !cs || !entry) return;
+  refreshBtn.disabled = true;
+  const same = sheets.filter((s) => s.connectionString === cs);
+  const all = await Promise.all(same.map((s) => s.refreshSchema(s === active)));
+  const mine = all[same.indexOf(active)];
+  if (mine) entry.schema = mine;
+  rebuildTree();
+}
+
+connEl.addEventListener('input', () => { if (active) active.draft = connEl.value; });
+connectBtn.onclick = () => void connectActive();
 refreshBtn.onclick = () => void refreshSchema();
 treeFilter.addEventListener('input', () => tree.setFilter(treeFilter.value));
 $('newSheet').onclick = () => addSheet();

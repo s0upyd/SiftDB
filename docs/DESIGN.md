@@ -134,6 +134,7 @@ A query tab is a **sheet** that holds several queries. It can be saved to a file
 - A ▶ in the margin next to each statement lets you run it with the mouse.
 - Each statement that runs gets its own result tab, labelled with the start of its SQL. Results can be pinned.
 - **Each sheet has its own database session**, so `BEGIN`/`COMMIT` across statements, temp tables and `SET` all carry over.
+- **Each sheet has its own connection string too.** The connection box describes the visible sheet and Connect acts on that sheet only; a new sheet starts on the connection of the sheet you were on. The schema tree has one root per distinct connection string: sheets on the same string share a root (and a schema), a different string adds a root, and the last sheet leaving a connection removes it. Roots are labelled host / database (the user name is added when two would read the same); the password never reaches the DOM.
 
 **Saving**
 - Plain `.sql` files, so they open in other tools.

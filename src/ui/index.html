@@ -29,6 +29,9 @@
     #tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 0; }
     .row { display: flex; gap: 6px; align-items: center; padding: 2px 8px; white-space: nowrap; cursor: default; user-select: none; }
     .row:hover { background: var(--panel); }
+    /* A connection: the top level of the tree. The one the visible sheet is connected to is marked. */
+    .row.root { font-weight: 600; }
+    .row.root.current { box-shadow: inset 3px 0 0 var(--accent); }
     .twisty { width: 12px; flex: none; color: var(--dim); }
     .dim { color: var(--dim); }
     .badge { font-size: 10px; line-height: 14px; padding: 0 4px; border: 1px solid var(--line); border-radius: 3px; color: var(--dim); }
@@ -150,7 +153,7 @@
 <body>
   <div class="bar">
     <input id="conn" type="text" placeholder="Host=localhost;Username=postgres;Password=…;Database=postgres" spellcheck="false" aria-label="Connection string">
-    <button id="connect">Connect</button>
+    <button id="connect" title="Connect the visible sheet to this connection string. Other sheets keep their own connections.">Connect</button>
     <button id="newSheet" title="Open a new SQL sheet in a new tab (Ctrl+T). Each sheet has its own session.">+ New sheet</button>
   </div>
   <div id="main">
