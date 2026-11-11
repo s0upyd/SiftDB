@@ -166,6 +166,62 @@ public class MultiSessionTests : IAsyncLifetime
         Assert.Equal(2, await Count(_b));
     }
 
+    /// <summary>Starts a statement that Postgres will not answer for a minute and waits until it is truly stuck.</summary>
+    private async Task<(Task Execute, int RequestId)> StartSlowStatement(int connectionId)
+    {
+        var request = ++_request;
+        var execute = _engine!.HandleCommandAsync(JsonSerializer.Serialize(new
+        {
+            type = "execute", id = request, connectionId, sql = "select pg_sleep(60)",
+        }));
+        await Task.Delay(600);
+        Assert.False(execute.IsCompleted, "the statement should still be waiting on the server");
+        return (execute, request);
+    }
+
+    [SkippableFact]
+    public async Task Cancelling_a_slow_statement_that_has_returned_nothing_frees_the_session()
+    {
+        Require();
+        var (execute, request) = await StartSlowStatement(_a);
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await _engine!.HandleCommandAsync(JsonSerializer.Serialize(new { type = "cancel", connectionId = _a }));
+        Assert.Same(execute, await Task.WhenAny(execute, Task.Delay(15_000)));
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"took {clock.Elapsed.TotalSeconds:F1}s, not the 60s sleep");
+        Assert.Contains(_sink.Of("cancelled"), e => e.TryGetProperty("replyTo", out var r) && r.GetInt32() == request);
+        Assert.NotEqual(0, await Run(_a, "select 1"));                 // the session works again
+    }
+
+    [SkippableFact]
+    public async Task Cancelling_inside_a_transaction_aborts_it_and_the_bar_says_so()
+    {
+        Require();
+        await Tx(_a, "begin");
+        var (execute, _) = await StartSlowStatement(_a);
+
+        await _engine!.HandleCommandAsync(JsonSerializer.Serialize(new { type = "cancel", connectionId = _a }));
+        Assert.Same(execute, await Task.WhenAny(execute, Task.Delay(15_000)));
+
+        Assert.Equal("failed", State(_a));                              // Postgres aborts the transaction on a cancel
+        await Tx(_a, "rollback");
+        Assert.Equal("none", State(_a));
+    }
+
+    [SkippableFact]
+    public async Task Closing_a_session_while_a_slow_statement_is_running_does_not_wait_it_out()
+    {
+        Require();
+        var (execute, _) = await StartSlowStatement(_a);
+
+        var close = _engine!.HandleCommandAsync(JsonSerializer.Serialize(new { type = "disconnect", id = ++_request, connectionId = _a }));
+        Assert.Same(close, await Task.WhenAny(close, Task.Delay(15_000)));
+        Assert.Same(execute, await Task.WhenAny(execute, Task.Delay(15_000)));
+
+        Assert.Equal(0, await Count(_b));                              // the other session is unaffected
+    }
+
     [SkippableFact]
     public async Task Closing_a_session_in_the_middle_of_a_big_stream_does_not_hang_or_disturb_the_others()
     {

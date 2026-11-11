@@ -73,6 +73,24 @@ public class SheetAnalysisWireTests
     }
 
     [Fact]
+    public async Task An_unknown_column_is_sent_with_its_candidates_and_never_blocks()
+    {
+        const string sql = "select * from \"Person\" where id = 1";
+        foreach (var mode in new[] { "assisted", "strict" })
+        {
+            var r = await Analyze(sql, 5, mode);
+            var issue = r.GetProperty("issues").EnumerateArray().Single();
+            Assert.Equal("unknownColumn", issue.GetProperty("code").GetString());
+            Assert.Equal("warning", issue.GetProperty("severity").GetString());
+            Assert.Equal(["\"PersonId\""], issue.GetProperty("fixes").EnumerateArray().Select(x => x.GetString()));
+            Assert.Equal("\"PersonId\"", issue.GetProperty("fixText").GetString());
+            var pick = r.GetProperty("pick");
+            Assert.Equal(sql, pick.GetProperty("sql").GetString());                 // runs as written: the server decides
+            Assert.Equal(JsonValueKind.Null, pick.GetProperty("blocked").ValueKind);
+        }
+    }
+
+    [Fact]
     public async Task An_ambiguous_column_blocks_even_in_assisted_mode()
     {
         var pick = (await Analyze("select PersonId from \"Person\" p, \"Email\" e", 5, "assisted")).GetProperty("pick");

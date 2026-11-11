@@ -9,10 +9,12 @@ export interface Correction { start: number; length: number; text: string; messa
 export interface Issue {
   start: number;
   length: number;
-  code: 'caseMismatch' | 'ambiguous' | 'stringQuote';
+  code: 'caseMismatch' | 'ambiguous' | 'stringQuote' | 'unknownColumn';
   severity: 'info' | 'warning' | 'error';
   message: string;
   fixText: string | null;
+  /** Every candidate replacement (an unknown column can have several), best first. Empty when the user has to choose. */
+  fixes: string[];
 }
 
 /** The engine's answer for a sheet (see EngineHost "analyzeSheet"). Offsets are UTF-16, same as Monaco's. */
@@ -197,8 +199,10 @@ export class SqlEditor {
     this.editor.addCommand(KeyCode.F5, () => cb.run(), mine);
     this.editor.addCommand(KeyMod.CtrlCmd | KeyCode.Enter, () => cb.run(), mine);
     this.editor.addCommand(KeyMod.CtrlCmd | KeyCode.Period, () => cb.cancel(), mine);
-    // Ctrl+. is Cancel (design section 6), so the quick fix menu gets Alt+Enter instead of Monaco's default.
-    this.editor.addCommand(KeyMod.Alt | KeyCode.Enter, () => this.editor.trigger('siftdb', 'editor.action.quickFix', {}), mine);
+    // Ctrl+. is Cancel (design section 6), so Monaco's own quick-fix command moves to Alt+Enter. Binding the real command (and
+    // removing its default) rather than wrapping it means the hover's "Quick Fix... (Alt+Enter)" label tells the truth.
+    monaco.editor.addKeybindingRule({ keybinding: KeyMod.CtrlCmd | KeyCode.Period, command: '-editor.action.quickFix' });
+    monaco.editor.addKeybindingRule({ keybinding: KeyMod.Alt | KeyCode.Enter, command: 'editor.action.quickFix', when: `editorTextFocus && ${mine}` });
     this.editor.addAction({
       id: 'siftdb.acceptAll',
       label: 'Accept all identifier corrections',
@@ -351,7 +355,7 @@ export class SqlEditor {
       markers.push({ severity: severity[i.severity], message: i.message, code: i.code,
         startLineNumber: range.startLineNumber, startColumn: range.startColumn,
         endLineNumber: range.endLineNumber, endColumn: range.endColumn });
-      if (i.fixText) this.fixes.push({ start: i.start, end: i.start + i.length, text: i.fixText, title: `Use ${i.fixText}` });
+      for (const fix of i.fixes ?? []) this.fixes.push({ start: i.start, end: i.start + i.length, text: fix, title: `Use ${fix}` });
     }
 
     this.decorations.set(items);

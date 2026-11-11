@@ -19,6 +19,9 @@ export interface ResultsContext {
   onFinished(view: ResultView): void;
 }
 
+/** Server errors carry line breaks ("... does not exist", blank line, "POSITION: 30"), which would split the status line apart. */
+const oneLine = (message: string) => message.replace(/\s*\n\s*/g, ' · ').trim();
+
 /** A short tab label from the start of the SQL: whitespace collapsed, clipped. */
 export function sqlLabel(sql: string): string {
   const flat = sql.replace(/\s+/g, ' ').trim();
@@ -42,6 +45,7 @@ export class ResultView {
   private readonly gridEl = document.createElement('div');
   private store = new ResultStore();
   private columnCount = 0;
+  private connectionId = 0;
   private outstanding = 0;
   private done = true;
   private m = this.freshMetrics();
@@ -93,10 +97,17 @@ export class ResultView {
     this.bench = '';
     this.grid.setStore(this.store, []);
 
+    this.connectionId = connectionId;
     const r = await this.ctx.bridge.request({ type: 'execute', connectionId, sql });
+    if (r.type === 'cancelled') { // cancelled before the database returned anything
+      this.done = true;
+      this.m.status = 'cancelled';
+      this.ctx.onFinished(this);
+      return;
+    }
     if (r.type === 'error') {
       this.done = true;
-      this.m.status = `error: ${r.message}`;
+      this.m.status = `error: ${oneLine(r.message)}`;
       this.ctx.onFinished(this);
       return;
     }
@@ -109,8 +120,14 @@ export class ResultView {
     this.pump();
   }
 
+  /**
+   * Cancels the statement. Once rows are flowing it has a query id. Before that (a slow aggregate, pg_sleep: nothing has come
+   * back yet) it does not, and that is exactly when cancelling matters, so the session is named instead.
+   */
   cancel() {
-    if (!this.done && this.queryId) this.ctx.bridge.send({ type: 'cancel', queryId: this.queryId });
+    if (this.done) return;
+    if (this.queryId) this.ctx.bridge.send({ type: 'cancel', queryId: this.queryId });
+    else if (this.connectionId) this.ctx.bridge.send({ type: 'cancel', connectionId: this.connectionId });
   }
 
   /** Keep a few fetches in flight. When not "fetch all" and nowhere near the end of what has loaded, stop. */
@@ -160,7 +177,7 @@ export class ResultView {
       this.finish();
     } else if (e.type === 'error') {
       this.outstanding--;
-      this.m.status = `error: ${e.message}`;
+      this.m.status = `error: ${oneLine(e.message)}`;
       this.finish();
     }
   }

@@ -40,12 +40,18 @@ public class EngineSessionTests
             Task.FromResult(new TransactionSnapshot(State, State == TransactionState.None ? null : DateTimeOffset.UnixEpoch));
         public Task<DatabaseSchema> IntrospectAsync(CancellationToken ct) => Task.FromResult(new DatabaseSchema([]));
 
-        public Task<DbDataReader> ExecuteReaderAsync(string sql, CancellationToken ct)
+        /// <summary>When set, a statement does not answer until it is cancelled: a slow aggregate, pg_sleep.</summary>
+        public volatile bool HangOnExecute;
+        public volatile int Started;
+
+        public async Task<DbDataReader> ExecuteReaderAsync(string sql, CancellationToken ct)
         {
+            Interlocked.Increment(ref Started);
+            if (HangOnExecute) await Task.Delay(Timeout.Infinite, ct);
             var t = new DataTable();
             t.Columns.Add("x", typeof(int));
             for (var i = 0; i < Rows; i++) t.Rows.Add(i);
-            return Task.FromResult<DbDataReader>(t.CreateDataReader());
+            return t.CreateDataReader();
         }
 
         public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
@@ -206,6 +212,109 @@ public class EngineSessionTests
         await Connect(engine, cap, 2);
         await engine.DisposeAsync();
         Assert.All(p.Sessions, s => Assert.True(s.Disposed));
+    }
+
+    // ---- a statement that has not answered yet ----
+    // It has no query id (nothing has come back), so it cannot be cancelled by one. These are the cases a slow aggregate or
+    // pg_sleep creates: the session lock is held, so until it is cancelled nothing else on that sheet works.
+
+    private static async Task WaitUntil(Func<bool> condition, string what)
+    {
+        for (var i = 0; i < 300 && !condition(); i++) await Task.Delay(10);
+        if (!condition()) throw new TimeoutException("never happened: " + what);
+    }
+
+    [Fact]
+    public async Task Cancel_by_connection_stops_a_statement_that_has_not_answered_and_frees_the_session()
+    {
+        var p = new Provider();
+        var cap = new Capture();
+        await using var engine = new EngineHost([p], cap);
+        var a = await Connect(engine, cap, 1);
+        p.Sessions[0].HangOnExecute = true;
+
+        var execute = Send(engine, new { type = "execute", id = 2, connectionId = a, sql = "select pg_sleep(60)" });
+        await WaitUntil(() => p.Sessions[0].Started == 1, "the statement to start");
+        Assert.False(execute.IsCompleted);                       // it really is stuck
+
+        await Send(engine, new { type = "cancel", connectionId = a });
+        await Within(execute);
+
+        Assert.Contains(cap.Of("cancelled"), e => e.TryGetProperty("replyTo", out var r) && r.GetInt32() == 2);
+        Assert.Empty(cap.Of("error"));                            // a cancel is not an error
+
+        p.Sessions[0].HangOnExecute = false;                      // and the session works again
+        await Within(Send(engine, new { type = "execute", id = 3, connectionId = a, sql = "select" }));
+        Assert.Contains(cap.Of("columns"), e => e.GetProperty("replyTo").GetInt32() == 3);
+    }
+
+    [Fact]
+    public async Task Closing_a_session_whose_statement_has_not_answered_does_not_wait_for_it()
+    {
+        var p = new Provider();
+        var cap = new Capture();
+        await using var engine = new EngineHost([p], cap);
+        var a = await Connect(engine, cap, 1);
+        p.Sessions[0].HangOnExecute = true;
+        var execute = Send(engine, new { type = "execute", id = 2, connectionId = a, sql = "select pg_sleep(60)" });
+        await WaitUntil(() => p.Sessions[0].Started == 1, "the statement to start");
+
+        await Within(Send(engine, new { type = "disconnect", id = 3, connectionId = a }));   // would hang on the lock otherwise
+        await Within(execute);
+
+        Assert.True(p.Sessions[0].Disposed);
+    }
+
+    [Fact]
+    public async Task A_new_statement_replaces_one_that_has_not_answered()
+    {
+        var p = new Provider();
+        var cap = new Capture();
+        await using var engine = new EngineHost([p], cap);
+        var a = await Connect(engine, cap, 1);
+        p.Sessions[0].HangOnExecute = true;
+        var first = Send(engine, new { type = "execute", id = 2, connectionId = a, sql = "select pg_sleep(60)" });
+        await WaitUntil(() => p.Sessions[0].Started == 1, "the first statement to start");
+
+        p.Sessions[0].HangOnExecute = false;
+        await Within(Send(engine, new { type = "execute", id = 3, connectionId = a, sql = "select 1" }));
+        await Within(first);
+
+        Assert.Contains(cap.Of("cancelled"), e => e.TryGetProperty("replyTo", out var r) && r.GetInt32() == 2);
+        Assert.Contains(cap.Of("columns"), e => e.GetProperty("replyTo").GetInt32() == 3);
+    }
+
+    [Fact]
+    public async Task Begin_and_commit_are_not_held_up_by_a_statement_that_has_not_answered()
+    {
+        var p = new Provider();
+        var cap = new Capture();
+        await using var engine = new EngineHost([p], cap);
+        var a = await Connect(engine, cap, 1);
+        p.Sessions[0].HangOnExecute = true;
+        var execute = Send(engine, new { type = "execute", id = 2, connectionId = a, sql = "select pg_sleep(60)" });
+        await WaitUntil(() => p.Sessions[0].Started == 1, "the statement to start");
+
+        await Within(Send(engine, new { type = "transaction", id = 3, connectionId = a, action = "begin" }));
+        await Within(execute);
+
+        Assert.Equal(TransactionState.Open, p.Sessions[0].State);
+    }
+
+    [Fact]
+    public async Task Cancelling_something_that_is_not_running_is_harmless()
+    {
+        var p = new Provider();
+        var cap = new Capture();
+        await using var engine = new EngineHost([p], cap);
+        var a = await Connect(engine, cap, 1);
+
+        await Send(engine, new { type = "cancel", connectionId = a });        // idle session
+        await Send(engine, new { type = "cancel", connectionId = 99 });       // no such session
+        await Send(engine, new { type = "cancel", queryId = 12345 });         // no such query
+
+        Assert.Empty(cap.Of("error"));
+        await Within(Send(engine, new { type = "execute", id = 2, connectionId = a, sql = "select" }));   // still fine
     }
 
     // ---- schema refresh without the payload ----

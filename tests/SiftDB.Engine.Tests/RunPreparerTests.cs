@@ -107,6 +107,32 @@ public class RunPreparerTests
         Assert.NotNull(RunPreparer.Prepare(Text, Whole, resolved, QueryMode.Strict).Blocked);
     }
 
+    private static readonly Issue UnknownColumn =
+        new(27, 8, IssueCode.UnknownColumn, IssueSeverity.Warning, "No column id in \"Person\". Did you mean \"PersonId\"?", "\"PersonId\"", ["\"PersonId\""]);
+
+    [Fact]
+    public void An_unknown_column_hint_never_blocks_a_run_even_in_strict_mode()
+    {
+        var run = RunPreparer.Prepare(Text, Whole, new ResolverResult([], [UnknownColumn]), QueryMode.Strict);
+        Assert.Equal(Text, run.Sql);
+        Assert.Null(run.Blocked);   // the server has the last word; a wrong guess must not stop valid SQL
+    }
+
+    [Fact]
+    public void An_unknown_column_hint_does_not_count_towards_the_problems_that_do_block()
+    {
+        var resolved = new ResolverResult([QuoteAt("Person", "\"Person\"")], [UnknownColumn]);
+        var run = RunPreparer.Prepare(Text, Whole, resolved, QueryMode.Strict);
+        Assert.Contains("1 identifier problem to fix", run.Blocked);   // the quoting one, not "2"
+    }
+
+    [Fact]
+    public void An_unknown_column_hint_does_not_block_in_assisted_mode_either()
+    {
+        var run = RunPreparer.Prepare(Text, Whole, new ResolverResult([], [UnknownColumn]), QueryMode.Assisted);
+        Assert.Null(run.Blocked);
+    }
+
     [Theory]
     [InlineData("strict", QueryMode.Strict)]
     [InlineData("STRICT", QueryMode.Strict)]

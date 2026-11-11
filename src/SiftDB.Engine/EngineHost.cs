@@ -84,7 +84,17 @@ public sealed class EngineHost : IAsyncDisposable
                     await FetchAsync(root.GetProperty("queryId").GetInt32());
                     break;
                 case "cancel":
-                    if (_queries.TryGetValue(root.GetProperty("queryId").GetInt32(), out var q)) q.Cancel();
+                    // By query id once rows are flowing. By connection when the statement has not produced a result yet (a slow
+                    // aggregate, pg_sleep): then there is no query id to name, and that is exactly when cancelling matters.
+                    if (root.TryGetProperty("queryId", out var queryIdElement))
+                    {
+                        if (_queries.TryGetValue(queryIdElement.GetInt32(), out var q)) q.Cancel();
+                    }
+                    else if (root.TryGetProperty("connectionId", out var cancelConnection) &&
+                             _connections.TryGetValue(cancelConnection.GetInt32(), out var cancelState))
+                    {
+                        CancelCurrent(cancelState);
+                    }
                     break;
                 default:
                     Error(id, $"Unknown command '{type}'");
@@ -139,6 +149,7 @@ public sealed class EngineHost : IAsyncDisposable
             issues = resolved.Issues.Select(i => new
             {
                 start = i.Start, length = i.Length, code = i.Code, severity = i.Severity, message = i.Message, fixText = i.FixText,
+                fixes = i.AllFixes,
             }),
         });
     }
@@ -159,11 +170,8 @@ public sealed class EngineHost : IAsyncDisposable
     private async Task DisconnectAsync(int id, int connectionId)
     {
         if (!_connections.TryRemove(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
-        if (state.Active is { } active)
-        {
-            active.Cancel();
-            _queries.TryRemove(active.Id, out _);
-        }
+        CancelCurrent(state); // including a statement that has not produced a result yet: it holds the lock we are about to wait for
+        if (state.Active is { } active) _queries.TryRemove(active.Id, out _);
         await state.SessionLock.WaitAsync();
         try { await state.Connection.DisposeAsync(); }
         finally { state.SessionLock.Release(); }
@@ -189,7 +197,7 @@ public sealed class EngineHost : IAsyncDisposable
     private async Task ExecuteAsync(int id, int connectionId, string sql)
     {
         if (!_connections.TryGetValue(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
-        state.Active?.Cancel(); // a new statement replaces the running one; this lets it wind down and free the session
+        CancelCurrent(state); // a new statement replaces the running one; this lets it wind down and free the session
         await state.SessionLock.WaitAsync();
         var handedOver = false;
         try
@@ -198,17 +206,28 @@ public sealed class EngineHost : IAsyncDisposable
             if (state.Active is { } previous) _queries.TryRemove(previous.Id, out _);
             var sw = Stopwatch.StartNew();
             var cts = new CancellationTokenSource();
+            state.Starting = cts; // until the database answers, this is the only handle on the statement: cancel and close use it
             DbDataReader reader;
             try
             {
                 reader = await state.Connection.ExecuteReaderAsync(sql, cts.Token);
             }
+            catch (Exception) when (cts.IsCancellationRequested)
+            {
+                // Cancelled before any result. Not an error, but inside a transaction it aborts it: the bar must learn that.
+                state.Starting = null;
+                await ObserveTransactionAsync(state, statement: true, rowsAffected: -1);
+                Event(new { type = "cancelled", replyTo = id });
+                return;
+            }
             catch
             {
                 // An error inside a transaction aborts it: the bar has to turn red even though no rows ever streamed.
+                state.Starting = null;
                 await ObserveTransactionAsync(state, statement: true, rowsAffected: -1);
                 throw;
             }
+            state.Starting = null;
             var writer = new RowBatchWriter(reader);
             var queryId = Interlocked.Increment(ref _nextQuery);
             var session = new QuerySession(queryId, reader, writer, cts, sw, async rowsAffected =>
@@ -237,7 +256,7 @@ public sealed class EngineHost : IAsyncDisposable
     private async Task TransactionCommandAsync(int id, int connectionId, string action)
     {
         if (!_connections.TryGetValue(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
-        state.Active?.Cancel();
+        CancelCurrent(state);
         await state.SessionLock.WaitAsync();
         try
         {
@@ -323,6 +342,13 @@ public sealed class EngineHost : IAsyncDisposable
         }
     }
 
+    /// <summary>Cancels whatever the session is doing: a statement still waiting for its first result, or one streaming rows.</summary>
+    private static void CancelCurrent(ConnectionState state)
+    {
+        state.Starting?.Cancel();
+        state.Active?.Cancel();
+    }
+
     private void Event(object payload) => _out.SendEvent(JsonSerializer.Serialize(payload, Json));
     private void Error(int replyTo, string message) => Event(new { type = "error", replyTo, message });
 
@@ -344,6 +370,9 @@ public sealed class EngineHost : IAsyncDisposable
         public IDatabaseProvider Provider { get; } = provider;
         public IProviderConnection Connection { get; } = connection;
         public QuerySession? Active { get; set; }
+
+        /// <summary>Cancels a statement that has been sent but has not produced a result yet (so has no query id).</summary>
+        public CancellationTokenSource? Starting { get; set; }
         public DatabaseSchema? Schema { get; set; }
     }
 }

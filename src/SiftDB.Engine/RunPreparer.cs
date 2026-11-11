@@ -32,9 +32,12 @@ public static class RunPreparer
 
         if (mode == QueryMode.Strict)
         {
-            var count = corrections.Count + issues.Count;
+            // An unknown column is only a hint (the server has the last word, and a wrong guess must not stop valid SQL), so it
+            // is shown but never holds up a run.
+            var blocking = issues.Where(i => i.Code != IssueCode.UnknownColumn).ToList();
+            var count = corrections.Count + blocking.Count;
             if (count == 0) return new PreparedRun(raw, null);
-            var first = corrections.Count > 0 ? corrections[0].Message : issues[0].Message;
+            var first = corrections.Count > 0 ? corrections[0].Message : blocking[0].Message;
             return new PreparedRun(raw,
                 $"{count} identifier problem{(count == 1 ? "" : "s")} to fix first. {first}. Use the quick fixes, or switch to Assisted mode.");
         }

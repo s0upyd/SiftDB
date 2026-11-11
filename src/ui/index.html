@@ -83,6 +83,8 @@
                          font-size: 10px; color: var(--accent); }
     /* Greyed quotes the editor adds in Assisted mode. Monaco's token colours are more specific, hence the selector. */
     .monaco-editor .view-line .sift-ghost { color: var(--dim) !important; opacity: 0.85; }
+    /* The quick-fix menu sizes itself too narrowly for "Use \"PersonId\"": a fix you cannot read is no use. */
+    .action-widget { min-width: 280px; }
     .current-statement { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 
     .msg { padding: 5px 10px; color: var(--dim); background: var(--panel); border-bottom: 1px solid var(--line); }

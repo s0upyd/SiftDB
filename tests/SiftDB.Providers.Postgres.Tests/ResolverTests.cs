@@ -264,6 +264,123 @@ public class ResolverTests
         Assert.Empty(Resolve("select * from shop.products p, (select 1 as bob) x where name = \"bob\"").Issues);
     }
 
+    // ---- columns that do not exist ----
+
+    [Theory]
+    [InlineData("select * from \"Person\" where id = 1")]
+    [InlineData("select * from \"Person\" where Id = 1")]
+    [InlineData("select * from \"Person\" where ID = 1")]
+    public void A_column_that_does_not_exist_gets_a_hint_naming_the_likely_one(string sql)
+    {
+        var r = Resolve(sql);
+        var issue = Assert.Single(r.Issues);
+        Assert.Equal(IssueCode.UnknownColumn, issue.Code);
+        Assert.Equal(IssueSeverity.Warning, issue.Severity);
+        Assert.Equal("\"PersonId\"", issue.FixText);                // "id" is the end of "PersonId"
+        Assert.Contains("No column", issue.Message);
+        Assert.Contains("\"Person\"", issue.Message);
+        Assert.Contains("\"PersonId\"", issue.Message);
+        Assert.Equal("id", sql.Substring(issue.Start, issue.Length).ToLowerInvariant());
+        Assert.Empty(r.Corrections);                                 // a guess is never applied silently
+    }
+
+    [Fact]
+    public void An_alias_qualified_column_that_does_not_exist_gets_the_same_hint()
+    {
+        var issue = Assert.Single(Resolve("select p.id from \"Person\" p").Issues);
+        Assert.Equal(IssueCode.UnknownColumn, issue.Code);
+        Assert.Equal("\"PersonId\"", issue.FixText);
+    }
+
+    [Theory]
+    [InlineData("firstnme", "\"FirstName\"")]   // a typo
+    [InlineData("firstn", "\"FirstName\"")]     // a prefix
+    [InlineData("stnam", "\"FirstName\"")]      // something inside it
+    public void The_hint_finds_typos_prefixes_and_fragments(string typed, string expected)
+    {
+        var issue = Assert.Single(Resolve($"select {typed} from \"Person\"").Issues);
+        Assert.Equal(expected, issue.FixText);
+    }
+
+    [Fact]
+    public void With_nothing_close_the_hint_still_says_the_column_is_missing()
+    {
+        var issue = Assert.Single(Resolve("select zzzzzz from \"Person\"").Issues);
+        Assert.Equal(IssueCode.UnknownColumn, issue.Code);
+        Assert.Null(issue.FixText);
+        Assert.Empty(issue.AllFixes);
+        Assert.Equal("No column zzzzzz in \"Person\".", issue.Message);
+    }
+
+    [Fact]
+    public void Candidates_are_offered_best_first_and_a_shared_name_is_qualified()
+    {
+        var issue = Assert.Single(Resolve("select id from \"Person\" p, \"Email\" e").Issues);
+        Assert.Equal(["p.\"PersonId\"", "\"EmailId\"", "e.\"PersonId\""], issue.AllFixes);
+        Assert.Contains("\"Person\" or \"Email\"", issue.Message);
+    }
+
+    [Fact]
+    public void At_most_three_candidates_are_offered()
+    {
+        var wide = new DatabaseSchema([new SchemaInfo("public", [Rel("t", "a_id", "b_id", "c_id", "d_id", "e_id")])]);
+        var r = IdentifierResolver.Resolve(wide, Provider.Parser, Provider.Identifiers, "select id from t");
+        Assert.Equal(3, Assert.Single(r.Issues).AllFixes.Count);
+    }
+
+    [Theory]
+    [InlineData("select p from \"Person\" p")]                                                   // the whole row
+    [InlineData("select \"Person\" from \"Person\"")]
+    [InlineData("select \"FirstName\" fn from \"Person\"")]                                      // alias without AS
+    [InlineData("select \"FirstName\" fn from \"Person\" order by fn")]
+    [InlineData("select \"FirstName\" as fn from \"Person\" order by fn")]
+    [InlineData("select case when \"PersonId\" > 1 then 1 end flag from \"Person\"")]            // alias after END
+    [InlineData("select count(*) c from \"Person\"")]
+    [InlineData("select * from \"Person\" order by idx")]                                        // may be an output column
+    [InlineData("select extract(epoch from \"FirstName\") from \"Person\"")]
+    [InlineData("select substring(\"FirstName\" from 2) from \"Person\"")]
+    [InlineData("select now(), lower(\"FirstName\") from \"Person\"")]
+    [InlineData("select f(width => 3) from \"Person\"")]
+    [InlineData("select * from \"Person\" where \"PersonId\" = 1")]
+    [InlineData("select * from \"Person\" where 1 = 1 and \"FirstName\" like 'a%'")]
+    public void Valid_SQL_is_never_flagged_as_having_an_unknown_column(string sql)
+    {
+        var r = Resolve(sql);
+        Assert.Empty(r.Issues);
+        Assert.Empty(r.Corrections);
+    }
+
+    [Theory]
+    [InlineData("select x from (select 1 as x) s, \"Person\" p")]                               // a derived table may own it
+    [InlineData("with c as (select 1 as v) select v from c, \"Person\" p")]                       // so may a CTE
+    [InlineData("select v from generate_series(1, 3) v, \"Person\" p")]                         // so may a function
+    public void Nothing_is_claimed_when_part_of_the_statement_is_unknown(string sql)
+    {
+        Assert.Empty(Resolve(sql).Issues);
+    }
+
+    [Fact]
+    public void A_qualified_unknown_column_is_flagged_even_in_order_by()
+    {
+        var issue = Assert.Single(Resolve("select * from \"Person\" p order by p.idx").Issues);
+        Assert.Equal(IssueCode.UnknownColumn, issue.Code);
+    }
+
+    [Fact]
+    public void A_double_quoted_string_in_a_value_position_is_still_a_string_hint_not_an_unknown_column()
+    {
+        var issue = Assert.Single(Resolve("select * from shop.products where name = \"bob\"").Issues);
+        Assert.Equal(IssueCode.StringQuote, issue.Code);
+    }
+
+    [Fact]
+    public void An_unknown_column_does_not_stop_the_real_corrections_around_it()
+    {
+        const string sql = "select FirstName from \"Person\" where id = 1";
+        Assert.Equal("select \"FirstName\" from \"Person\" where id = 1", Fixed(sql));   // FirstName is fixed; id is only hinted at
+        Assert.Equal(IssueCode.UnknownColumn, Assert.Single(Resolve(sql).Issues).Code);
+    }
+
     // ---- positions and shape ----
 
     [Fact]
