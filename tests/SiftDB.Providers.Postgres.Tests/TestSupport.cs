@@ -26,5 +26,6 @@ internal sealed class InMemoryProvider(DatabaseSchema schema) : IDatabaseProvide
         public Task<DbDataReader> ExecuteReaderAsync(string sql, CancellationToken ct) => throw new NotSupportedException();
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         public Task<DatabaseSchema> IntrospectAsync(CancellationToken ct) => Task.FromResult(schema);
+        public ITransactionMonitor Transactions => throw new NotSupportedException();
     }
 }

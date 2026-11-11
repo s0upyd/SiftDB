@@ -17,6 +17,7 @@ public class EngineTests
         public int ContractVersion => ProviderContract.CurrentVersion;
         public ISqlParser Parser { get; } = new SemicolonParser();
         public IIdentifierPolicy Identifiers => throw new NotSupportedException();
+
         public Task<IProviderConnection> OpenAsync(string cs, CancellationToken ct) =>
             Task.FromResult<IProviderConnection>(new Conn(rows));
 
@@ -52,6 +53,7 @@ public class EngineTests
                 for (var i = 0; i < rows; i++) t.Rows.Add(i, (long)i * 3, i / 2.0, i % 7 == 0 ? null : $"row é{i}");
                 return Task.FromResult<DbDataReader>(t.CreateDataReader());
             }
+            public ITransactionMonitor Transactions { get; } = new NullMonitor();
             public Task<DatabaseSchema> IntrospectAsync(CancellationToken ct) => Task.FromResult(new DatabaseSchema([
                 new SchemaInfo("public", [
                     new RelationInfo("OrderItems", RelationKind.MaterializedView,
@@ -216,6 +218,18 @@ public class EngineTests
         public int ContractVersion => 99;
         public ISqlParser Parser => throw new NotSupportedException();
         public IIdentifierPolicy Identifiers => throw new NotSupportedException();
+
         public Task<IProviderConnection> OpenAsync(string c, CancellationToken ct) => throw new NotSupportedException();
     }
+}
+
+/// <summary>A monitor for tests that do not care about transactions: always no transaction.</summary>
+internal sealed class NullMonitor : ITransactionMonitor
+{
+    public bool CanDetectWrites => true;
+    public Task BeginAsync(CancellationToken ct) => Task.CompletedTask;
+    public Task CommitAsync(CancellationToken ct) => Task.CompletedTask;
+    public Task RollbackAsync(CancellationToken ct) => Task.CompletedTask;
+    public Task<TransactionSnapshot> GetStateAsync(CancellationToken ct) =>
+        Task.FromResult(new TransactionSnapshot(TransactionState.None, null));
 }

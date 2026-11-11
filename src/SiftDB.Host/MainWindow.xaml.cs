@@ -18,12 +18,25 @@ public partial class MainWindow : Window, IEngineOutput
     private readonly Dictionary<int, CoreWebView2SharedBuffer> _inFlight = new();
     private int _nextBufferId;
 
+    /// <summary>The page says a transaction holds changes that closing the window would roll back.</summary>
+    private bool _unsavedChanges;
+
     public MainWindow()
     {
         InitializeComponent();
         _engine = new EngineHost([new PostgresProvider()], this);
         Loaded += async (_, _) => await InitWebAsync();
+        Closing += OnClosing;
         Closed += async (_, _) => await _engine.DisposeAsync();
+    }
+
+    private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (!_unsavedChanges) return;
+        var answer = MessageBox.Show(this,
+            "A transaction has changes that have not been committed. Closing now rolls them back.\n\nClose anyway?",
+            "SiftDB", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (answer != MessageBoxResult.Yes) e.Cancel = true;
     }
 
     private async Task InitWebAsync()
@@ -37,6 +50,8 @@ public partial class MainWindow : Window, IEngineOutput
             MessageBox.Show($"UI bundle not found in {uiDir}. Run 'npm run build' in src/ui, then rebuild the host.");
             return;
         }
+        // The page owns its shortcuts (F5 runs a statement, Ctrl+Shift+R rolls back); the browser's must not reload it.
+        core.Settings.AreBrowserAcceleratorKeysEnabled = false;
         core.SetVirtualHostNameToFolderMapping("siftdb.local", uiDir, CoreWebView2HostResourceAccessKind.Allow);
         core.WebMessageReceived += OnWebMessage;
         core.NavigationCompleted += (_, _) => SendEvent(JsonSerializer.Serialize(new
@@ -52,12 +67,16 @@ public partial class MainWindow : Window, IEngineOutput
     {
         var json = e.TryGetWebMessageAsString();
         using var doc = JsonDocument.Parse(json);
-        // Transport concern, not engine business: the page is done with a shared buffer.
-        if (doc.RootElement.GetProperty("type").GetString() == "releaseBuffer")
+        // Transport and window concerns, not engine business.
+        switch (doc.RootElement.GetProperty("type").GetString())
         {
-            var id = doc.RootElement.GetProperty("bufferId").GetInt32();
-            if (_inFlight.Remove(id, out var buf)) buf.Dispose();
-            return;
+            case "releaseBuffer": // the page is done with a shared buffer
+                var id = doc.RootElement.GetProperty("bufferId").GetInt32();
+                if (_inFlight.Remove(id, out var buf)) buf.Dispose();
+                return;
+            case "hostState": // for the close-window warning
+                _unsavedChanges = doc.RootElement.GetProperty("unsavedChanges").GetBoolean();
+                return;
         }
         _ = _engine.HandleCommandAsync(json);
     }

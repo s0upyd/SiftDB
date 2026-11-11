@@ -27,6 +27,8 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     private sealed class PostgresConnection(NpgsqlConnection conn, string connectionString) : IProviderConnection
     {
+        public ITransactionMonitor Transactions { get; } = new PostgresTransactionMonitor(conn);
+
         // Metadata gets its own connection: this one may be streaming a query or holding an open transaction,
         // and Npgsql allows one command at a time per connection.
         public async Task<DatabaseSchema> IntrospectAsync(CancellationToken ct)

@@ -24,6 +24,7 @@ internal sealed class QuerySession
     private readonly Stopwatch _sw;
     private long _firstBatchTicks = -1;
     private long _readTicks, _appendTicks, _writeTicks;
+    private readonly Func<long, Task>? _onFinished;
 
     public int Id { get; }
 
@@ -32,6 +33,9 @@ internal sealed class QuerySession
             new BoundedChannelOptions(4) { FullMode = BoundedChannelFullMode.Wait, SingleWriter = true });
 
     public long TotalRows { get; private set; }
+
+    /// <summary>Rows an INSERT/UPDATE/DELETE reported, or a negative number for a statement that has no such count.</summary>
+    public long RecordsAffected { get; private set; } = -1;
     public double FirstBatchMs => _firstBatchTicks < 0 ? -1 : _firstBatchTicks * 1000.0 / Stopwatch.Frequency;
     public double TotalMs { get; private set; }
 
@@ -41,9 +45,12 @@ internal sealed class QuerySession
 
     private static double ToMs(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
 
-    public QuerySession(int id, DbDataReader reader, RowBatchWriter writer, CancellationTokenSource cts, Stopwatch sw)
+    /// <param name="onFinished">Called once the reader is closed, whether the query finished, failed or was cancelled: the
+    /// session is idle again, so this is where the transaction state is read and the session lock released.</param>
+    public QuerySession(int id, DbDataReader reader, RowBatchWriter writer, CancellationTokenSource cts, Stopwatch sw,
+        Func<long, Task>? onFinished = null)
     {
-        Id = id; _reader = reader; _writer = writer; _cts = cts; _sw = sw;
+        Id = id; _reader = reader; _writer = writer; _cts = cts; _sw = sw; _onFinished = onFinished;
     }
 
     public void Cancel() => _cts.Cancel();
@@ -89,6 +96,7 @@ internal sealed class QuerySession
                     await FlushAsync();
             }
             if (_writer.RowCount > 0) await FlushAsync();
+            RecordsAffected = _reader.RecordsAffected;
             TotalMs = _sw.Elapsed.TotalMilliseconds;
             Channel.Writer.TryComplete();
         }
@@ -99,6 +107,11 @@ internal sealed class QuerySession
         finally
         {
             await _reader.DisposeAsync();
+            if (_onFinished is not null)
+            {
+                try { await _onFinished(RecordsAffected); }
+                catch { /* the callback reports its own failures; the session must still be released */ }
+            }
         }
     }
 }

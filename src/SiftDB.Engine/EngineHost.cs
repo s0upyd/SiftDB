@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Data.Common;
 using System.Diagnostics;
 using System.Text.Json;
 using SiftDB.Abstractions;
@@ -63,6 +64,9 @@ public sealed class EngineHost : IAsyncDisposable
                         root.GetProperty("selectionStart").GetInt32(), root.GetProperty("selectionEnd").GetInt32(),
                         RunPreparer.ParseMode(root.TryGetProperty("mode", out var mode) ? mode.GetString() : null));
                     break;
+                case "transaction":
+                    await TransactionCommandAsync(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("action").GetString()!);
+                    break;
                 case "complete":
                     Complete(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("text").GetString()!,
                         root.GetProperty("offset").GetInt32());
@@ -92,8 +96,12 @@ public sealed class EngineHost : IAsyncDisposable
         if (!_providers.TryGetValue(provider, out var p)) { Error(id, $"No provider '{provider}'"); return; }
         var conn = await p.OpenAsync(connectionString, CancellationToken.None);
         var connId = Interlocked.Increment(ref _nextConnection);
-        _connections[connId] = new ConnectionState(p, conn);
+        var state = new ConnectionState(connId, p, conn);
+        _connections[connId] = state;
         Event(new { type = "connected", replyTo = id, connectionId = connId });
+        await state.SessionLock.WaitAsync();
+        try { await ObserveTransactionAsync(state, statement: false, rowsAffected: -1); }
+        finally { state.SessionLock.Release(); }
     }
 
     /// <summary>
@@ -148,26 +156,113 @@ public sealed class EngineHost : IAsyncDisposable
         Event(new { type = "completions", replyTo = id, start = result.Start, end = result.End, items = result.Items });
     }
 
+    /// <summary>
+    /// Runs a statement on the connection's session. The session lock is held for the statement's whole life (it is
+    /// released by the query session once the reader is closed and the transaction state has been read), so nothing else
+    /// can use the connection while rows are streaming from it.
+    /// </summary>
     private async Task ExecuteAsync(int id, int connectionId, string sql)
     {
         if (!_connections.TryGetValue(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
-        state.Active?.Cancel();
-
-        var sw = Stopwatch.StartNew();
-        var cts = new CancellationTokenSource();
-        var reader = await state.Connection.ExecuteReaderAsync(sql, cts.Token);
-        var writer = new RowBatchWriter(reader);
-        var queryId = Interlocked.Increment(ref _nextQuery);
-        var session = new QuerySession(queryId, reader, writer, cts, sw);
-        _queries[queryId] = session;
-        state.Active = session;
-
-        Event(new
+        state.Active?.Cancel(); // a new statement replaces the running one; this lets it wind down and free the session
+        await state.SessionLock.WaitAsync();
+        var handedOver = false;
+        try
         {
-            type = "columns", replyTo = id, queryId,
-            columns = writer.Columns.Select(c => new { name = c.Name, kind = (int)c.Kind }),
-        });
-        session.Start();
+            var sw = Stopwatch.StartNew();
+            var cts = new CancellationTokenSource();
+            DbDataReader reader;
+            try
+            {
+                reader = await state.Connection.ExecuteReaderAsync(sql, cts.Token);
+            }
+            catch
+            {
+                // An error inside a transaction aborts it: the bar has to turn red even though no rows ever streamed.
+                await ObserveTransactionAsync(state, statement: true, rowsAffected: -1);
+                throw;
+            }
+            var writer = new RowBatchWriter(reader);
+            var queryId = Interlocked.Increment(ref _nextQuery);
+            var session = new QuerySession(queryId, reader, writer, cts, sw, async rowsAffected =>
+            {
+                try { await ObserveTransactionAsync(state, statement: true, rowsAffected); }
+                finally { state.SessionLock.Release(); }
+            });
+            handedOver = true;
+            _queries[queryId] = session;
+            state.Active = session;
+
+            Event(new
+            {
+                type = "columns", replyTo = id, queryId,
+                columns = writer.Columns.Select(c => new { name = c.Name, kind = (int)c.Kind }),
+            });
+            session.Start();
+        }
+        finally
+        {
+            if (!handedOver) state.SessionLock.Release();
+        }
+    }
+
+    /// <summary>Begin, commit or roll back the session's transaction (the bar's buttons).</summary>
+    private async Task TransactionCommandAsync(int id, int connectionId, string action)
+    {
+        if (!_connections.TryGetValue(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
+        state.Active?.Cancel();
+        await state.SessionLock.WaitAsync();
+        try
+        {
+            var monitor = state.Connection.Transactions;
+            try
+            {
+                switch (action)
+                {
+                    case "begin": await monitor.BeginAsync(CancellationToken.None); break;
+                    case "commit": await monitor.CommitAsync(CancellationToken.None); break;
+                    case "rollback": await monitor.RollbackAsync(CancellationToken.None); break;
+                    default: Error(id, $"Unknown transaction action '{action}'"); return;
+                }
+                Event(new { type = "ok", replyTo = id });
+            }
+            catch (Exception ex)
+            {
+                Error(id, ex.Message); // e.g. a deferred constraint refusing the commit
+            }
+            await ObserveTransactionAsync(state, statement: false, rowsAffected: -1);
+        }
+        finally
+        {
+            state.SessionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Asks the server where the session stands and tells the UI. The caller holds the session lock, so the connection is
+    /// idle. A failure here must not break the statement that triggered it, so it is reported rather than thrown.
+    /// </summary>
+    private async Task ObserveTransactionAsync(ConnectionState state, bool statement, long rowsAffected)
+    {
+        try
+        {
+            var snapshot = await state.Connection.Transactions.GetStateAsync(CancellationToken.None);
+            var now = DateTimeOffset.UtcNow;
+            if (statement) state.Tracker.StatementCompleted(snapshot, rowsAffected, now);
+            else state.Tracker.Observed(snapshot, now);
+
+            var t = state.Tracker;
+            Event(new
+            {
+                type = "transaction", connectionId = state.Id, state = t.State, startedAt = t.StartedAt,
+                statements = t.Statements, rowsChanged = t.RowsChanged,
+                canDetectWrites = state.Connection.Transactions.CanDetectWrites,
+            });
+        }
+        catch (Exception ex)
+        {
+            Event(new { type = "transactionUnknown", connectionId = state.Id, message = ex.Message });
+        }
     }
 
     private async Task FetchAsync(int queryId)
@@ -183,7 +278,7 @@ public sealed class EngineHost : IAsyncDisposable
             var b = s.Breakdown;
             Event(new
             {
-                type = "complete", queryId, totalRows = s.TotalRows,
+                type = "complete", queryId, totalRows = s.TotalRows, rowsAffected = s.RecordsAffected < 0 ? (long?)null : s.RecordsAffected,
                 engineFirstBatchMs = s.FirstBatchMs, engineTotalMs = s.TotalMs,
                 engineReadMs = b.ReadMs, engineAppendMs = b.AppendMs, engineWriteWaitMs = b.WriteWaitMs,
             });
@@ -207,8 +302,15 @@ public sealed class EngineHost : IAsyncDisposable
         foreach (var c in _connections.Values) await c.Connection.DisposeAsync();
     }
 
-    private sealed class ConnectionState(IDatabaseProvider provider, IProviderConnection connection)
+    private sealed class ConnectionState(int id, IDatabaseProvider provider, IProviderConnection connection)
     {
+        public int Id { get; } = id;
+
+        /// <summary>One thing at a time on the session connection: a statement (for its whole streaming life), a state
+        /// probe, or a begin/commit/rollback.</summary>
+        public SemaphoreSlim SessionLock { get; } = new(1, 1);
+
+        public TransactionTracker Tracker { get; } = new();
         public IDatabaseProvider Provider { get; } = provider;
         public IProviderConnection Connection { get; } = connection;
         public QuerySession? Active { get; set; }

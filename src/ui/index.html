@@ -31,6 +31,24 @@
     .badge { font-size: 10px; line-height: 14px; padding: 0 4px; border: 1px solid var(--line); border-radius: 3px; color: var(--dim); }
 
     #work { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    /* Transaction bar (design section 7). State is shown three ways: colour, icon and words. */
+    :root { --tx-open: #1a7f37; --tx-changed: #9a6700; --tx-failed: #cf222e;
+            --tx-open-bg: #dafbe1; --tx-changed-bg: #fff8c5; --tx-failed-bg: #ffebe9; }
+    :root[data-theme="dark"] { --tx-open: #3fb950; --tx-changed: #d29922; --tx-failed: #f85149;
+            --tx-open-bg: #12261e; --tx-changed-bg: #272115; --tx-failed-bg: #2d1214; }
+    #txbar { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-bottom: 1px solid var(--line);
+             border-left: 5px solid var(--accent); }
+    #txbar[hidden] { display: none; }
+    #txbar.tx-open    { background: var(--tx-open-bg);    border-left-color: var(--tx-open); }
+    #txbar.tx-changed { background: var(--tx-changed-bg); border-left-color: var(--tx-changed); }
+    #txbar.tx-failed  { background: var(--tx-failed-bg);  border-left-color: var(--tx-failed); }
+    #txbar.tx-open #txIcon    { color: var(--tx-open); }
+    #txbar.tx-changed #txIcon { color: var(--tx-changed); }
+    #txbar.tx-failed #txIcon  { color: var(--tx-failed); }
+    #txIcon { font-size: 15px; width: 1.2em; text-align: center; }
+    #txDetail { color: var(--dim); }
+    #txbar .grow { flex: 1; }
+    #txbar button[hidden] { display: none; }
     #editor { height: 190px; min-height: 80px; resize: vertical; overflow: hidden; border-bottom: 1px solid var(--line); }
     .run-glyph { cursor: pointer; }
     .run-glyph::before { content: "▶"; display: flex; align-items: center; justify-content: center; height: 100%;
@@ -49,6 +67,7 @@
     <button id="connect">Connect</button>
     <button id="run" disabled>Run</button>
     <button id="cancel" disabled>Cancel</button>
+    <button id="begin" disabled title="Begin a transaction. You can also just type BEGIN: the bar follows the server either way.">Begin</button>
     <button id="mode" aria-pressed="false" title="Assisted: quotes are added for you and shown greyed; what runs is what you see. Strict: the text you write is the text that runs; problems are squiggles with quick fixes (Alt+Enter) and block running.">Assisted</button>
     <label><input id="fetchAll" type="checkbox" checked> fetch all</label>
     <button id="bench" disabled>Scroll benchmark</button>
@@ -63,6 +82,15 @@
       <div id="tree"></div>
     </aside>
     <div id="work">
+      <div id="txbar" hidden role="status" aria-live="polite">
+        <span id="txIcon" aria-hidden="true"></span>
+        <strong id="txLabel"></strong>
+        <span id="txDetail"></span>
+        <span class="grow"></span>
+        <button id="txEnd" title="End the transaction (commit). Nothing has changed in it.">End</button>
+        <button id="txCommit" title="Commit the changes (Ctrl+Shift+Enter)">Commit</button>
+        <button id="txRollback" title="Roll back (Ctrl+Shift+R)">Rollback</button>
+      </div>
       <div id="editor"></div>
       <div id="stats">Not connected.</div>
       <div id="grid"></div>

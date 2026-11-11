@@ -27,6 +27,9 @@ public interface IProviderConnection : IAsyncDisposable
     /// <summary>Starts a query and returns a forward-only reader. Rows must stream; never buffer the whole result.</summary>
     Task<DbDataReader> ExecuteReaderAsync(string sql, CancellationToken ct);
 
+    /// <summary>Transaction control and state for this connection's session.</summary>
+    ITransactionMonitor Transactions { get; }
+
     /// <summary>
     /// Reads the database structure. Must not disturb this connection's session (open transaction, running
     /// query, SET values), so providers do it on a separate connection.

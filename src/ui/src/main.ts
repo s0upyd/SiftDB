@@ -35,6 +35,23 @@ let queryId = 0;
 let store = new ResultStore();
 let outstanding = 0;
 let done = true;
+let lastColumnCount = 0;
+
+const txBar = $('txbar');
+const txIcon = $('txIcon');
+const txLabel = $('txLabel');
+const txDetail = $('txDetail');
+const txEnd = $<HTMLButtonElement>('txEnd');
+const txCommit = $<HTMLButtonElement>('txCommit');
+const txRollback = $<HTMLButtonElement>('txRollback');
+const beginBtn = $<HTMLButtonElement>('begin');
+
+type TxState = 'none' | 'open' | 'changed' | 'failed';
+/** The server's word on the session's transaction, as last reported by the engine. */
+const tx = { state: 'none' as TxState, startedAt: null as string | null, statements: 0, rowsChanged: 0 };
+let hostWarnedPending = false;
+
+const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 
 const m = {
   t0: 0, columns: -1, firstBatch: -1, firstPaint: -1, complete: -1,
@@ -50,6 +67,18 @@ function onEvent(e: BridgeEvent) {
     if (e.defaultConnection) connEl.value = e.defaultConnection;
     return;
   }
+  if (e.type === 'transaction') {
+    tx.state = e.state;
+    tx.startedAt = e.startedAt ?? null;
+    tx.statements = e.statements;
+    tx.rowsChanged = e.rowsChanged;
+    renderTx();
+    return;
+  }
+  if (e.type === 'transactionUnknown') {
+    m.status = `transaction state unavailable: ${e.message}`;
+    return;
+  }
   if (e.queryId !== queryId) return; // stale query
   if (e.type === 'complete') {
     outstanding--;
@@ -60,7 +89,8 @@ function onEvent(e: BridgeEvent) {
       m.engineFirst = e.engineFirstBatchMs;
       m.engineTotal = e.engineTotalMs;
       m.engineSplit = `read ${e.engineReadMs.toFixed(0)} ms · encode ${e.engineAppendMs.toFixed(0)} ms · blocked on UI ${e.engineWriteWaitMs.toFixed(0)} ms`;
-      m.status = 'complete';
+      // A statement with no result set (INSERT, UPDATE, DELETE) says what it did instead.
+      m.status = e.rowsAffected != null && lastColumnCount === 0 ? `complete · ${plural(e.rowsAffected, 'row')} affected` : 'complete';
       grid.setRowHint(e.totalRows);
       finish();
     }
@@ -112,6 +142,7 @@ async function run(sql: string) {
   if (r.type === 'error') { done = true; m.status = `error: ${r.message}`; finish(); return; }
   queryId = r.queryId!;
   m.columns = performance.now() - t0;
+  lastColumnCount = (r.columns as Column[]).length;
   grid.setStore(store, r.columns as Column[]);
   pump();
 }
@@ -176,6 +207,79 @@ function handleTarget(target: RunTarget) {
 async function runFromEditor() {
   handleTarget(await sqlEditor.statementToRun());
 }
+
+// ---- Transaction bar (design section 7) ---------------------------------------------------------------------------
+// The state is whatever the server last said. The Begin button and a typed BEGIN end up in the same place because
+// both are observed afterwards, never assumed.
+
+function elapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s`;
+  return `${Math.floor(s / 3600)} h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')} min`;
+}
+
+function renderTx() {
+  const s = tx.state;
+  txBar.hidden = s === 'none';
+  txBar.className = s === 'none' ? '' : `tx-${s}`;
+  beginBtn.disabled = !connectionId || s !== 'none';
+  if (s !== 'none') {
+    txIcon.textContent = s === 'open' ? 'ⓘ' : s === 'changed' ? '✎' : '✖';
+    txLabel.textContent = s === 'open' ? 'Transaction open' : s === 'changed' ? 'Changes pending' : 'Transaction aborted';
+    txEnd.hidden = s !== 'open';      // nothing changed: ending it is just a commit
+    txCommit.hidden = s !== 'changed';
+    txRollback.hidden = false;        // the only way out of a failed transaction
+    updateTxDetail();
+  }
+  // The host warns before closing the window while changes would be thrown away.
+  const pending = s === 'changed' || s === 'failed';
+  if (pending !== hostWarnedPending) {
+    hostWarnedPending = pending;
+    bridge.send({ type: 'hostState', unsavedChanges: pending });
+  }
+}
+
+function updateTxDetail() {
+  if (tx.state === 'none') return;
+  const parts: string[] = [];
+  // The count runs from the first statement in the transaction, whether or not anything has changed yet.
+  if (tx.state === 'open') parts.push(`${plural(tx.statements, 'statement')} · nothing changed yet`);
+  else if (tx.state === 'changed') parts.push(`${plural(tx.statements, 'statement')} · ${plural(tx.rowsChanged, 'row')} changed`);
+  else parts.push('an error aborted it: roll back to continue');
+  if (tx.startedAt) parts.push(`open ${elapsed(Date.now() - Date.parse(tx.startedAt))}`);
+  txDetail.textContent = parts.join(' · ');
+}
+setInterval(updateTxDetail, 1000);
+
+async function txAction(action: 'begin' | 'commit' | 'rollback') {
+  if (!connectionId) return;
+  const r = await bridge.request({ type: 'transaction', connectionId, action });
+  if (r.type === 'error') m.status = `${action} failed: ${r.message}`;
+}
+beginBtn.onclick = () => void txAction('begin');
+txEnd.onclick = () => void txAction('commit');
+txCommit.onclick = () => void txAction('commit');
+txRollback.onclick = () => void txAction('rollback');
+
+// Capture phase, and stopPropagation: Monaco binds Ctrl+Shift+Enter itself ("insert line above"), so it must not also see it.
+window.addEventListener('keydown', (e) => {
+  if (!e.ctrlKey || !e.shiftKey) return;
+  const commit = e.key === 'Enter' && (tx.state === 'open' || tx.state === 'changed');
+  const rollback = (e.key === 'R' || e.key === 'r') && tx.state !== 'none';
+  if (!commit && !rollback) return;
+  e.preventDefault();
+  e.stopPropagation();
+  void txAction(commit ? 'commit' : 'rollback');
+}, true);
+
+// F5 runs the statement from anywhere on the page. Never let it reload the page (it would drop the connection);
+// when the editor has focus it handles F5 itself and this never sees the key.
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'F5') return;
+  e.preventDefault();
+  void runFromEditor();
+});
 
 // Strict: the text you write is the text that runs. Assisted: the editor shows (and runs) the quoting the database needs.
 const modeBtn = $<HTMLButtonElement>('mode');
