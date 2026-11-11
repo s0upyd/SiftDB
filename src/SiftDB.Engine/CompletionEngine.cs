@@ -31,11 +31,6 @@ public static class CompletionEngine
     private static readonly HashSet<string> ClauseWords = new(StringComparer.OrdinalIgnoreCase)
         { "select", "from", "where", "by", "having", "set", "on", "using", "returning", "values", "into", "join", "limit", "window" };
 
-    private readonly record struct Scope(string? SchemaName, string Name, string? Alias, string? RelSchema, RelationInfo? Rel)
-    {
-        public string Display => Alias ?? Name;
-    }
-
     private enum Ctx { None, Relation, Column }
 
     public static CompletionResult Complete(
@@ -69,7 +64,7 @@ public static class CompletionEngine
         var prefix = quotedTyped ? typed[1..] : typed;
 
         var prior = st.Where(t => t.End <= wordStart).ToList();
-        var scope = FindScope(schema, st, text);
+        var scope = ScopeAnalyzer.Analyze(schema, policy, st, text).Entries;
         var items = new List<CompletionItem>();
 
         if (prior.Count > 0 && IsPunct(prior[^1], text, '.'))
@@ -162,100 +157,6 @@ public static class CompletionEngine
         return null;
     }
 
-    // ---- tables in scope ------------------------------------------------------------------------------------
-
-    private static List<Scope> FindScope(DatabaseSchema schema, List<SqlToken> st, string text)
-    {
-        var scope = new List<Scope>();
-        for (var i = 0; i < st.Count; i++)
-        {
-            if (st[i].Kind != SqlTokenKind.Keyword) continue;
-            var w = Text(st[i], text).ToLowerInvariant();
-            if (w is not ("from" or "join" or "update" or "into")) continue;
-
-            var next = ParseRef(schema, st, i + 1, text, scope);
-            if (w == "from")
-                while (next < st.Count && IsPunct(st[next], text, ','))
-                    next = ParseRef(schema, st, next + 1, text, scope);
-            i = Math.Max(i, next - 1);
-        }
-        return scope;
-    }
-
-    /// <summary>Reads <c>[only] [schema.]name [[as] alias]</c> (or a parenthesised derived table) and returns the next index.</summary>
-    private static int ParseRef(DatabaseSchema schema, List<SqlToken> st, int i, string text, List<Scope> scope)
-    {
-        if (i < st.Count && IsKeywordWord(st[i], text, "only")) i++;
-        if (i >= st.Count) return i;
-
-        if (IsPunct(st[i], text, '('))
-        {
-            i = SkipParens(st, i, text);
-            var derived = ReadAlias(st, ref i, text);
-            if (derived is not null) scope.Add(new Scope(null, derived, derived, null, null)); // columns unknown
-            return i;
-        }
-        if (!IsName(st[i])) return i;
-
-        var first = NameOf(st[i], text);
-        i++;
-        string? schemaName = null;
-        var name = first;
-        if (i + 1 < st.Count && IsPunct(st[i], text, '.') && IsName(st[i + 1]))
-        {
-            schemaName = first;
-            name = NameOf(st[i + 1], text);
-            i += 2;
-        }
-        var alias = ReadAlias(st, ref i, text);
-        var resolved = Resolve(schema, schemaName, name);
-        scope.Add(new Scope(schemaName, name, alias, resolved?.Schema, resolved?.Rel));
-        return i;
-    }
-
-    private static string? ReadAlias(List<SqlToken> st, ref int i, string text)
-    {
-        if (i + 1 < st.Count && IsKeywordWord(st[i], text, "as") && IsName(st[i + 1]))
-        {
-            var a = NameOf(st[i + 1], text);
-            i += 2;
-            return a;
-        }
-        if (i < st.Count && st[i].Kind is SqlTokenKind.Identifier or SqlTokenKind.QuotedIdentifier)
-        {
-            var a = NameOf(st[i], text);
-            i++;
-            return a;
-        }
-        return null;
-    }
-
-    private static int SkipParens(List<SqlToken> st, int i, string text)
-    {
-        var depth = 0;
-        for (; i < st.Count; i++)
-        {
-            if (IsPunct(st[i], text, '(')) depth++;
-            else if (IsPunct(st[i], text, ')') && --depth == 0) return i + 1;
-        }
-        return i;
-    }
-
-    /// <summary>Case-insensitive on purpose: the identifier resolver (design section 3) matches ignoring case, so
-    /// <c>person</c> should still find <c>"Person"</c>. Exact case wins when both exist; <c>public</c> is searched first.</summary>
-    private static (string Schema, RelationInfo Rel)? Resolve(DatabaseSchema schema, string? schemaName, string name)
-    {
-        IEnumerable<SchemaInfo> candidates = schemaName is not null
-            ? schema.Schemas.Where(s => Eq(s.Name, schemaName))
-            : schema.Schemas.OrderBy(s => Eq(s.Name, "public") ? 0 : 1);
-        foreach (var s in candidates)
-        {
-            var rel = s.Relations.FirstOrDefault(r => r.Name == name) ?? s.Relations.FirstOrDefault(r => Eq(r.Name, name));
-            if (rel is not null) return (s.Name, rel);
-        }
-        return null;
-    }
-
     // ---- building the items ---------------------------------------------------------------------------------
 
     private static void RelationItems(DatabaseSchema schema, IIdentifierPolicy policy, string prefix, bool quoted, List<CompletionItem> items)
@@ -278,32 +179,33 @@ public static class CompletionEngine
         }
     }
 
-    private static void QualifiedItems(DatabaseSchema schema, IIdentifierPolicy policy, List<Scope> scope, List<SqlToken> prior,
+    private static void QualifiedItems(DatabaseSchema schema, IIdentifierPolicy policy, List<ScopeEntry> scope, List<SqlToken> prior,
         string text, string prefix, bool quoted, List<CompletionItem> items)
     {
         // prior ends with '.', preceded by name or schema.name
         var n = prior.Count;
         if (n < 2 || !IsName(prior[n - 2])) return;
-        var last = NameOf(prior[n - 2], text);
-        string? before = n >= 4 && IsPunct(prior[n - 3], text, '.') && IsName(prior[n - 4]) ? NameOf(prior[n - 4], text) : null;
+        var last = Ident.From(prior[n - 2], text);
 
         // schema.table.  -> columns
-        if (before is not null)
+        if (n >= 4 && IsPunct(prior[n - 3], text, '.') && IsName(prior[n - 4]))
         {
-            if (Resolve(schema, before, last) is { } r) AddColumns(policy, r.Rel, r.Schema + "." + r.Rel.Name, qualifier: null, prefix, quoted, items);
+            var before = Ident.From(prior[n - 4], text);
+            if (ScopeAnalyzer.Resolve(schema, policy, before, last) is { } r)
+                AddColumns(policy, r.Rel, r.Schema + "." + r.Rel.Name, qualifier: null, prefix, quoted, items);
             return;
         }
 
         // alias.  or  table.  (an aliased table is only reachable through its alias)
-        var hit = scope.FirstOrDefault(s => s.Rel is not null && (s.Alias is not null ? Eq(s.Alias, last) : Eq(s.Name, last)));
-        if (hit.Rel is not null)
+        var hit = FindByQualifier(scope, last, policy);
+        if (hit?.Rel is { } rel)
         {
-            AddColumns(policy, hit.Rel, hit.RelSchema + "." + hit.Rel.Name, qualifier: null, prefix, quoted, items);
+            AddColumns(policy, rel, hit.RelSchema + "." + rel.Name, qualifier: null, prefix, quoted, items);
             return;
         }
 
         // schema.  -> its tables, named without the schema (it is already typed)
-        var sch = schema.Schemas.FirstOrDefault(s => Eq(s.Name, last));
+        var sch = schema.Schemas.FirstOrDefault(s => Eq(s.Name, last.Name));
         if (sch is null) return;
         foreach (var r in sch.Relations)
         {
@@ -314,7 +216,16 @@ public static class CompletionEngine
         }
     }
 
-    private static void ColumnItems(IIdentifierPolicy policy, List<Scope> scope, string prefix, bool quoted, List<CompletionItem> items)
+    /// <summary>The table a qualifier refers to: what the database would match first, then a case-insensitive guess
+    /// (so <c>person.</c> still helps when the table is <c>"Person"</c>).</summary>
+    private static ScopeEntry? FindByQualifier(List<ScopeEntry> scope, Ident qualifier, IIdentifierPolicy policy)
+    {
+        var meaning = qualifier.Meaning(policy);
+        return scope.FirstOrDefault(e => e.Rel is not null && (e.AliasId ?? e.NameId).Meaning(policy) == meaning)
+               ?? scope.FirstOrDefault(e => e.Rel is not null && Eq((e.AliasId ?? e.NameId).Name, qualifier.Name));
+    }
+
+    private static void ColumnItems(IIdentifierPolicy policy, List<ScopeEntry> scope, string prefix, bool quoted, List<CompletionItem> items)
     {
         var resolved = scope.Where(s => s.Rel is not null).ToList();
         if (resolved.Count == 0) return;
@@ -325,16 +236,17 @@ public static class CompletionEngine
 
         foreach (var s in resolved)
         {
-            var q = resolved.Count > 1 ? policy.Quote(s.Display) : null;
+            // The alias (or table name) goes in exactly as the user wrote it, quotes and all.
+            var q = resolved.Count > 1 ? s.Display : null;
             AddColumns(policy, s.Rel!, s.Display, q, prefix, quoted, items, name => counts[name] > 1);
 
             if (MatchGroup(s.Display, prefix) >= 0)
-                items.Add(new CompletionItem(s.Display, policy.Quote(s.Display), Filter(s.Display, quoted), CompletionKind.Alias,
-                    "alias for " + s.Name, $"{MatchGroup(s.Display, prefix)}9{s.Display.ToLowerInvariant()}"));
+                items.Add(new CompletionItem(s.Display, s.Display, Filter(s.Display, quoted), CompletionKind.Alias,
+                    "alias for " + s.NameId.Name, $"{MatchGroup(s.Display, prefix)}9{s.Display.ToLowerInvariant()}"));
         }
     }
 
-    /// <param name="qualifier">Quoted alias to put in front when <paramref name="mustQualify"/> says the name is ambiguous.</param>
+    /// <param name="qualifier">The alias, as written, to put in front when <paramref name="mustQualify"/> says the name is ambiguous.</param>
     private static void AddColumns(IIdentifierPolicy policy, RelationInfo rel, string owner, string? qualifier, string prefix, bool quoted,
         List<CompletionItem> items, Func<string, bool>? mustQualify = null)
     {
@@ -378,18 +290,9 @@ public static class CompletionEngine
     };
 
     private static bool Eq(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
-    private static string Text(SqlToken t, string text) => text.Substring(t.Start, t.Length);
-    private static bool IsPunct(SqlToken t, string text, char c) => t.Kind == SqlTokenKind.Punctuation && text[t.Start] == c;
-    private static bool IsKeywordWord(SqlToken t, string text, string word) =>
-        t.Kind == SqlTokenKind.Keyword && Text(t, text).Equals(word, StringComparison.OrdinalIgnoreCase);
+    private static string Text(SqlToken t, string text) => ScopeAnalyzer.Text(t, text);
+    private static bool IsPunct(SqlToken t, string text, char c) => ScopeAnalyzer.IsPunct(t, text, c);
+    private static bool IsKeywordWord(SqlToken t, string text, string word) => ScopeAnalyzer.IsKeywordWord(t, text, word);
     private static bool IsAnyKeyword(SqlToken t, string text, params string[] words) => words.Any(w => IsKeywordWord(t, text, w));
-    private static bool IsName(SqlToken t) => t.Kind is SqlTokenKind.Identifier or SqlTokenKind.QuotedIdentifier or SqlTokenKind.Keyword;
-
-    /// <summary>The identifier's name: quotes removed and doubled quotes collapsed.</summary>
-    private static string NameOf(SqlToken t, string text)
-    {
-        var s = Text(t, text);
-        if (s.Length >= 2 && s[0] == '"' && s[^1] == '"') return s[1..^1].Replace("\"\"", "\"");
-        return s;
-    }
+    private static bool IsName(SqlToken t) => ScopeAnalyzer.IsName(t);
 }

@@ -1,4 +1,3 @@
-using System.Data.Common;
 using System.Text.Json;
 using SiftDB.Abstractions;
 using SiftDB.Engine;
@@ -8,41 +7,18 @@ namespace SiftDB.Providers.Postgres.Tests;
 /// <summary>The "complete" command through the real EngineHost, with Postgres parsing and quoting but no database.</summary>
 public class CompletionWireTests
 {
-    private sealed class Capture : IEngineOutput
-    {
-        public readonly List<string> Events = new();
-        public void SendEvent(string json) => Events.Add(json);
-        public void SendBatch(int queryId, EncodedBatch batch) { }
-    }
-
-    /// <summary>Real dialect services, in-memory schema.</summary>
-    private sealed class InMemoryProvider : IDatabaseProvider
-    {
-        private readonly PostgresProvider _pg = new();
-        public string Id => "postgres";
-        public int ContractVersion => _pg.ContractVersion;
-        public ISqlParser Parser => _pg.Parser;
-        public IIdentifierPolicy Identifiers => _pg.Identifiers;
-        public Task<IProviderConnection> OpenAsync(string cs, CancellationToken ct) => Task.FromResult<IProviderConnection>(new Conn());
-
-        private sealed class Conn : IProviderConnection
-        {
-            public Task<DbDataReader> ExecuteReaderAsync(string sql, CancellationToken ct) => throw new NotSupportedException();
-            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-            public Task<DatabaseSchema> IntrospectAsync(CancellationToken ct) => Task.FromResult(new DatabaseSchema([
-                new SchemaInfo("public", [
-                    new RelationInfo("Person", RelationKind.Table,
-                        [new ColumnInfo("PersonId", "integer", false, null)], ["PersonId"], [], []),
-                    new RelationInfo("orders", RelationKind.View, [], [], [], []),
-                ]),
-            ]));
-        }
-    }
+    private static readonly DatabaseSchema Schema = new([
+        new SchemaInfo("public", [
+            new RelationInfo("Person", RelationKind.Table,
+                [new ColumnInfo("PersonId", "integer", false, null)], ["PersonId"], [], []),
+            new RelationInfo("orders", RelationKind.View, [], [], [], []),
+        ]),
+    ]);
 
     private static async Task<(EngineHost Engine, Capture Cap)> Connected(bool introspect)
     {
         var cap = new Capture();
-        var engine = new EngineHost([new InMemoryProvider()], cap);
+        var engine = new EngineHost([new InMemoryProvider(Schema)], cap);
         await engine.HandleCommandAsync("""{"type":"connect","id":1,"provider":"postgres","connectionString":"x"}""");
         if (introspect) await engine.HandleCommandAsync("""{"type":"introspect","id":2,"connectionId":1}""");
         return (engine, cap);
@@ -101,7 +77,7 @@ public class CompletionWireTests
     public async Task An_unknown_connection_replies_with_an_error()
     {
         var cap = new Capture();
-        await using var engine = new EngineHost([new InMemoryProvider()], cap);
+        await using var engine = new EngineHost([new InMemoryProvider(Schema)], cap);
         await engine.HandleCommandAsync("""{"type":"complete","id":4,"connectionId":99,"text":"x","offset":0}""");
         Assert.Contains(cap.Events, e => e.Contains("\"error\"") && e.Contains("\"replyTo\":4"));
     }

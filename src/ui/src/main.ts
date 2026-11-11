@@ -1,5 +1,5 @@
 import { BatchMeta, Bridge, BridgeEvent, Column, DatabaseSchema, connectBridge } from './bridge';
-import { CompletionResponse, SheetAnalysis, SqlEditor } from './editor';
+import { CompletionResponse, QueryMode, RunTarget, SheetAnalysis, SqlEditor } from './editor';
 import { Grid, darkTheme, lightTheme } from './grid';
 import { ResultStore, decodeBatch } from './store';
 import { SchemaTree } from './tree';
@@ -158,20 +158,33 @@ function cancelQuery() {
 }
 
 /** The engine owns the dialect-aware parts of "what does F5 run": splitting the sheet and picking the statement. */
-async function analyze(text: string, selectionStart: number, selectionEnd: number): Promise<SheetAnalysis | null> {
+async function analyze(text: string, selectionStart: number, selectionEnd: number, mode: QueryMode): Promise<SheetAnalysis | null> {
   if (!connectionId) return null;
-  const r = await bridge.request({ type: 'analyzeSheet', connectionId, text, selectionStart, selectionEnd });
+  const r = await bridge.request({ type: 'analyzeSheet', connectionId, text, selectionStart, selectionEnd, mode });
   return r.type === 'sheetAnalysis' ? (r as unknown as SheetAnalysis) : null;
 }
 
-async function runFromEditor() {
-  const target = await sqlEditor.statementToRun();
+function handleTarget(target: RunTarget) {
   switch (target.kind) {
     case 'run': void run(target.sql); break;
+    case 'blocked': m.status = `not run: ${target.reason}`; break;
     case 'none': m.status = 'nothing to run: put the cursor in a statement, or select some text'; break;
     case 'disconnected': statsEl.textContent = 'Connect first. The connection decides which SQL dialect splits your statements.'; break;
   }
 }
+
+async function runFromEditor() {
+  handleTarget(await sqlEditor.statementToRun());
+}
+
+// Strict: the text you write is the text that runs. Assisted: the editor shows (and runs) the quoting the database needs.
+const modeBtn = $<HTMLButtonElement>('mode');
+modeBtn.onclick = () => {
+  const next: QueryMode = sqlEditor.getMode() === 'assisted' ? 'strict' : 'assisted';
+  sqlEditor.setMode(next);
+  modeBtn.textContent = next === 'assisted' ? 'Assisted' : 'Strict';
+  modeBtn.setAttribute('aria-pressed', String(next === 'strict'));
+};
 
 /** Suggestions are computed by the engine from its cached schema, so this is one cheap round trip per request. */
 async function complete(text: string, offset: number): Promise<CompletionResponse | null> {
@@ -183,7 +196,7 @@ async function complete(text: string, offset: number): Promise<CompletionRespons
 const sqlEditor = new SqlEditor($('editor'), analyze, {
   run: () => void runFromEditor(),
   cancel: cancelQuery,
-  runSql: (sql) => void run(sql),
+  runSql: handleTarget,
   complete,
 }, INITIAL_SHEET);
 sqlEditor.setCursor(3); // on the first statement

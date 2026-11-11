@@ -23,6 +23,14 @@ public class IdentifierPolicyTests
     [InlineData("", "\"\"")]
     public void Names_that_would_not_survive_folding_are_quoted(string name, string expected) => Assert.Equal(expected, _p.Quote(name));
 
+    [Theory]
+    [InlineData("PERSON", "person")]
+    [InlineData("OrderItems", "orderitems")]
+    [InlineData("orders", "orders")]
+    [InlineData("ÉCOLE", "École")]   // only ASCII letters fold, as in a UTF-8 Postgres database
+    [InlineData("", "")]
+    public void Unquoted_names_fold_to_lower_case_ASCII(string name, string expected) => Assert.Equal(expected, _p.Fold(name));
+
     [Fact]
     public void Embedded_quotes_are_doubled() => Assert.Equal("\"a\"\"b\"", _p.Quote("a\"b"));
 

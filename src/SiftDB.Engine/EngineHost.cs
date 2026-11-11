@@ -60,7 +60,8 @@ public sealed class EngineHost : IAsyncDisposable
                     break;
                 case "analyzeSheet":
                     AnalyzeSheet(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("text").GetString()!,
-                        root.GetProperty("selectionStart").GetInt32(), root.GetProperty("selectionEnd").GetInt32());
+                        root.GetProperty("selectionStart").GetInt32(), root.GetProperty("selectionEnd").GetInt32(),
+                        RunPreparer.ParseMode(root.TryGetProperty("mode", out var mode) ? mode.GetString() : null));
                     break;
                 case "complete":
                     Complete(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("text").GetString()!,
@@ -99,16 +100,32 @@ public sealed class EngineHost : IAsyncDisposable
     /// Splits a sheet into statements with the connection's dialect and says which one the cursor/selection would run.
     /// Offsets are UTF-16, matching the editor. Cheap enough to call on every pause in typing.
     /// </summary>
-    private void AnalyzeSheet(int id, int connectionId, string text, int selectionStart, int selectionEnd)
+    private void AnalyzeSheet(int id, int connectionId, string text, int selectionStart, int selectionEnd, QueryMode mode)
     {
         if (!_connections.TryGetValue(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
         var statements = state.Provider.Parser.Split(text);
         var pick = StatementPicker.Pick(text, statements, selectionStart, selectionEnd);
+
+        // Identifier problems are worked out against the cached schema; with none loaded there is nothing to say.
+        var resolved = state.Schema is { } schema
+            ? IdentifierResolver.Resolve(schema, state.Provider.Parser, state.Provider.Identifiers, text)
+            : ResolverResult.Empty;
+        var prepared = pick.Range is { } r ? RunPreparer.Prepare(text, r, resolved, mode) : null;
+
         Event(new
         {
             type = "sheetAnalysis", replyTo = id,
             statements = statements.Select(s => new { start = s.Start, length = s.Length }),
-            pick = new { start = pick.Range?.Start ?? 0, length = pick.Range?.Length ?? 0, reason = pick.Reason },
+            pick = new
+            {
+                start = pick.Range?.Start ?? 0, length = pick.Range?.Length ?? 0, reason = pick.Reason,
+                sql = prepared?.Sql, blocked = prepared?.Blocked,
+            },
+            corrections = resolved.Corrections.Select(c => new { start = c.Start, length = c.Length, text = c.Text, message = c.Message }),
+            issues = resolved.Issues.Select(i => new
+            {
+                start = i.Start, length = i.Length, code = i.Code, severity = i.Severity, message = i.Message, fixText = i.FixText,
+            }),
         });
     }
 

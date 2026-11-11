@@ -28,6 +28,9 @@ import '@monaco/editor/contrib/wordOperations/browser/wordOperations.js';
 import '@monaco/editor/contrib/folding/browser/folding.js';
 import '@monaco/editor/contrib/tokenization/browser/tokenization.js';
 
+// Quick fixes: the lightbulb and the "Quick Fix..." command (Ctrl+.). Squiggles and their hovers are in the core.
+import '@monaco/editor/contrib/codeAction/browser/codeActionContributions.js';
+
 // Find, hover, context menu, command palette (F1)
 import '@monaco/features/find/register.js';
 import '@monaco/editor/contrib/find/browser/findController.js';

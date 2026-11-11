@@ -15,6 +15,18 @@ public sealed class PostgresIdentifierPolicy(ISqlParser parser) : IIdentifierPol
     public string Quote(string identifier) =>
         NeedsQuotes(identifier) ? "\"" + identifier.Replace("\"", "\"\"") + "\"" : identifier;
 
+    /// <summary>ASCII-only, as Postgres does for a UTF-8 database: non-ASCII letters are left alone.</summary>
+    public string Fold(string unquotedIdentifier)
+    {
+        var any = false;
+        foreach (var c in unquotedIdentifier) if (c is >= 'A' and <= 'Z') { any = true; break; }
+        if (!any) return unquotedIdentifier;
+        return string.Create(unquotedIdentifier.Length, unquotedIdentifier, static (span, s) =>
+        {
+            for (var i = 0; i < s.Length; i++) span[i] = s[i] is >= 'A' and <= 'Z' ? (char)(s[i] + 32) : s[i];
+        });
+    }
+
     private bool NeedsQuotes(string name)
     {
         if (!IsPlain(name)) return true;
