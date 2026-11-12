@@ -141,6 +141,13 @@ A query tab is a **sheet** that holds several queries. It can be saved to a file
 - Sheet settings go in a header comment, e.g. `-- db: connection=dev-pg; vars=Smith; mode=assisted`.
 - Variable values are never written to the file, only the name of the set.
 - Unsaved sheets are autosaved and restored on restart.
+- **Assisted sheets save the corrected SQL**, so the file runs in psql or any other tool. On save, the greyed quotes become real text in the editor, as *Accept all* (Ctrl+Alt+Q) does.
+- **The header line is SiftDB's, not the user's:** it is read and taken off when a file opens, and written back on save, so it never shows in the editor. It names the connection only for a *saved* connection (a pasted string is never written to a file). Other `--` comments at the top are left alone.
+- **A file naming a connection that is not saved here** (`connection=prod-ro`) opens with **no connection chosen** and an amber message ("This file names 'prod-ro', which is not saved here. Pick a connection."). It never guesses, so a script cannot silently land on the wrong database.
+- **Encoding and line endings are kept:** a file is read as UTF-8 (a byte-order mark is kept if it had one) and written back with the line endings it had; new files use CRLF, the Windows convention.
+- **Restore on restart brings sheets back without connecting:** text, mode, file and connection are selected, waiting for Connect, as at startup. No surprise sessions, and no password prompts at launch.
+- **Autosave covers every sheet, saved or not**, a moment after each change. Closing the window therefore never asks about unsaved edits (they come back on restart); closing a *tab* with unsaved edits asks, because that text would be gone. A sheet's title is its file name, with a dot while it has unsaved edits.
+- Shortcuts: Ctrl+S saves (Save As for a new sheet), Ctrl+Shift+S saves as, Ctrl+O opens. Open and Save As use the native Windows dialogs, asked of the host.
 
 ---
 
@@ -219,6 +226,7 @@ There is no "production" flag or environment concept, and no per-connection defa
 The read-only lock that used to be here became the read-only connection setting (§8).
 
 ### Later
+- **Watch open files** (low priority): notice when another program (git pull, another editor) changes an open `.sql` file; reload it when the sheet has no unsaved edits, ask when it has. Until then, saving overwrites the file as it is.
 - **User settings**, a feature of its own. First known setting: the preferred mode for new sheets (§3).
 - A TUI front end on the same engine
 - AI completions
