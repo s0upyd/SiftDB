@@ -223,6 +223,9 @@ There is no "production" flag or environment concept, and no per-connection defa
 
 ## 10. Back burner
 
+### Next up: user settings
+**The next piece of work.** A settings feature of its own: a settings store (engine-owned, like the connection store) and a settings editor in the UI. Its first setting is the **preferred mode for new sheets** (Assisted or Strict, §3), which new sheets then open in. Every later feature adds its settings here (result styling below is the first expected user).
+
 The read-only lock that used to be here became the read-only connection setting (§8).
 
 ### Proposed: result styling
@@ -237,7 +240,6 @@ Make results easier to read by colouring values, the way users are used to seein
 
 ### Later
 - **Watch open files** (low priority): notice when another program (git pull, another editor) changes an open `.sql` file; reload it when the sheet has no unsaved edits, ask when it has. Until then, saving overwrites the file as it is.
-- **User settings**, a feature of its own. First known setting: the preferred mode for new sheets (§3).
 - A TUI front end on the same engine
 - AI completions
 - A SQL Server provider
