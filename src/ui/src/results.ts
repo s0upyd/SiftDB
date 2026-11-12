@@ -2,8 +2,8 @@ import { BatchMeta, Bridge, BridgeEvent, Column } from './bridge';
 import { Grid, GridTheme, darkTheme, lightTheme } from './grid';
 import { ResultStore, decodeBatch } from './store';
 
+/** Batches requested ahead of the ones received, so the engine never waits on the page. */
 const MAX_OUTSTANDING = 3;
-const LOOKAHEAD_ROWS = 100_000;
 
 export const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 const ms = (v: number) => (v < 0 ? '–' : `${v.toFixed(0)} ms`);
@@ -39,8 +39,6 @@ let detailsOpen = false;
 /** What a result tab needs from the sheet that owns it. */
 export interface ResultsContext {
   bridge: Bridge;
-  /** Whether to fetch the whole result eagerly rather than only what is scrolled into view. */
-  fetchAll(): boolean;
   registerQuery(queryId: number, view: ResultView): void;
   unregisterQuery(queryId: number): void;
   /** The statement finished, failed or was cancelled: the sheet can offer Run again and refresh its result tabs. */
@@ -88,8 +86,6 @@ export class ResultView {
   private outstanding = 0;
   private done = true;
   private m = this.freshMetrics();
-  /** The outcome of the last scroll benchmark, shown in the details. */
-  bench = '';
 
   constructor(private ctx: ResultsContext, dark: boolean) {
     this.panel.className = 'resultpanel';
@@ -168,7 +164,6 @@ export class ResultView {
     this.errorExtra = '';
     this.outstanding = 0;
     this.done = false;
-    this.bench = '';
     this.state = 'running';
     this.grid.setStore(this.store, []);
     this.refreshStats();
@@ -208,13 +203,15 @@ export class ResultView {
     else if (this.connectionId) this.ctx.bridge.send({ type: 'cancel', connectionId: this.connectionId });
   }
 
-  /** Keep a few fetches in flight. When not "fetch all" and nowhere near the end of what has loaded, stop. */
+  /**
+   * Keep a few fetches in flight until the whole result has arrived. The statement holds its sheet's session until it is
+   * drained, so the result is always fetched to the end (design section 11: fetch-on-scroll waits for spill-to-disk).
+   */
   private pump() {
     // Until the engine has answered "execute" there is no query id to fetch from. (The grid's resize observer calls this
     // as soon as the tab exists, which is before that answer arrives.)
     if (!this.queryId) return;
-    while (!this.done && this.outstanding < MAX_OUTSTANDING &&
-           (this.ctx.fetchAll() || this.store.loadedRows < this.grid.lastVisibleRow + LOOKAHEAD_ROWS)) {
+    while (!this.done && this.outstanding < MAX_OUTSTANDING) {
       this.outstanding++;
       this.ctx.bridge.send({ type: 'fetchBatch', queryId: this.queryId });
     }
@@ -306,33 +303,7 @@ export class ResultView {
       `columns ${ms(m.columns)} · first batch ${ms(m.firstBatch)} · first paint ${ms(m.firstPaint)} · transfer complete ${ms(m.complete)}` +
       ` · engine first/total ${ms(m.engineFirst)}/${ms(m.engineTotal)}\n` +
       (m.engineSplit ? `engine split: ${m.engineSplit}\n` : '') +
-      `draw avg ${d.avg.toFixed(2)} ms, max ${d.max.toFixed(1)} ms` + (this.bench ? ` · scroll: ${this.bench}` : '');
-  }
-
-  /** Scrolls top to bottom over a fixed time and records frame intervals. */
-  runScrollBenchmark() {
-    const wrap = this.gridEl;
-    const span = wrap.scrollHeight - wrap.clientHeight;
-    if (span <= 0) { this.bench = 'nothing to scroll'; return; }
-    const DURATION = 6000;
-    const frames: number[] = [];
-    const start = performance.now();
-    let prev = start;
-    this.bench = 'running…';
-    const step = (now: number) => {
-      frames.push(now - prev);
-      prev = now;
-      const t = Math.min(1, (now - start) / DURATION);
-      wrap.scrollTop = span * t;
-      if (t < 1) { requestAnimationFrame(step); return; }
-      frames.shift();
-      frames.sort((a, b) => a - b);
-      const q = (p: number) => frames[Math.min(frames.length - 1, Math.floor(frames.length * p))];
-      const slow = frames.filter((f) => f > 20).length;
-      this.bench = `${frames.length} frames over ${DURATION / 1000}s · p50 ${q(0.5).toFixed(1)}ms · p95 ${q(0.95).toFixed(1)}ms · ` +
-        `max ${frames[frames.length - 1].toFixed(1)}ms · >20ms: ${slow}`;
-    };
-    requestAnimationFrame(step);
+      `draw avg ${d.avg.toFixed(2)} ms, max ${d.max.toFixed(1)} ms`;
   }
 
   dispose() {

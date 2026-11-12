@@ -60,9 +60,6 @@ export class Grid {
   /** Total rows if known (query finished), otherwise the loaded count drives the scroll height. */
   setRowHint(rows: number) { this.rowHint = rows; this.invalidate(); }
 
-  get lastVisibleRow(): number {
-    return Math.ceil((this.wrap.scrollTop + this.wrap.clientHeight - HEADER_H) / ROW_H);
-  }
 
   get drawStats() {
     const t = this.drawTimes;

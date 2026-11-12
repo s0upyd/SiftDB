@@ -132,7 +132,9 @@ export class SchemaTree {
       matched += relMatched;
       if (f && schema && !relMatched) continue; // a filter hides connections with nothing that matches
 
-      const head = this.row(nKey, 0, nOpen, [this.text(root.label), this.dim(schema ? `${relCount}` : 'loading…')], 'Connection');
+      // The tooltip has the whole description: in a narrow sidebar the end of the row (host / database) is cut off.
+      const tip = `${root.label}${root.detail ? ` · ${root.detail}` : ''}${root.readOnly ? ' · read-only' : ''}`;
+      const head = this.row(nKey, 0, nOpen, [this.text(root.label), this.dim(schema ? `${relCount}` : 'loading…')], tip);
       head.classList.add('root');
       // The lock goes right after the name: the sidebar is often narrow, and it must not be the part that scrolls away.
       if (root.readOnly) {

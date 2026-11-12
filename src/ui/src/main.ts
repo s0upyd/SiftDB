@@ -27,10 +27,7 @@ scrollTabsWithWheel(tabsEl);
 const INITIAL_SHEET = [
   '-- Put the cursor in a statement and press F5 or Ctrl+Enter. Select text to run just that.',
   '-- Ctrl+. cancels. The ▶ in the margin runs a statement with the mouse.',
-  'select i, i::bigint * 3 as big, random() as r, md5(i::text) as hash',
-  'from generate_series(1, 1000000) as i;',
-  '',
-  'select * from "Person";',
+  'select version();', // works on any Postgres database
   '',
 ].join('\n');
 

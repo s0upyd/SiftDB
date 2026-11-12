@@ -39,8 +39,6 @@ const TEMPLATE = `
     </div>
     <span class="autochip" hidden title="Auto-transaction: this sheet is always inside a transaction. Changes wait for Commit, and Rollback undoes them; a new transaction starts after either.">Auto-transaction</span>
     <span class="rochip" hidden title="This sheet's connection is read-only: the server refuses changes. To change data, connect the sheet to a writable connection.">Read-only</span>
-    <label><input class="fetchAll" type="checkbox" checked> fetch all</label>
-    <button class="bench" disabled>Scroll benchmark</button>
   </div>
   <div class="txbar" hidden role="status" aria-live="polite">
     <span class="txIcon" aria-hidden="true"></span>
@@ -91,7 +89,7 @@ export class Sheet {
   private readonly el: {
     run: HTMLButtonElement; cancel: HTMLButtonElement; begin: HTMLButtonElement;
     modeAssisted: HTMLButtonElement; modeStrict: HTMLButtonElement;
-    fetchAll: HTMLInputElement; bench: HTMLButtonElement; roChip: HTMLElement; autoChip: HTMLElement;
+    roChip: HTMLElement; autoChip: HTMLElement;
     txBar: HTMLElement; txIcon: HTMLElement; txLabel: HTMLElement; txDetail: HTMLElement;
     txEnd: HTMLButtonElement; txCommit: HTMLButtonElement; txRollback: HTMLButtonElement;
     editor: HTMLElement; splitter: HTMLElement; msg: HTMLElement; msgIcon: HTMLElement; msgText: HTMLElement; tabs: HTMLElement; results: HTMLElement; empty: HTMLElement;
@@ -106,7 +104,7 @@ export class Sheet {
     const $ = <T extends HTMLElement = HTMLElement>(selector: string) => this.root.querySelector(selector) as T;
     this.el = {
       run: $('.run'), cancel: $('.cancel'), begin: $('.begin'), modeAssisted: $('.modeAssisted'), modeStrict: $('.modeStrict'),
-      fetchAll: $('.fetchAll'), bench: $('.bench'), roChip: $('.rochip'), autoChip: $('.autochip'),
+      roChip: $('.rochip'), autoChip: $('.autochip'),
       txBar: $('.txbar'), txIcon: $('.txIcon'), txLabel: $('.txLabel'), txDetail: $('.txDetail'),
       txEnd: $('.txEnd'), txCommit: $('.txCommit'), txRollback: $('.txRollback'),
       editor: $('.editor'), splitter: $('.splitter'), msg: $('.msg'), msgIcon: $('.msgIcon'), msgText: $('.msgText'), tabs: $('.resulttabs'), results: $('.results'), empty: $('.empty'),
@@ -114,7 +112,6 @@ export class Sheet {
     scrollTabsWithWheel(this.el.tabs);
     this.resultsCtx = {
       bridge: ctx.bridge,
-      fetchAll: () => this.el.fetchAll.checked,
       registerQuery: (id, v) => ctx.registerQuery(id, v),
       unregisterQuery: (id) => ctx.unregisterQuery(id),
       onFinished: (v) => {
@@ -138,7 +135,6 @@ export class Sheet {
     this.el.txEnd.onclick = () => void this.txAction('commit');
     this.el.txCommit.onclick = () => void this.txAction('commit');
     this.el.txRollback.onclick = () => void this.txAction('rollback');
-    this.el.bench.onclick = () => this.activeResult?.runScrollBenchmark();
     // Strict: the text you write is the text that runs. Assisted: the editor shows (and runs) the quoting the database needs.
     // Both choices are always visible and the current one is highlighted: a single button that changes its own label
     // reads as "click for Strict" when it actually means "you are in Strict".
@@ -489,6 +485,5 @@ export class Sheet {
       : this.tx.automatic ? 'Auto-transaction: this sheet is always inside a transaction.'
       : this.tx.state !== 'none' ? 'A transaction is already open.'
       : 'Begin a transaction. You can also just type BEGIN: the bar follows the server either way.';
-    this.el.bench.disabled = !connected || !this.activeResult;
   }
 }

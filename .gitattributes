@@ -1,0 +1,2 @@
+# Keep text files LF in the repository and in working copies, whatever core.autocrlf says on this machine.
+* text=auto eol=lf

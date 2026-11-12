@@ -181,7 +181,7 @@ public class EngineSessionTests
         Assert.True(p.Sessions[0].Disposed);
         Assert.False(p.Sessions[1].Disposed);
         await Send(engine, new { type = "execute", id = 4, connectionId = b, sql = "select" });
-        Assert.Equal(1, cap.Of("columns").Count);
+        Assert.Single(cap.Of("columns"));
     }
 
     [Fact]

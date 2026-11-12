@@ -143,7 +143,7 @@ public class ResolverTests
     {
         const string sql = "select PersonId from \"Person\" p, \"Email\" e";
         var r = Resolve(sql);
-        Assert.Empty(r.Corrections.Where(c => sql.Substring(c.Start, c.Length) == "PersonId"));
+        Assert.DoesNotContain(r.Corrections, c => sql.Substring(c.Start, c.Length) == "PersonId");
         var issue = Assert.Single(r.Issues);
         Assert.Equal(IssueCode.Ambiguous, issue.Code);
         Assert.Equal(IssueSeverity.Error, issue.Severity);
@@ -230,7 +230,7 @@ public class ResolverTests
     public void Statements_that_are_not_queries_are_left_alone()
     {
         Assert.Empty(Resolve("create table Person (PersonId int)").Corrections);
-        Assert.Empty(Resolve("drop table if exists Person").Corrections.Where(c => false)); // no crash
+        Assert.NotNull(Resolve("drop table if exists Person")); // no crash
     }
 
     // ---- quote mix-ups ----
