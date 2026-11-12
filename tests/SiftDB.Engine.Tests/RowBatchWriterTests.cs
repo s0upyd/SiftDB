@@ -172,3 +172,19 @@ public class RowBatchWriterTests
         Assert.False(IsNull(d, 0, 2999));
     }
 }
+
+/// <summary>How non-string values read in the grid: dates and times as ISO, whatever the machine's culture.</summary>
+public class FormatValueTests
+{
+    [Fact]
+    public void Dates_and_times_are_ISO()
+    {
+        Assert.Equal("2026-11-12", SiftDB.Bridge.RowBatchWriter.FormatValue(new DateTime(2026, 11, 12), dateOnly: true));
+        Assert.Equal("2026-11-12 00:00:00", SiftDB.Bridge.RowBatchWriter.FormatValue(new DateTime(2026, 11, 12)));   // a timestamp keeps its time
+        Assert.Equal("2026-11-12 14:05:09.5", SiftDB.Bridge.RowBatchWriter.FormatValue(new DateTime(2026, 11, 12, 14, 5, 9, 500)));
+        Assert.Equal("2026-11-12 14:05:09Z", SiftDB.Bridge.RowBatchWriter.FormatValue(new DateTime(2026, 11, 12, 14, 5, 9, DateTimeKind.Utc)));
+        Assert.Equal("2026-11-12", SiftDB.Bridge.RowBatchWriter.FormatValue(new DateOnly(2026, 11, 12)));
+        Assert.Equal("14:05:09", SiftDB.Bridge.RowBatchWriter.FormatValue(new TimeOnly(14, 5, 9)));
+        Assert.Equal("1.5", SiftDB.Bridge.RowBatchWriter.FormatValue(1.5m));
+    }
+}

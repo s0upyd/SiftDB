@@ -31,6 +31,8 @@ public sealed class RowBatchWriter
     {
         public ColumnKind Kind;
         public Type Source = typeof(string);
+        /// <summary>A SQL <c>date</c> column: its values have no time of day, so none is shown.</summary>
+        public bool DateOnly;
         public int[] I = [];
         public long[] L = [];
         public double[] D = [];
@@ -58,7 +60,7 @@ public sealed class RowBatchWriter
         {
             var t = reader.GetFieldType(i);
             var kind = KindFor(t);
-            _cols[i] = new Col { Kind = kind, Source = t };
+            _cols[i] = new Col { Kind = kind, Source = t, DateOnly = IsDateType(reader, i) };
             descs[i] = new ColumnDescriptor(reader.GetName(i), kind);
         }
         Columns = descs;
@@ -102,7 +104,7 @@ public sealed class RowBatchWriter
                     {
                         var s = col.Source == typeof(string)
                             ? r.GetString(c)
-                            : Convert.ToString(r.GetValue(c), CultureInfo.InvariantCulture) ?? "";
+                            : FormatValue(r.GetValue(c), col.DateOnly);
                         var need = Encoding.UTF8.GetByteCount(s);
                         if (col.BLen + need > col.B.Length)
                             Array.Resize(ref col.B, Math.Max(col.B.Length * 2, col.BLen + need));
@@ -118,6 +120,31 @@ public sealed class RowBatchWriter
             }
         }
         RowCount++;
+    }
+
+    /// <summary>
+    /// A non-string value as the grid shows it. Dates and times are ISO (2026-11-12, 2026-11-12 14:05:09.5), never the
+    /// invariant culture's US style (11/12/2026 00:00:00): unambiguous to read, sorted correctly as text, and what result
+    /// styling's date ranges compare. A timestamp with a time zone arrives in UTC and says so with a trailing Z. The format
+    /// follows the column's type, never the value, so a timestamp at midnight still shows its time.
+    /// </summary>
+    /// <param name="dateOnly">The column is a SQL <c>date</c>: show no time of day.</param>
+    public static string FormatValue(object value, bool dateOnly = false) => value switch
+    {
+        DateTime d when dateOnly => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+        DateTime d => d.ToString("yyyy-MM-dd HH:mm:ss.FFFFFF", CultureInfo.InvariantCulture).TrimEnd('.') + (d.Kind == DateTimeKind.Utc ? "Z" : ""),
+        DateTimeOffset o => o.ToString("yyyy-MM-dd HH:mm:ss.FFFFFFzzz", CultureInfo.InvariantCulture),
+        DateOnly d => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+        TimeOnly t => t.ToString("HH:mm:ss.FFFFFF", CultureInfo.InvariantCulture).TrimEnd('.'),
+        TimeSpan s => s.ToString("c", CultureInfo.InvariantCulture),
+        _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? "",
+    };
+
+    /// <summary><c>date</c> is the SQL standard's name for a day with no time; a reader that cannot name its types gives false.</summary>
+    private static bool IsDateType(DbDataReader reader, int ordinal)
+    {
+        try { return string.Equals(reader.GetDataTypeName(ordinal), "date", StringComparison.OrdinalIgnoreCase); }
+        catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException or IndexOutOfRangeException) { return false; }
     }
 
     private void MarkNull(Col col, int row)

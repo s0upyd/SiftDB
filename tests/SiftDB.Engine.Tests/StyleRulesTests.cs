@@ -21,7 +21,7 @@ public sealed class StyleRulesTests : IDisposable
     public void By_default_the_list_is_the_presets()
     {
         var ids = new SettingsStore(FilePath).Get().ResultRules.Select(r => r.Id);
-        Assert.Equal(["preset:null", "preset:true", "preset:false", "preset:negative"], ids);
+        Assert.Equal(["preset:null", "preset:true", "preset:false", "preset:negative", "preset:past", "preset:future"], ids);
     }
 
     [Fact]
@@ -51,9 +51,9 @@ public sealed class StyleRulesTests : IDisposable
         var rules = new SettingsStore(FilePath).Get().ResultRules;
         Assert.Equal("preset:negative", rules[0].Id);
         Assert.False(rules[0].Enabled);
-        Assert.Equal("#cf222e", rules[0].Text); // the definition comes from the app, not the file
+        Assert.Equal("#b42630", rules[0].Text); // the definition comes from the app, not the file
         Assert.Equal("Shipped", rules[1].Name);
-        Assert.Equal(["preset:null", "preset:true", "preset:false"], rules.Skip(2).Select(r => r.Id)); // missing ones at the bottom
+        Assert.Equal(["preset:null", "preset:true", "preset:false", "preset:past", "preset:future"], rules.Skip(2).Select(r => r.Id)); // missing ones at the bottom
         Assert.DoesNotContain("123456", File.ReadAllText(FilePath));
     }
 
@@ -95,5 +95,43 @@ public sealed class StyleRulesTests : IDisposable
         var types = doc.RootElement.GetProperty("resultRules")[0].GetProperty("types").EnumerateArray().Select(t => t.GetString());
         Assert.Equal(["dateTime", "date"], types);
         Assert.Equal([GenericType.DateTime, GenericType.Date], new SettingsStore(FilePath).Get().ResultRules[0].Types);
+    }
+}
+
+/// <summary>Date presets and date ranges (design section 10).</summary>
+public sealed class DateRuleTests : IDisposable
+{
+    private readonly DirectoryInfo _dir = Directory.CreateTempSubdirectory("siftdb-daterules-");
+    public void Dispose() => _dir.Delete(recursive: true);
+
+    [Fact]
+    public void The_date_presets_cover_Date_and_DateTime_and_start_switched_off()
+    {
+        foreach (var id in new[] { "preset:past", "preset:future" })
+        {
+            var p = StyleRules.Presets.Single(r => r.Id == id);
+            Assert.False(p.Enabled);
+            Assert.Equal([GenericType.Date, GenericType.DateTime], p.Types);
+        }
+    }
+
+    [Theory]
+    [InlineData("2026-01-01", "")]
+    [InlineData("", "2026-12-31 23:59")]
+    [InlineData("2026-01-01T08:00:00", "2026-01-31")]
+    public void A_range_of_dates_is_valid(string low, string high)
+    {
+        var rule = new StyleRule("", "January", true, "", [GenericType.Date], "range", [low, high], "#000", "#fff", false);
+        var saved = new SettingsStore(Path.Combine(_dir.FullName, "s.json")).Save(UserSettings.Default with { ResultRules = [rule] });
+        Assert.Equal("January", saved.ResultRules[0].Name);
+    }
+
+    [Fact]
+    public void A_date_that_is_not_ISO_is_refused_with_how_to_write_it()
+    {
+        var rule = new StyleRule("", "US", true, "", [], "range", ["01/31/2026", ""], "#000", "#fff", false);
+        var ex = Assert.Throws<ArgumentException>(() =>
+            new SettingsStore(Path.Combine(_dir.FullName, "s.json")).Save(UserSettings.Default with { ResultRules = [rule] }));
+        Assert.Contains("2026-01-31", ex.Message);
     }
 }

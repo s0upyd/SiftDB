@@ -1,5 +1,5 @@
 import { el, showDialog } from './dialogs';
-import { CONDITIONS, Condition, GENERIC_TYPES, GenericType, StyleRule, contrast, parseColour } from './styles';
+import { CONDITIONS, Condition, GENERIC_TYPES, GenericType, StyleRule, contrast, parseColour, toTime } from './styles';
 
 // The Results page of the settings editor (design section 10): the styling rules as one ordered list. The first rule
 // that matches styles the cell. Presets are rows like any other, but can only be switched off and moved.
@@ -19,7 +19,7 @@ export function describeRule(r: StyleRule): string {
   const list = (v: string[]) => (v.length > 4 ? [...v.slice(0, 4), '…'] : v).join(', ');
   const what = r.condition === 'range'
     ? r.values[0] && r.values[1] ? `${cond} ${r.values[0]} and ${r.values[1]}`
-      : r.values[0] ? `is a number of at least ${r.values[0]}` : `is a number of at most ${r.values[1]}`
+      : r.values[0] ? `is at least ${r.values[0]}` : `is at most ${r.values[1]}`
     : r.condition === 'oneOf' ? `${cond} ${list(r.values)}`
     : r.condition === 'equals' || r.condition === 'pattern' ? `${cond} ${r.values[0] ?? ''}`
     : cond;
@@ -29,6 +29,7 @@ export function describeRule(r: StyleRule): string {
 /** A small cell drawn in the rule's own colours, as the grid would show it. */
 function example(r: Pick<StyleRule, 'text' | 'background' | 'bold' | 'condition' | 'values'>): HTMLElement {
   const sample = r.condition === 'null' ? 'NULL' : r.condition === 'negative' ? '-42' : r.condition === 'range' ? (r.values[0] || r.values[1] || '10')
+    : r.condition === 'past' ? '2020-01-01' : r.condition === 'future' ? '2099-01-01'
     : r.values[0] || 'value';
   const cell = el('span', { className: 'rulecell', textContent: sample });
   cell.style.color = r.text;
@@ -45,6 +46,10 @@ export function buildRulesPage(initial: StyleRule[]) {
   const list = el('ol', { className: 'rulelist' });
   list.setAttribute('aria-label', 'Styling rules, first match wins');
   const add = el('button', { type: 'button', textContent: 'Add rule…' });
+
+  /** The index of the rule being dragged, or -1. */
+  let dragFrom = -1;
+  const clearDropMarks = () => list.querySelectorAll('.dropbefore, .dropafter').forEach((r) => r.classList.remove('dropbefore', 'dropafter'));
 
   const render = (focus?: { index: number; part: string }) => {
     list.replaceChildren(...rules.map((r, i) => {
@@ -82,7 +87,34 @@ export function buildRulesPage(initial: StyleRule[]) {
             add.focus();
           }));
       }
-      const row = el('li', { className: `rulerow${r.enabled ? '' : ' off'}` }, on, example(r), text, actions);
+      // Drag by the grip to reorder (the arrows do the same from the keyboard). Only the grip starts a drag, so clicking the
+      // checkbox or a button never does.
+      const grip = el('span', { className: 'rulegrip', textContent: '⠿', title: 'Drag to reorder' });
+      grip.setAttribute('aria-hidden', 'true');
+      const row = el('li', { className: `rulerow${r.enabled ? '' : ' off'}` }, grip, on, example(r), text, actions);
+      grip.onpointerdown = () => { row.draggable = true; };
+      grip.onpointerup = () => { if (dragFrom < 0) row.draggable = false; }; // a click, not a drag
+      row.ondragstart = (e) => { dragFrom = i; row.classList.add('dragging'); e.dataTransfer?.setData('text/plain', String(i)); };
+      row.ondragend = () => { row.draggable = false; row.classList.remove('dragging'); clearDropMarks(); dragFrom = -1; };
+      row.ondragover = (e) => {
+        if (dragFrom < 0) return;
+        e.preventDefault(); // allows the drop
+        const box = row.getBoundingClientRect();
+        const after = e.clientY > box.top + box.height / 2;
+        clearDropMarks();
+        row.classList.add(after ? 'dropafter' : 'dropbefore');
+      };
+      row.ondrop = (e) => {
+        e.preventDefault();
+        if (dragFrom < 0) return;
+        const after = row.classList.contains('dropafter');
+        let to = i + (after ? 1 : 0);
+        const [moved] = rules.splice(dragFrom, 1);
+        if (dragFrom < to) to--; // the list closed up behind the rule that left
+        rules.splice(to, 0, moved);
+        dragFrom = -1;
+        render({ index: to, part: 'up' });
+      };
       return row;
     }));
     if (focus) {
@@ -144,8 +176,8 @@ export async function editRule(existing: StyleRule | null): Promise<StyleRule | 
   const condition = el('select', {}, ...CONDITIONS.map((c) => el('option', { value: c.id, textContent: c.label })));
   condition.value = start.condition;
   const value = el('input', { type: 'text', spellcheck: false, className: 'mono' });
-  const low = el('input', { type: 'text', inputMode: 'decimal', placeholder: 'lowest', spellcheck: false, className: 'mono' });
-  const high = el('input', { type: 'text', inputMode: 'decimal', placeholder: 'highest', spellcheck: false, className: 'mono' });
+  const low = el('input', { type: 'text', placeholder: 'lowest', spellcheck: false, className: 'mono' });
+  const high = el('input', { type: 'text', placeholder: 'highest', spellcheck: false, className: 'mono' });
   low.setAttribute('aria-label', 'Lowest');
   high.setAttribute('aria-label', 'Highest');
   if (start.condition === 'range') { low.value = start.values[0] ?? ''; high.value = start.values[1] ?? ''; }
@@ -156,7 +188,7 @@ export async function editRule(existing: StyleRule | null): Promise<StyleRule | 
   valueRow.append(valueHelp);
   const rangeRow = el('div', { className: 'frow' }, el('label', { textContent: 'Between' }),
     el('div', { className: 'finline' }, low, el('span', { className: 'dim', textContent: 'and' }), high),
-    el('div', { className: 'fhelp', textContent: 'Either end can be left empty. Both ends are included.' }));
+    el('div', { className: 'fhelp', textContent: 'Numbers, or dates written 2026-01-31 (a time can follow: 2026-01-31 14:00). Either end can be left empty. Both ends are included; a date includes its whole day.' }));
 
   const textColour = el('input', { type: 'color', value: start.text });
   const bgColour = el('input', { type: 'color', value: start.background });
@@ -200,9 +232,9 @@ export async function editRule(existing: StyleRule | null): Promise<StyleRule | 
     if ((r.condition === 'equals' || r.condition === 'pattern') && !r.values[0]) return ['Type a value to compare with.', value];
     if (r.condition === 'oneOf' && r.values.length === 0) return ['Type at least one value.', value];
     if (r.condition === 'range') {
-      if (!r.values[0] && !r.values[1]) return ['Give a lowest or highest number, or both.', low];
-      const bad = [low, high].find((i) => i.value.trim() && Number.isNaN(Number(i.value.trim())));
-      if (bad) return ['That is not a number.', bad];
+      if (!r.values[0] && !r.values[1]) return ['Give a lowest or highest number or date, or both.', low];
+      const bad = [low, high].find((i) => i.value.trim() && Number.isNaN(Number(i.value.trim())) && Number.isNaN(toTime(i.value.trim())));
+      if (bad) return ['That is not a number, or a date written 2026-01-31.', bad];
     }
     return null;
   };

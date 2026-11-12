@@ -10,10 +10,11 @@ export const GENERIC_TYPES: { id: GenericType; label: string }[] = [
   { id: 'boolean', label: 'Boolean' }, { id: 'date', label: 'Date' }, { id: 'dateTime', label: 'Date & time' },
 ];
 
-export type Condition = 'null' | 'equals' | 'oneOf' | 'range' | 'negative' | 'pattern';
+export type Condition = 'null' | 'equals' | 'oneOf' | 'range' | 'negative' | 'pattern' | 'past' | 'future';
 export const CONDITIONS: { id: Condition; label: string }[] = [
-  { id: 'equals', label: 'equals' }, { id: 'oneOf', label: 'is one of' }, { id: 'range', label: 'is a number between' },
-  { id: 'negative', label: 'is a negative number' }, { id: 'pattern', label: 'matches the pattern' }, { id: 'null', label: 'is NULL' },
+  { id: 'equals', label: 'equals' }, { id: 'oneOf', label: 'is one of' }, { id: 'range', label: 'is between' },
+  { id: 'negative', label: 'is a negative number' }, { id: 'past', label: 'is a date in the past' }, { id: 'future', label: 'is a date in the future' },
+  { id: 'pattern', label: 'matches the pattern' }, { id: 'null', label: 'is NULL' },
 ];
 
 /** One rule, as the engine keeps it (SiftDB.Engine StyleRule). */
@@ -55,8 +56,33 @@ export function wildcard(pattern: string): RegExp {
 const NUMBER = /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/;
 const toNumber = (s: string) => (NUMBER.test(s) ? Number(s) : NaN);
 
-/** The test a rule's condition makes on a non-NULL value. `numeric`: the column is Integer or Decimal. */
-function test(rule: StyleRule, numeric: boolean): (v: string) => boolean {
+/**
+ * An ISO date or date-time (how the grid shows them: 2026-11-12, 2026-11-12 14:05:09.5, 2026-11-12 14:05:09Z) as
+ * milliseconds; NaN for anything else. Without a zone it is local time. `endOfDay`: a bare date means its last moment,
+ * so "up to 2026-01-31" includes the whole of that day.
+ */
+const ISO = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?$/;
+export function toTime(s: string, endOfDay = false): number {
+  const m = ISO.exec(s.trim());
+  if (!m) return NaN;
+  const [y, mo, d, h, mi, sec] = [1, 2, 3, 4, 5, 6].map((i) => Number(m[i] ?? 0));
+  const ms = m[7] ? Math.round(Number(m[7]) * 1000) : 0;
+  if (endOfDay && m[4] === undefined) return new Date(y, mo - 1, d + 1).getTime() - 1;
+  if (!m[8]) return new Date(y, mo - 1, d, h, mi, sec, ms).getTime();
+  const zone = m[8] === 'Z' ? 0 : (m[8][0] === '-' ? -1 : 1) * (Number(m[8].slice(1, 3)) * 60 + Number(m[8].replace(':', '').slice(3, 5) || 0));
+  return Date.UTC(y, mo - 1, d, h, mi, sec, ms) - zone * 60_000;
+}
+
+/** Today as the grid writes a date: 2026-11-12, in local time. */
+const today = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`; };
+
+/**
+ * The test a rule's condition makes on a non-NULL value, for a column of type `type`. Past and future compare a Date
+ * column by day (today is neither) and a Date & time column with now; both ask the clock per cell, so a result left
+ * open stays right. A range compares numbers, or dates when its ends are dates.
+ */
+function test(rule: StyleRule, type: GenericType): (v: string) => boolean {
+  const numeric = type === 'integer' || type === 'decimal';
   const v0 = rule.values[0] ?? '';
   const same = (want: string) => {
     const n = numeric ? toNumber(want) : NaN;
@@ -68,9 +94,18 @@ function test(rule: StyleRule, numeric: boolean): (v: string) => boolean {
     case 'oneOf': { const tests = rule.values.map(same); return (v) => tests.some((t) => t(v)); }
     case 'negative': return (v) => toNumber(v) < 0;
     case 'range': {
-      const lo = rule.values[0] ? toNumber(rule.values[0]) : -Infinity, hi = rule.values[1] ? toNumber(rule.values[1]) : Infinity;
+      const [low, high] = [rule.values[0] ?? '', rule.values[1] ?? ''];
+      if ([low, high].some((b) => b && Number.isNaN(toNumber(b)) && !Number.isNaN(toTime(b)))) {
+        const lo = low ? toTime(low) : -Infinity, hi = high ? toTime(high, true) : Infinity;
+        return (v) => { const t = toTime(v); return t >= lo && t <= hi; }; // NaN (not a date) never matches
+      }
+      const lo = low ? toNumber(low) : -Infinity, hi = high ? toNumber(high) : Infinity;
       return (v) => { const n = toNumber(v); return n >= lo && n <= hi; }; // NaN (not a number) never matches
     }
+    case 'past':
+      return type === 'date' ? (v) => ISO.test(v) && v.slice(0, 10) < today() : (v) => toTime(v) < Date.now();
+    case 'future':
+      return type === 'date' ? (v) => ISO.test(v) && v.slice(0, 10) > today() : (v) => toTime(v) > Date.now();
     case 'pattern': { const re = wildcard(v0); return (v) => re.test(v); }
     default: return () => false;
   }
@@ -86,10 +121,9 @@ export function appliesTo(rule: StyleRule, column: Column): boolean {
 /** Per column, a styler from the rules that apply to it, or null when none do (the common case: no cost to draw). */
 export function stylersFor(columns: Column[], list: StyleRule[] = rules): (CellStyler | null)[] {
   return columns.map((column) => {
-    const numeric = column.type === 'integer' || column.type === 'decimal';
     const applying = list.filter((r) => appliesTo(r, column)).map((r) => ({
       isNull: r.condition === 'null',
-      test: test(r, numeric),
+      test: test(r, column.type ?? 'text'),
       style: { text: r.text, background: r.background, bold: r.bold } as CellStyle,
     }));
     if (applying.length === 0) return null;

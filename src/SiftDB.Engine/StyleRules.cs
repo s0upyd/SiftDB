@@ -32,7 +32,7 @@ public static partial class StyleRules
 {
     public const string PresetPrefix = "preset:";
 
-    public static readonly IReadOnlyList<string> Conditions = ["null", "equals", "oneOf", "range", "negative", "pattern"];
+    public static readonly IReadOnlyList<string> Conditions = ["null", "equals", "oneOf", "range", "negative", "pattern", "past", "future"];
 
     /// <summary>
     /// The built-in rules, in the order they first appear (at the bottom of the list, so the user's rules win). Colours
@@ -40,10 +40,13 @@ public static partial class StyleRules
     /// </summary>
     public static readonly IReadOnlyList<StyleRule> Presets =
     [
-        new("preset:null", "NULL values", true, "", [], "null", [], "#57606a", "#eaeef2", false),
-        new("preset:true", "True", true, "", [GenericType.Boolean], "oneOf", ["true", "t", "yes", "y", "1"], "#1a7f37", "#dafbe1", false),
-        new("preset:false", "False", true, "", [GenericType.Boolean], "oneOf", ["false", "f", "no", "n", "0"], "#9a6700", "#fff8c5", false),
-        new("preset:negative", "Negative numbers", true, "", [GenericType.Integer, GenericType.Decimal], "negative", [], "#cf222e", "#ffebe9", false),
+        new("preset:null", "NULL values", true, "", [], "null", [], "#59636e", "#e6e9ed", false),
+        new("preset:true", "True", true, "", [GenericType.Boolean], "oneOf", ["true", "t", "yes", "y", "1"], "#1d6b35", "#d5ebdb", false),
+        new("preset:false", "False", true, "", [GenericType.Boolean], "oneOf", ["false", "f", "no", "n", "0"], "#7a5a00", "#f0e6c2", false),
+        new("preset:negative", "Negative numbers", true, "", [GenericType.Integer, GenericType.Decimal], "negative", [], "#b42630", "#f3dbdc", false),
+        // Off until switched on: most tables have a created_at, and colouring every date in it would be loud.
+        new("preset:past", "Dates in the past", false, "", [GenericType.Date, GenericType.DateTime], "past", [], "#7a5a00", "#f0e6c2", false),
+        new("preset:future", "Dates in the future", false, "", [GenericType.Date, GenericType.DateTime], "future", [], "#1d6b35", "#d5ebdb", false),
     ];
 
     public static IReadOnlyList<StyleRule> Default => Presets;
@@ -103,13 +106,13 @@ public static partial class StyleRules
                 if (values.Count == 0) { problem = $"{label} needs at least one value in its list."; return null; }
                 break;
             case "range":
-                if (values.Count != 2 || values.All(v => v.Length == 0) || values.Any(v => v.Length > 0 && !IsNumber(v)))
+                if (values.Count != 2 || values.All(v => v.Length == 0) || values.Any(v => v.Length > 0 && !IsNumber(v) && !IsDate(v)))
                 {
-                    problem = $"{label} needs a lowest or highest number (or both).";
+                    problem = $"{label} needs a lowest or highest number or date (or both). Dates are written 2026-01-31.";
                     return null;
                 }
                 break;
-            case "null" or "negative":
+            case "null" or "negative" or "past" or "future":
                 values = [];
                 break;
         }
@@ -127,6 +130,11 @@ public static partial class StyleRules
             .OfType<GenericType>().Distinct().ToList();
 
     public static bool IsColour(string s) => ColourPattern().IsMatch(s);
+
+    /// <summary>An ISO date, optionally with a time: 2026-01-31, 2026-01-31 14:05, 2026-01-31T14:05:09.</summary>
+    private static bool IsDate(string s) =>
+        DateTime.TryParseExact(s, ["yyyy-MM-dd", "yyyy-MM-dd HH:mm", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd'T'HH:mm:ss"],
+            System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out _);
 
     private static bool IsNumber(string s) =>
         double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _);
