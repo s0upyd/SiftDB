@@ -7,9 +7,12 @@ namespace SiftDB.Providers.Postgres;
 public sealed class PostgresProvider : IDatabaseProvider
 {
     public string Id => "postgres";
+    public string DisplayName => "PostgreSQL";
     public int ContractVersion => ProviderContract.CurrentVersion;
     public ISqlParser Parser { get; }
     public IIdentifierPolicy Identifiers { get; }
+    public IReadOnlyList<ConnectionField> ConnectionFields => PostgresConnectionFields.All;
+    public ReadOnlyEnforcement ReadOnlyEnforcement => ReadOnlyEnforcement.Server;
 
     public PostgresProvider()
     {
@@ -18,11 +21,31 @@ public sealed class PostgresProvider : IDatabaseProvider
         Identifiers = new PostgresIdentifierPolicy(parser);
     }
 
-    public async Task<IProviderConnection> OpenAsync(string connectionString, CancellationToken ct)
+    public string BuildConnectionString(IReadOnlyDictionary<string, string> fields, string? password) =>
+        PostgresConnectionFields.Build(fields, password);
+
+    public ParsedConnection ParseConnectionString(string connectionString) => PostgresConnectionFields.Parse(connectionString);
+
+    public string? CheckReadOnly(string sql) => PostgresReadOnlyGuard.Check(sql);
+
+    public async Task<IProviderConnection> OpenAsync(string connectionString, ConnectionOptions options, CancellationToken ct)
     {
-        var conn = new NpgsqlConnection(connectionString);
-        await conn.OpenAsync(ct);
-        return new PostgresConnection(conn, connectionString);
+        var cs = PostgresConnectionFields.WithOptions(connectionString, options);
+        var conn = new NpgsqlConnection(cs);
+        try
+        {
+            await conn.OpenAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            await conn.DisposeAsync();
+            // 28P01: wrong password. Npgsql's own message when the server wants a password and none was given.
+            if (ex is PostgresException { SqlState: PostgresErrorCodes.InvalidPassword } ||
+                ex is NpgsqlException && ex.Message.StartsWith("No password has been provided", StringComparison.Ordinal))
+                throw new ConnectionAuthenticationException(ex.Message, ex);
+            throw;
+        }
+        return new PostgresConnection(conn, cs);
     }
 
     private sealed class PostgresConnection(NpgsqlConnection conn, string connectionString) : IProviderConnection

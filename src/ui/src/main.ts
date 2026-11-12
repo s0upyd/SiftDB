@@ -1,15 +1,21 @@
 import { BatchMeta, Bridge, BridgeEvent, DatabaseSchema, connectBridge } from './bridge';
+import { ConnectionCatalog, EditResult, askPassword, editConnection } from './connections';
 import { ResultView } from './results';
-import { Sheet, SheetContext, TxState } from './sheet';
+import { Sheet, SheetContext, Target, TxState, targetKey } from './sheet';
 import { revealSelectedTab, scrollTabsWithWheel } from './tabs';
 import { SchemaTree, TreeRoot } from './tree';
 
-// The app shell: connection, tabs, the schema sidebar, and routing of engine events to the sheet (or result tab) they
-// belong to. Everything about one sheet lives in sheet.ts, and everything about one result in results.ts.
+// The app shell: the connection picker, tabs, the schema sidebar, and routing of engine events to the sheet (or result
+// tab) they belong to. Everything about one sheet lives in sheet.ts, one result in results.ts, saved connections in
+// connections.ts.
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+const pickEl = $<HTMLSelectElement>('connPick');
 const connEl = $<HTMLInputElement>('conn');
 const connectBtn = $<HTMLButtonElement>('connect');
+const editBtn = $<HTMLButtonElement>('editConn');
+const newConnBtn = $<HTMLButtonElement>('newConn');
+const saveAsBtn = $<HTMLButtonElement>('saveAs');
 const tabsEl = $('tabs');
 const sheetsEl = $('sheets');
 const treeFilter = $<HTMLInputElement>('treeFilter');
@@ -28,15 +34,17 @@ const INITIAL_SHEET = [
 ].join('\n');
 
 let bridge: Bridge;
+let catalog: ConnectionCatalog;
 let dark = false;
 /**
- * One entry per distinct connection string in use. Sheets that connected with the same string share an entry, and so a
- * root in the schema tree; each of them still has its own session. The string (with its password) never reaches the DOM.
+ * One entry per distinct target in use (a saved connection, or a pasted string), by targetKey. Sheets on the same target
+ * share an entry, and so a root in the schema tree; each of them still has its own session. A pasted string (with its
+ * password) never reaches the DOM.
  */
 interface ConnectionEntry { id: string; schema: DatabaseSchema | null }
-const connectionsByString = new Map<string, ConnectionEntry>();
-/** Connection strings with a connect in flight: they show in the tree as "loading…". */
-const connecting = new Set<string>();
+const entries = new Map<string, ConnectionEntry>();
+/** Targets with a connect in flight: they show in the tree as "loading…". */
+const connecting = new Map<string, Target>();
 let connectionSeq = 0;
 let connectNote = 'Not connected.';
 const sheets: Sheet[] = [];
@@ -56,6 +64,7 @@ const ctx: SheetContext = {
   registerConnection: (id, sheet) => connections.set(id, sheet),
   unregisterConnection: (id) => connections.delete(id),
   changed: () => { renderTabs(); updateHostState(); },
+  askPassword,
 };
 
 // ---- events from the engine --------------------------------------------------------------------------------------
@@ -66,10 +75,6 @@ function onEvent(e: BridgeEvent) {
       dark = !!e.dark;
       document.documentElement.dataset.theme = dark ? 'dark' : 'light';
       sheets.forEach((s) => s.setTheme(dark));
-      if (e.defaultConnection) {
-        connEl.value = e.defaultConnection;
-        for (const s of sheets) if (!s.draft && !s.connectionString) s.draft = e.defaultConnection;
-      }
       return;
     case 'transaction':
       connections.get(e.connectionId)?.onTransaction(e as unknown as Parameters<Sheet['onTransaction']>[0]);
@@ -109,6 +114,15 @@ function renderTabs() {
     title.className = 'title';
     title.textContent = sheet.title;
 
+    // A lock on a read-only sheet: a refused write is then never a mystery, whichever tab you are looking at.
+    const lock = document.createElement('span');
+    lock.className = 'lock';
+    lock.textContent = '🔒';
+    lock.hidden = !sheet.readOnly;
+    lock.title = 'Read-only connection: the server refuses changes';
+    lock.setAttribute('role', 'img');
+    lock.setAttribute('aria-label', 'read-only');
+
     const close = document.createElement('button');
     close.className = 'close';
     close.textContent = '×';
@@ -116,7 +130,7 @@ function renderTabs() {
     close.setAttribute('aria-label', `Close ${sheet.title}`);
     close.onclick = (e) => { e.stopPropagation(); void closeSheet(sheet); };
 
-    tab.append(dot, title, close);
+    tab.append(dot, lock, title, close);
     return tab;
   }));
   revealSelectedTab(tabsEl);
@@ -125,7 +139,7 @@ function renderTabs() {
 function activate(sheet: Sheet) {
   active = sheet;
   sheets.forEach((s) => s.setActive(s === sheet));
-  connEl.value = sheet.draft; // the connection box always describes the visible sheet
+  renderPicker(); // the connection picker always describes the visible sheet
   renderTabs();
   rebuildTree();
   sheet.focusEditor();
@@ -133,9 +147,10 @@ function activate(sheet: Sheet) {
 
 function addSheet(first = false): Sheet {
   // A new sheet starts on the connection of the sheet you were looking at, with a session of its own.
-  const inherit = active?.connectionString ?? null;
+  const inherit = active?.target ?? null;
   const sheet = new Sheet(ctx, sheetsEl, `Sheet ${++sheetCounter}`, first ? INITIAL_SHEET : '', first ? 3 : 1);
-  sheet.draft = inherit ?? connEl.value;
+  sheet.draftChoice = inherit ? choiceFor(inherit) : active?.draftChoice ?? defaultChoice();
+  sheet.draftText = inherit?.kind === 'string' ? inherit.cs : active?.draftText ?? '';
   sheets.push(sheet);
   activate(sheet);
   sheet.setTheme(dark);
@@ -170,6 +185,89 @@ function updateHostState() {
   bridge.send({ type: 'hostState', unsavedChanges: pending });
 }
 
+// ---- the connection picker ---------------------------------------------------------------------------------------
+// One choice per saved connection ('saved:<id>'), plus 'string' for a pasted connection string. Each sheet remembers
+// its own choice, so switching tabs shows that sheet's.
+
+const STRING_CHOICE = 'string';
+const choiceFor = (t: Target) => (t.kind === 'saved' ? `saved:${t.id}` : STRING_CHOICE);
+const savedIdOf = (choice: string) => (choice.startsWith('saved:') ? choice.slice(6) : null);
+
+/** At startup and for new sheets: the last connection used, else the first saved one, else a pasted string. */
+function defaultChoice(): string {
+  const last = catalog?.lastUsed && catalog.byId(catalog.lastUsed);
+  if (last) return `saved:${last.id}`;
+  return catalog?.saved[0] ? `saved:${catalog.saved[0].id}` : STRING_CHOICE;
+}
+
+/** What Connect would open for this sheet, or null when there is nothing to open (an empty string). */
+function draftTarget(sheet: Sheet): Target | null {
+  const id = savedIdOf(sheet.draftChoice);
+  if (id) return catalog.byId(id) ? { kind: 'saved', id } : null;
+  const cs = sheet.draftText.trim();
+  return cs ? { kind: 'string', cs } : null;
+}
+
+function renderPicker() {
+  const option = (value: string, text: string) => Object.assign(document.createElement('option'), { value, textContent: text });
+  pickEl.replaceChildren(
+    ...catalog.saved.map((c) => option(`saved:${c.id}`, `${c.readOnly ? '🔒 ' : ''}${c.name}${c.readOnly ? ' (read-only)' : ''} — ${catalog.describe(c)}`)),
+    option(STRING_CHOICE, 'Connection string…'));
+
+  const sheet = active;
+  let choice = sheet?.draftChoice ?? defaultChoice();
+  const id = savedIdOf(choice);
+  if (id && !catalog.byId(id)) { // deleted since this sheet last showed it
+    choice = defaultChoice();
+    if (sheet) sheet.draftChoice = choice;
+  }
+  pickEl.value = choice;
+  connEl.value = sheet?.draftText ?? '';
+  const isString = choice === STRING_CHOICE;
+  connEl.hidden = !isString;
+  saveAsBtn.hidden = !isString;
+  editBtn.disabled = isString || !!catalog.error;
+  newConnBtn.disabled = !!catalog.error || catalog.providers.length === 0;
+  const picked = id ? catalog.byId(id) : null;
+  pickEl.title = picked
+    ? `${picked.name}: ${catalog.provider(picked.provider)?.displayName ?? picked.provider}, ${catalog.describe(picked)}${picked.readOnly ? '. Read-only: the server refuses changes.' : ''}`
+    : 'Type a connection string, or save a connection to pick it here';
+}
+
+pickEl.addEventListener('change', () => {
+  if (!active) return;
+  active.draftChoice = pickEl.value;
+  renderPicker();
+  if (pickEl.value === STRING_CHOICE) connEl.focus();
+});
+connEl.addEventListener('input', () => { if (active) active.draftText = connEl.value; });
+connEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') void connectActive(); });
+
+/** After the form closes: reload the list, and point the visible sheet at a connection it just saved. */
+async function afterEdit(r: EditResult) {
+  if (r.kind === 'cancelled') return;
+  await catalog.load();
+  if (r.kind === 'saved' && active) active.draftChoice = `saved:${r.id}`;
+  if (r.kind === 'deleted') for (const s of sheets) if (s.draftChoice === `saved:${r.id}`) s.draftChoice = defaultChoice();
+  renderPicker();
+  rebuildTree(); // a rename shows in the tree straight away
+}
+
+editBtn.onclick = async () => {
+  const id = savedIdOf(pickEl.value);
+  const c = id ? catalog.byId(id) : undefined;
+  if (c) await afterEdit(await editConnection(bridge, catalog, c));
+};
+newConnBtn.onclick = async () => afterEdit(await editConnection(bridge, catalog, null));
+/** Saving a pasted string: the engine takes it apart into fields. Its password stays in the engine. */
+saveAsBtn.onclick = async () => {
+  const cs = connEl.value.trim();
+  if (!cs) { active?.setMessage('Type a connection string first, then save it.', 'warning'); return; }
+  const r = await bridge.request({ type: 'parseConnectionString', provider: 'postgres', connectionString: cs });
+  if (r.type === 'error') { active?.setMessage(`That connection string cannot be read: ${r.message}`, 'error'); return; }
+  await afterEdit(await editConnection(bridge, catalog, null, { fields: r.fields, hasPassword: r.hasPassword, fromConnectionString: cs }));
+};
+
 // ---- connection and schema ---------------------------------------------------------------------------------------
 
 const parseConnection = (cs: string) => {
@@ -184,78 +282,97 @@ const parseConnection = (cs: string) => {
   return { label: `${port ? `${host}:${port}` : host} / ${pick('database', 'initial catalog', 'db') || '(default)'}`, user: pick('username', 'user id', 'user', 'uid') };
 };
 
+/** How a target reads in the tree: a saved connection by its name, a pasted string by host / database. */
+function describeTarget(t: Target): { label: string; detail: string; user: string } {
+  if (t.kind === 'saved') {
+    const c = catalog.byId(t.id);
+    return c ? { label: c.name, detail: catalog.describe(c), user: '' } : { label: '(deleted connection)', detail: '', user: '' };
+  }
+  const p = parseConnection(t.cs);
+  return { label: p.label, detail: '', user: p.user };
+}
+
 /** Rebuilds the tree's roots from what the sheets are connected to. Roots nobody uses any more disappear. */
 function rebuildTree() {
-  const used = new Set<string>(connecting);
-  for (const s of sheets) if (s.connectionString) used.add(s.connectionString);
-  for (const cs of [...connectionsByString.keys()]) if (!used.has(cs)) connectionsByString.delete(cs);
+  const used = new Map<string, Target>(connecting);
+  for (const s of sheets) if (s.target) used.set(targetKey(s.target), s.target);
+  for (const key of [...entries.keys()]) if (!used.has(key)) entries.delete(key);
 
-  const infos = [...used].map((cs) => ({ cs, entry: connectionsByString.get(cs)!, ...parseConnection(cs) })).filter((i) => i.entry);
+  const activeKey = active?.target ? targetKey(active.target) : null;
+  const infos = [...used].map(([key, t]) => ({ key, entry: entries.get(key)!, ...describeTarget(t) })).filter((i) => i.entry);
   const roots: TreeRoot[] = infos.map((i) => ({
     id: i.entry.id, label: i.label, schema: i.entry.schema,
-    // Two connections that read the same (different users, say) are told apart by the user name.
-    detail: infos.some((o) => o !== i && o.label === i.label) ? i.user : '',
-    current: active?.connectionString === i.cs,
+    // Two pasted strings that read the same (different users, say) are told apart by the user name.
+    detail: i.detail || (infos.some((o) => o !== i && o.label === i.label) ? i.user : ''),
+    current: activeKey === i.key,
+    readOnly: sheets.some((s) => s.readOnly && s.target && targetKey(s.target) === i.key),
   }));
   tree.setRoots(roots, connectNote);
   const any = roots.some((r) => r.schema);
   treeFilter.disabled = !any;
-  refreshBtn.disabled = !active?.connectionString;
+  refreshBtn.disabled = !active?.target;
   tree.setFilter(treeFilter.value);
 }
 
 /** Opens a session for one sheet and shows (or reuses) its connection's schema in the tree. */
-async function connectSheet(sheet: Sheet, cs: string) {
-  let entry = connectionsByString.get(cs);
-  if (!entry) connectionsByString.set(cs, entry = { id: `c${++connectionSeq}`, schema: null });
-  connecting.add(cs);
+async function connectSheet(sheet: Sheet, target: Target) {
+  const key = targetKey(target);
+  let entry = entries.get(key);
+  if (!entry) entries.set(key, entry = { id: `c${++connectionSeq}`, schema: null });
+  connecting.set(key, target);
   rebuildTree();
   // Only the first session on a connection brings its schema over for the tree; later ones just fill their own cache.
-  const r = await sheet.connect(cs, !entry.schema);
-  connecting.delete(cs);
+  const r = await sheet.connect(target, !entry.schema);
+  connecting.delete(key);
   if (r.ok) {
-    sheet.draft = cs;
+    sheet.draftChoice = choiceFor(target);
+    if (target.kind === 'string') sheet.draftText = target.cs;
+    else catalog.lastUsed = target.id;
     if (r.schema) entry.schema = r.schema;
-    connectNote = 'Not connected.';
-  } else {
+    connectNote = catalog.error ?? 'Not connected.';
+  } else if (!r.cancelled) {
     connectNote = `Connect failed: ${r.error ?? 'unknown error'}`;
   }
   rebuildTree();
+  if (sheet === active) renderPicker();
   return r;
 }
 
 /** Connect acts on the visible sheet only: other sheets keep their sessions, on whatever they were connected to. */
 async function connectActive() {
   const sheet = active;
-  const cs = connEl.value.trim();
-  if (!sheet || !cs) return;
+  if (!sheet) return;
+  const target = draftTarget(sheet);
+  if (!target) {
+    sheet.setMessage('Type a connection string, or pick a saved connection, then press Connect.', 'warning');
+    if (sheet.draftChoice === STRING_CHOICE) connEl.focus();
+    return;
+  }
   if (sheet.txPending &&
       !window.confirm(`"${sheet.title}" has changes that are not committed. Connecting again closes its session and rolls them back.
 
 Continue?`)) return;
-  sheet.draft = cs;
   connectBtn.disabled = true;
   await sheet.disconnect();
   rebuildTree();
-  await connectSheet(sheet, cs);
+  await connectSheet(sheet, target);
   connectBtn.disabled = false;
   sheet.focusEditor();
 }
 
 /** Reloads the visible sheet's connection: every session on it refreshes its cache, and the tree takes the new schema. */
 async function refreshSchema() {
-  const cs = active?.connectionString;
-  const entry = cs ? connectionsByString.get(cs) : undefined;
-  if (!active || !cs || !entry) return;
+  const key = active?.target ? targetKey(active.target) : null;
+  const entry = key ? entries.get(key) : undefined;
+  if (!active || !key || !entry) return;
   refreshBtn.disabled = true;
-  const same = sheets.filter((s) => s.connectionString === cs);
+  const same = sheets.filter((s) => s.target && targetKey(s.target) === key);
   const all = await Promise.all(same.map((s) => s.refreshSchema(s === active)));
   const mine = all[same.indexOf(active)];
   if (mine) entry.schema = mine;
   rebuildTree();
 }
 
-connEl.addEventListener('input', () => { if (active) active.draft = connEl.value; });
 connectBtn.onclick = () => void connectActive();
 refreshBtn.onclick = () => void refreshSchema();
 treeFilter.addEventListener('input', () => tree.setFilter(treeFilter.value));
@@ -303,7 +420,11 @@ initSideSplitter();
 // Capture phase and stopPropagation: Monaco binds some of these itself (Ctrl+Shift+Enter is "insert line above"), so it
 // must not also see them.
 
+/** A connection form or password prompt is open: the sheets' shortcuts must not act behind it. */
+const dialogOpen = () => document.querySelector('dialog[open]') !== null;
+
 window.addEventListener('keydown', (e) => {
+  if (dialogOpen()) return;
   const key = e.key.toLowerCase();
   const handled = (fn: () => void) => { e.preventDefault(); e.stopPropagation(); fn(); };
 
@@ -324,12 +445,17 @@ window.addEventListener('keydown', (e) => {
 // an editor has focus it handles F5 itself and this never sees the key.
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'F5') return;
-  e.preventDefault();
-  void active?.runFromEditor();
+  e.preventDefault(); // never a page reload, dialog or not
+  if (!dialogOpen()) void active?.runFromEditor();
 });
 
 // ---- go ----------------------------------------------------------------------------------------------------------
 
 bridge = connectBridge(onEvent, onBatch);
-addSheet(true);
+catalog = new ConnectionCatalog(bridge);
+// The first sheet starts on the last connection used, selected but not connected (design section 8).
+void catalog.load().then(() => {
+  if (catalog.error) connectNote = catalog.error; // unreadable file: say why, and pasted strings still work
+  addSheet(true);
+});
 setInterval(() => active?.tick(), 250);

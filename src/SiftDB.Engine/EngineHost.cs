@@ -15,7 +15,7 @@ public interface IEngineOutput
 }
 
 /// <summary>Headless engine. Commands arrive as JSON text; results leave through <see cref="IEngineOutput"/>.</summary>
-public sealed class EngineHost : IAsyncDisposable
+public sealed partial class EngineHost : IAsyncDisposable
 {
     // Web defaults give camelCase properties; enums go out as camelCase strings ("materializedView").
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
@@ -29,8 +29,10 @@ public sealed class EngineHost : IAsyncDisposable
     private readonly ConcurrentDictionary<int, QuerySession> _queries = new();
     private int _nextConnection, _nextQuery;
 
-    public EngineHost(IEnumerable<IDatabaseProvider> providers, IEngineOutput output)
+    /// <param name="store">Saved connections. Without one, only pasted connection strings can be used.</param>
+    public EngineHost(IEnumerable<IDatabaseProvider> providers, IEngineOutput output, ConnectionStore? store = null)
     {
+        _store = store;
         foreach (var p in providers)
         {
             if (p.ContractVersion != ProviderContract.CurrentVersion)
@@ -52,8 +54,26 @@ public sealed class EngineHost : IAsyncDisposable
             switch (type)
             {
                 case "connect":
-                    await ConnectAsync(id, root.GetProperty("provider").GetString()!,
-                        root.GetProperty("connectionString").GetString()!);
+                    if (root.TryGetProperty("savedId", out var savedId))
+                        await ConnectSavedAsync(id, savedId.GetString()!, OptionalString(root, "password"));
+                    else
+                        await ConnectAsync(id, root.GetProperty("provider").GetString()!,
+                            root.GetProperty("connectionString").GetString()!, ConnectionOptions.Default, savedId: null);
+                    break;
+                case "listConnections":
+                    ListConnections(id);
+                    break;
+                case "saveConnection":
+                    SaveConnection(id, root);
+                    break;
+                case "deleteConnection":
+                    DeleteConnection(id, root.GetProperty("savedId").GetString()!);
+                    break;
+                case "testConnection":
+                    await TestConnectionAsync(id, root);
+                    break;
+                case "parseConnectionString":
+                    ParseConnectionString(id, root.GetProperty("provider").GetString()!, root.GetProperty("connectionString").GetString()!);
                     break;
                 case "execute":
                     await ExecuteAsync(id, root.GetProperty("connectionId").GetInt32(),
@@ -107,17 +127,19 @@ public sealed class EngineHost : IAsyncDisposable
         }
     }
 
-    private async Task ConnectAsync(int id, string provider, string connectionString)
+    /// <summary>Opens a session. <paramref name="savedId"/> is the saved connection it came from, or null for a pasted string.</summary>
+    private async Task<bool> ConnectAsync(int id, string provider, string connectionString, ConnectionOptions options, string? savedId)
     {
-        if (!_providers.TryGetValue(provider, out var p)) { Error(id, $"No provider '{provider}'"); return; }
-        var conn = await p.OpenAsync(connectionString, CancellationToken.None);
+        if (!_providers.TryGetValue(provider, out var p)) { Error(id, $"No provider '{provider}'"); return false; }
+        var conn = await p.OpenAsync(connectionString, options, CancellationToken.None);
         var connId = Interlocked.Increment(ref _nextConnection);
-        var state = new ConnectionState(connId, p, conn);
+        var state = new ConnectionState(connId, p, conn) { SavedId = savedId, ReadOnly = options.ReadOnly };
         _connections[connId] = state;
-        Event(new { type = "connected", replyTo = id, connectionId = connId });
+        Event(new { type = "connected", replyTo = id, connectionId = connId, savedId, readOnly = options.ReadOnly });
         await state.SessionLock.WaitAsync();
         try { await ObserveTransactionAsync(state, statement: false, rowsAffected: -1); }
         finally { state.SessionLock.Release(); }
+        return true;
     }
 
     /// <summary>
@@ -135,6 +157,8 @@ public sealed class EngineHost : IAsyncDisposable
             ? IdentifierResolver.Resolve(schema, state.Provider.Parser, state.Provider.Identifiers, text)
             : ResolverResult.Empty;
         var prepared = pick.Range is { } r ? RunPreparer.Prepare(text, r, resolved, mode) : null;
+        if (prepared is { Blocked: null } && state.ReadOnly && state.Provider.CheckReadOnly(prepared.Sql) is { } readOnlyReason)
+            prepared = prepared with { Blocked = readOnlyReason };
 
         Event(new
         {
@@ -197,6 +221,8 @@ public sealed class EngineHost : IAsyncDisposable
     private async Task ExecuteAsync(int id, int connectionId, string sql)
     {
         if (!_connections.TryGetValue(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
+        // The editor already blocks these (analyzeSheet); this catches a statement that arrives any other way.
+        if (state.ReadOnly && state.Provider.CheckReadOnly(sql) is { } readOnlyReason) { Error(id, readOnlyReason); return; }
         CancelCurrent(state); // a new statement replaces the running one; this lets it wind down and free the session
         await state.SessionLock.WaitAsync();
         var handedOver = false;
@@ -374,5 +400,11 @@ public sealed class EngineHost : IAsyncDisposable
         /// <summary>Cancels a statement that has been sent but has not produced a result yet (so has no query id).</summary>
         public CancellationTokenSource? Starting { get; set; }
         public DatabaseSchema? Schema { get; set; }
+
+        /// <summary>The saved connection this session was opened from; null for a pasted connection string.</summary>
+        public string? SavedId { get; init; }
+
+        /// <summary>Opened read-only: the server refuses writes, and statements that would switch that off are not sent.</summary>
+        public bool ReadOnly { get; init; }
     }
 }

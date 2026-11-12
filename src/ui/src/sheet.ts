@@ -5,6 +5,12 @@ import { revealSelectedTab, scrollTabsWithWheel } from './tabs';
 
 export type TxState = 'none' | 'open' | 'changed' | 'failed';
 
+/** What a sheet connects to: a saved connection, or a pasted connection string (which never reaches the DOM). */
+export type Target = { kind: 'saved'; id: string } | { kind: 'string'; cs: string };
+
+/** Sheets with the same key share a root in the schema tree. */
+export const targetKey = (t: Target) => (t.kind === 'saved' ? `saved:${t.id}` : `cs:${t.cs}`);
+
 /** What a sheet needs from the app around it. */
 export interface SheetContext {
   bridge: Bridge;
@@ -15,9 +21,12 @@ export interface SheetContext {
   unregisterConnection(connectionId: number): void;
   /** The tab title or the transaction state changed: the tab strip and the window-close warning need refreshing. */
   changed(sheet: Sheet): void;
+  /** Asks for a saved connection's password; null if the user cancelled. */
+  askPassword(name: string, retry: boolean, message?: string): Promise<string | null>;
 }
 
-export interface ConnectResult { ok: boolean; schema: DatabaseSchema | null; error?: string }
+/** `cancelled`: the user dismissed the password prompt, which is not a failure worth showing in red. */
+export interface ConnectResult { ok: boolean; schema: DatabaseSchema | null; error?: string; cancelled?: boolean }
 
 const TEMPLATE = `
   <div class="sheetbar">
@@ -28,6 +37,7 @@ const TEMPLATE = `
       <button class="modeAssisted" aria-pressed="true" title="Assisted: write loosely. The quotes the database needs are added for you and shown greyed, and what runs is exactly what you see.">Assisted</button>
       <button class="modeStrict" aria-pressed="false" title="Strict: the text you write is the text that runs. Quoting problems are squiggles with quick fixes (Alt+Enter), and a statement with any is not run.">Strict</button>
     </div>
+    <span class="rochip" hidden title="This sheet's connection is read-only: the server refuses changes. To change data, connect the sheet to a writable connection."><span aria-hidden="true">🔒</span> Read-only</span>
     <label><input class="fetchAll" type="checkbox" checked> fetch all</label>
     <button class="bench" disabled>Scroll benchmark</button>
   </div>
@@ -62,10 +72,14 @@ function elapsed(ms: number): string {
 export class Sheet {
   readonly root = document.createElement('section');
   connectionId = 0;
-  /** The connection string this sheet's session was opened with; null while not connected. Sheets with the same string share a tree root. */
-  connectionString: string | null = null;
-  /** What the connection box held for this sheet the last time it was visible, connected or not. */
-  draft = '';
+  /** What this sheet's session was opened on; null while not connected. Sheets with the same target share a tree root. */
+  target: Target | null = null;
+  /** The session was opened read-only (from the saved connection's setting at the time). */
+  readOnly = false;
+  /** What the connection picker showed for this sheet the last time it was visible: 'saved:<id>' or 'string'. */
+  draftChoice = 'string';
+  /** The connection string typed for this sheet, for when the picker is on "Connection string…". */
+  draftText = '';
   readonly tx = { state: 'none' as TxState, startedAt: null as string | null, statements: 0, rowsChanged: 0 };
 
   private readonly editor: SqlEditor;
@@ -76,7 +90,7 @@ export class Sheet {
   private readonly el: {
     run: HTMLButtonElement; cancel: HTMLButtonElement; begin: HTMLButtonElement;
     modeAssisted: HTMLButtonElement; modeStrict: HTMLButtonElement;
-    fetchAll: HTMLInputElement; bench: HTMLButtonElement;
+    fetchAll: HTMLInputElement; bench: HTMLButtonElement; roChip: HTMLElement;
     txBar: HTMLElement; txIcon: HTMLElement; txLabel: HTMLElement; txDetail: HTMLElement;
     txEnd: HTMLButtonElement; txCommit: HTMLButtonElement; txRollback: HTMLButtonElement;
     editor: HTMLElement; splitter: HTMLElement; msg: HTMLElement; msgIcon: HTMLElement; msgText: HTMLElement; tabs: HTMLElement; results: HTMLElement; empty: HTMLElement;
@@ -91,7 +105,7 @@ export class Sheet {
     const $ = <T extends HTMLElement = HTMLElement>(selector: string) => this.root.querySelector(selector) as T;
     this.el = {
       run: $('.run'), cancel: $('.cancel'), begin: $('.begin'), modeAssisted: $('.modeAssisted'), modeStrict: $('.modeStrict'),
-      fetchAll: $('.fetchAll'), bench: $('.bench'),
+      fetchAll: $('.fetchAll'), bench: $('.bench'), roChip: $('.rochip'),
       txBar: $('.txbar'), txIcon: $('.txIcon'), txLabel: $('.txLabel'), txDetail: $('.txDetail'),
       txEnd: $('.txEnd'), txCommit: $('.txCommit'), txRollback: $('.txRollback'),
       editor: $('.editor'), splitter: $('.splitter'), msg: $('.msg'), msgIcon: $('.msgIcon'), msgText: $('.msgText'), tabs: $('.resulttabs'), results: $('.results'), empty: $('.empty'),
@@ -131,7 +145,7 @@ export class Sheet {
     this.el.modeAssisted.onclick = () => this.setMode('assisted');
     this.el.modeStrict.onclick = () => this.setMode('strict');
 
-    this.setMessage('Not connected. Enter a connection string above and press Connect.', 'warning');
+    this.setMessage('Not connected. Pick a connection above and press Connect.', 'warning');
     this.updateButtons();
   }
 
@@ -169,17 +183,36 @@ export class Sheet {
 
   get connected(): boolean { return this.connectionId !== 0; }
 
-  /** Opens this sheet's own session. `wantSchema` is true for the one sheet whose schema fills the sidebar. */
-  async connect(connectionString: string, wantSchema: boolean): Promise<ConnectResult> {
+  /**
+   * Opens this sheet's own session. `wantSchema` is true for the one sheet whose schema fills the sidebar. A saved
+   * connection may need its password: the engine says so, the user is asked, and the connect is tried again with it.
+   */
+  async connect(target: Target, wantSchema: boolean): Promise<ConnectResult> {
     this.setMessage('Connecting…');
-    const r = await this.ctx.bridge.request({ type: 'connect', provider: 'postgres', connectionString });
+    let password: string | undefined;
+    let r;
+    for (;;) {
+      r = await this.ctx.bridge.request(target.kind === 'saved'
+        ? { type: 'connect', savedId: target.id, ...(password !== undefined ? { password } : {}) }
+        : { type: 'connect', provider: 'postgres', connectionString: target.cs });
+      if (r.type !== 'passwordNeeded') break;
+      const typed = await this.ctx.askPassword(r.name, r.retry, r.message);
+      if (typed === null) {
+        this.setMessage('Not connected: no password was given.', 'warning');
+        return { ok: false, schema: null, cancelled: true };
+      }
+      password = typed;
+    }
     if (r.type === 'error') {
       this.setMessage(`Connect failed: ${r.message}`, 'error');
       return { ok: false, schema: null, error: r.message };
     }
     this.connectionId = r.connectionId;
-    this.connectionString = connectionString;
+    this.target = target;
+    this.readOnly = !!r.readOnly;
+    this.el.roChip.hidden = !this.readOnly;
     this.ctx.registerConnection(this.connectionId, this);
+    this.ctx.changed(this); // the tab shows the read-only lock
     this.updateButtons();
 
     // The engine keeps a schema cache per session: completion and the identifier resolver read it.
@@ -202,7 +235,9 @@ export class Sheet {
     const id = this.connectionId;
     this.ctx.unregisterConnection(id); // stop routing events to a session that is going away
     this.connectionId = 0;
-    this.connectionString = null;
+    this.target = null;
+    this.readOnly = false;
+    this.el.roChip.hidden = true;
     this.setTx('none', null, 0, 0);
     await this.ctx.bridge.request({ type: 'disconnect', connectionId: id });
     this.updateButtons();

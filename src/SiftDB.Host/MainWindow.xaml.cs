@@ -26,7 +26,10 @@ public partial class MainWindow : Window, IEngineOutput
     public MainWindow()
     {
         InitializeComponent();
-        _engine = new EngineHost([new PostgresProvider()], this);
+        // Saved connections and their DPAPI-encrypted passwords live in %APPDATA%\SiftDB, in separate files.
+        var dir = ConnectionStore.DefaultDirectory;
+        var store = new ConnectionStore(Path.Combine(dir, "connections.json"), new DpapiSecretStore(Path.Combine(dir, "secrets.json")));
+        _engine = new EngineHost([new PostgresProvider()], this, store);
         SourceInitialized += (_, _) => ApplyTitleBarTheme(IsDarkTheme());
         Loaded += async (_, _) => await InitWebAsync();
         Closing += OnClosing;
@@ -61,7 +64,6 @@ public partial class MainWindow : Window, IEngineOutput
         {
             type = "init",
             dark = IsDarkTheme(),
-            defaultConnection = Environment.GetEnvironmentVariable("SIFTDB_SPIKE_CONN") ?? "",
         }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
         core.Navigate("https://siftdb.local/index.html");
     }

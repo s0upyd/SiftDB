@@ -11,7 +11,7 @@ const KIND: Record<RelationKind, { letter: string; label: string }> = {
 /** Rendering thousands of rows per keystroke isn't useful; past this the user should refine the filter. */
 const MAX_RELATIONS_SHOWN = 500;
 
-/** One connection in the tree. Sheets that connected with the same connection string share one root. */
+/** One connection in the tree. Sheets on the same saved connection (or the same pasted string) share one root. */
 export interface TreeRoot {
   id: string;
   label: string;
@@ -21,6 +21,8 @@ export interface TreeRoot {
   schema: DatabaseSchema | null;
   /** True for the root the visible sheet is connected to. */
   current: boolean;
+  /** Opened read-only: marked with a lock, so a refused write is never a mystery. */
+  readOnly: boolean;
 }
 
 /**
@@ -131,6 +133,8 @@ export class SchemaTree {
 
       const head = this.row(nKey, 0, nOpen, [this.text(root.label), this.dim(schema ? `${relCount}` : 'loading…')], 'Connection');
       head.classList.add('root');
+      // The lock goes right after the name: the sidebar is often narrow, and it must not be the part that scrolls away.
+      if (root.readOnly) head.insertBefore(this.badge('🔒 read-only', 'Read-only connection: the server refuses changes'), head.children[2] ?? null);
       if (root.detail) head.append(this.dim(root.detail));
       head.classList.toggle('current', root.current);
       frag.append(head, ...rows);

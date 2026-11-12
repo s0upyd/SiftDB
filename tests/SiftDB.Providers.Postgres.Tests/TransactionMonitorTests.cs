@@ -13,7 +13,7 @@ public class TransactionMonitorTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         if (string.IsNullOrEmpty(_cs)) return;
-        _conn = await new PostgresProvider().OpenAsync(_cs, CancellationToken.None);
+        _conn = await new PostgresProvider().OpenAsync(_cs, ConnectionOptions.Default, CancellationToken.None);
         await Exec("create temp table tx_probe (x int)");
     }
 

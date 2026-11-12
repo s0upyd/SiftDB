@@ -90,9 +90,15 @@ public class EngineTransactionTests
     {
         public string Id => "fake";
         public int ContractVersion => ProviderContract.CurrentVersion;
+        public string DisplayName => Id;
+        public IReadOnlyList<ConnectionField> ConnectionFields => [];
+        public string BuildConnectionString(IReadOnlyDictionary<string, string> fields, string? password) => throw new NotSupportedException();
+        public ParsedConnection ParseConnectionString(string connectionString) => throw new NotSupportedException();
+        public ReadOnlyEnforcement ReadOnlyEnforcement => ReadOnlyEnforcement.Client;
+        public string? CheckReadOnly(string sql) => null;
         public ISqlParser Parser => throw new NotSupportedException();
         public IIdentifierPolicy Identifiers => throw new NotSupportedException();
-        public Task<IProviderConnection> OpenAsync(string cs, CancellationToken ct) => Task.FromResult<IProviderConnection>(new Conn(server));
+        public Task<IProviderConnection> OpenAsync(string cs, ConnectionOptions options, CancellationToken ct) => Task.FromResult<IProviderConnection>(new Conn(server));
 
         private sealed class Conn(Server server) : IProviderConnection
         {

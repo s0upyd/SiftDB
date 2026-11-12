@@ -43,7 +43,7 @@ public class IntrospectionTests(ITestOutputHelper output) : IAsyncLifetime
             create table {_s}.events_2024 partition of {_s}.events for values from ('2024-01-01') to ('2025-01-01');
             """, c);
         await cmd.ExecuteNonQueryAsync();
-        _conn = await new PostgresProvider().OpenAsync(_cs, CancellationToken.None);
+        _conn = await new PostgresProvider().OpenAsync(_cs, ConnectionOptions.Default, CancellationToken.None);
         _schema = await _conn.IntrospectAsync(CancellationToken.None);
     }
 
@@ -221,7 +221,7 @@ public class IntrospectionTests(ITestOutputHelper output) : IAsyncLifetime
     public async Task Does_not_disturb_a_query_that_is_streaming_on_the_same_connection()
     {
         RequireServer();
-        await using var conn = await new PostgresProvider().OpenAsync(_cs!, CancellationToken.None);
+        await using var conn = await new PostgresProvider().OpenAsync(_cs!, ConnectionOptions.Default, CancellationToken.None);
         await using var reader = await conn.ExecuteReaderAsync("select generate_series(1, 50000)", CancellationToken.None);
         await reader.ReadAsync();
 

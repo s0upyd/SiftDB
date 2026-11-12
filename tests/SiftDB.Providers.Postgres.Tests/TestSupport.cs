@@ -19,7 +19,13 @@ internal sealed class InMemoryProvider(DatabaseSchema schema) : IDatabaseProvide
     public int ContractVersion => _pg.ContractVersion;
     public ISqlParser Parser => _pg.Parser;
     public IIdentifierPolicy Identifiers => _pg.Identifiers;
-    public Task<IProviderConnection> OpenAsync(string cs, CancellationToken ct) => Task.FromResult<IProviderConnection>(new Conn(schema));
+    public string DisplayName => _pg.DisplayName;
+    public IReadOnlyList<ConnectionField> ConnectionFields => _pg.ConnectionFields;
+    public string BuildConnectionString(IReadOnlyDictionary<string, string> fields, string? password) => _pg.BuildConnectionString(fields, password);
+    public ParsedConnection ParseConnectionString(string connectionString) => _pg.ParseConnectionString(connectionString);
+    public ReadOnlyEnforcement ReadOnlyEnforcement => _pg.ReadOnlyEnforcement;
+    public string? CheckReadOnly(string sql) => _pg.CheckReadOnly(sql);
+    public Task<IProviderConnection> OpenAsync(string cs, ConnectionOptions options, CancellationToken ct) => Task.FromResult<IProviderConnection>(new Conn(schema));
 
     private sealed class Conn(DatabaseSchema schema) : IProviderConnection
     {

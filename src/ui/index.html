@@ -22,6 +22,45 @@
     /* The app toolbar: the connection, and opening sheets. */
     .bar { display: flex; gap: 8px; align-items: center; padding: 8px; background: var(--panel); border-bottom: 1px solid var(--line); }
     .bar input[type=text] { flex: 1; min-width: 0; padding: 4px 6px; }
+    .bar .grow { flex: 1; }
+    select { color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
+    #connPick { min-width: 220px; max-width: 420px; }
+    /* Read-only shows the same way everywhere: a lock and words, never colour alone. */
+    .tab .lock { flex: none; font-size: 11px; }
+    .rochip { font-size: 12px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 10px; color: var(--fg); background: var(--bg); }
+
+    /* Connection form and password prompt. */
+    dialog.modal { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; padding: 0;
+                   color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+                   box-shadow: 0 12px 40px rgba(0,0,0,.35); }
+    dialog.modal.small { width: min(400px, calc(100vw - 32px)); }
+    dialog.modal::backdrop { background: rgba(0,0,0,.4); }
+    dialog.modal form { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; }
+    dialog.modal h2 { margin: 0; font-size: 16px; }
+    dialog.modal p { margin: 0; }
+    dialog.modal fieldset { margin: 0; padding: 8px 12px 10px; border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; gap: 8px; }
+    dialog.modal legend { padding: 0 4px; color: var(--dim); font-size: 12px; }
+    dialog.modal summary { cursor: pointer; color: var(--dim); }
+    dialog.modal details[open] { display: flex; flex-direction: column; gap: 8px; }
+    .fgroup { display: flex; flex-direction: column; gap: 8px; }
+    .frow { display: grid; grid-template-columns: 110px 1fr; gap: 2px 10px; align-items: center; }
+    .frow > input, .frow > select, .frow > .finline { min-width: 0; padding: 4px 6px; }
+    .frow .fhelp { grid-column: 2; }
+    .frow.off label { opacity: 0.5; }
+    .finline { display: flex; gap: 6px; padding: 0 !important; }
+    .finline input { flex: 1; min-width: 0; padding: 4px 6px; }
+    .fhelp { color: var(--dim); font-size: 12px; }
+    .fcheck { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: center; }
+    .fcheck .fhelp { grid-column: 2; }
+    .mono { font-family: Consolas, monospace; }
+    .fstatus { min-height: 20px; padding: 4px 8px; border-left: 4px solid transparent; }
+    .fstatus:empty { padding: 0; border: none; min-height: 0; }
+    .fstatus[data-kind="ok"] { border-left-color: var(--tx-open); background: var(--tx-open-bg); }
+    .fstatus[data-kind="error"] { border-left-color: var(--tx-failed); background: var(--tx-failed-bg); }
+    .factions { display: flex; gap: 8px; align-items: center; }
+    .factions .grow { flex: 1; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    button.danger { color: var(--tx-failed); }
 
     #main { flex: 1; min-height: 0; display: flex; }
     #side { width: 300px; min-width: 160px; flex: none; display: flex; flex-direction: column; background: var(--bg); }
@@ -165,8 +204,13 @@
 </head>
 <body>
   <div class="bar">
-    <input id="conn" type="text" placeholder="Host=localhost;Username=postgres;Password=…;Database=postgres" spellcheck="false" aria-label="Connection string">
-    <button id="connect" title="Connect the visible sheet to this connection string. Other sheets keep their own connections.">Connect</button>
+    <select id="connPick" aria-label="Connection for this sheet"></select>
+    <input id="conn" type="text" hidden placeholder="Host=localhost;Username=postgres;Password=…;Database=postgres" spellcheck="false" aria-label="Connection string">
+    <button id="connect" title="Connect the visible sheet. Other sheets keep their own connections.">Connect</button>
+    <button id="editConn" title="Edit the selected saved connection">Edit…</button>
+    <button id="saveAs" hidden title="Save this connection string as a named connection">Save as…</button>
+    <button id="newConn" title="Save a new connection">New…</button>
+    <span class="grow"></span>
     <button id="newSheet" title="Open a new SQL sheet in a new tab (Ctrl+T). Each sheet has its own session.">+ New sheet</button>
   </div>
   <div id="main">
