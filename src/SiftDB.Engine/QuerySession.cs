@@ -24,7 +24,8 @@ internal sealed class QuerySession
     private readonly Stopwatch _sw;
     private long _firstBatchTicks = -1;
     private long _readTicks, _appendTicks, _writeTicks;
-    private readonly Func<long, Task>? _onFinished;
+    private readonly Func<long, bool, Task>? _onFinished;
+    private bool _failed;
 
     public int Id { get; }
 
@@ -46,9 +47,10 @@ internal sealed class QuerySession
     private static double ToMs(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
 
     /// <param name="onFinished">Called once the reader is closed, whether the query finished, failed or was cancelled: the
-    /// session is idle again, so this is where the transaction state is read and the session lock released.</param>
+    /// session is idle again, so this is where the transaction state is read and the session lock released. It is told the
+    /// rows affected and whether the statement failed (or was cancelled) part way.</param>
     public QuerySession(int id, DbDataReader reader, RowBatchWriter writer, CancellationTokenSource cts, Stopwatch sw,
-        Func<long, Task>? onFinished = null)
+        Func<long, bool, Task>? onFinished = null)
     {
         Id = id; _reader = reader; _writer = writer; _cts = cts; _sw = sw; _onFinished = onFinished;
     }
@@ -102,6 +104,7 @@ internal sealed class QuerySession
         }
         catch (Exception ex)
         {
+            _failed = true;
             Channel.Writer.TryComplete(ex);
         }
         finally
@@ -109,7 +112,7 @@ internal sealed class QuerySession
             await _reader.DisposeAsync();
             if (_onFinished is not null)
             {
-                try { await _onFinished(RecordsAffected); }
+                try { await _onFinished(RecordsAffected, _failed); }
                 catch { /* the callback reports its own failures; the session must still be released */ }
             }
         }

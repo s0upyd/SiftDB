@@ -37,3 +37,10 @@ internal sealed class InMemoryProvider(DatabaseSchema schema) : IDatabaseProvide
         public ITransactionMonitor Transactions => throw new NotSupportedException();
     }
 }
+
+/// <summary>The Postgres "When a statement fails inside a transaction" setting, for tests of either behaviour.</summary>
+internal static class OnError
+{
+    /// <summary>Postgres's own behaviour: any error fails the whole transaction.</summary>
+    public static void Abort(PostgresProvider pg) => pg.ApplySettings(new Dictionary<string, string> { ["onError"] = "abortTransaction" });
+}

@@ -46,6 +46,7 @@ public sealed partial class EngineHost : IAsyncDisposable
             _providers[p.Id] = p;
         }
         _out = output;
+        ApplyProviderSettings(CurrentSettings);
     }
 
     public async Task HandleCommandAsync(string commandJson)
@@ -276,6 +277,9 @@ public sealed partial class EngineHost : IAsyncDisposable
             // The statement it replaced has wound down; if nobody drained it, free it now.
             if (state.Active is { } previous) _queries.TryRemove(previous.Id, out _);
             if (await PrepareAutoTransactionAsync(state, sql) is { } refusal) { Error(id, refusal); return; }
+            // Where an error aborts the whole transaction (Postgres), the provider may guard the statement so a failure
+            // undoes only it (design section 7). The guard spans the statement's whole life, up to its last row.
+            var guarded = await state.Connection.Transactions.BeforeStatementAsync(sql, CancellationToken.None);
             var sw = Stopwatch.StartNew();
             var cts = new CancellationTokenSource();
             state.Starting = cts; // until the database answers, this is the only handle on the statement: cancel and close use it
@@ -286,25 +290,33 @@ public sealed partial class EngineHost : IAsyncDisposable
             }
             catch (Exception) when (cts.IsCancellationRequested)
             {
-                // Cancelled before any result. Not an error, but inside a transaction it aborts it: the bar must learn that.
+                // Cancelled before any result. Not an error, but inside a transaction it aborts it (unless the guard undoes
+                // the statement): the bar must learn that.
                 state.Starting = null;
-                await ObserveTransactionAsync(state, statement: true, rowsAffected: -1);
+                var undone = await EndGuardAsync(state, guarded, failed: true);
+                await ObserveTransactionAsync(state, statement: true, rowsAffected: -1, undone);
                 Event(new { type = "cancelled", replyTo = id });
                 return;
             }
             catch
             {
-                // An error inside a transaction aborts it: the bar has to turn red even though no rows ever streamed.
+                // An error inside a transaction aborts it (unless the guard undoes the statement): the bar has to turn red
+                // even though no rows ever streamed.
                 state.Starting = null;
-                await ObserveTransactionAsync(state, statement: true, rowsAffected: -1);
+                var undone = await EndGuardAsync(state, guarded, failed: true);
+                await ObserveTransactionAsync(state, statement: true, rowsAffected: -1, undone);
                 throw;
             }
             state.Starting = null;
             var writer = new RowBatchWriter(reader);
             var queryId = Interlocked.Increment(ref _nextQuery);
-            var session = new QuerySession(queryId, reader, writer, cts, sw, async rowsAffected =>
+            var session = new QuerySession(queryId, reader, writer, cts, sw, async (rowsAffected, failed) =>
             {
-                try { await ObserveTransactionAsync(state, statement: true, rowsAffected); }
+                try
+                {
+                    var undone = await EndGuardAsync(state, guarded, failed);
+                    await ObserveTransactionAsync(state, statement: true, undone ? -1 : rowsAffected, undone);
+                }
                 finally { state.SessionLock.Release(); }
             });
             handedOver = true;
@@ -321,6 +333,21 @@ public sealed partial class EngineHost : IAsyncDisposable
         finally
         {
             if (!handedOver) state.SessionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Ends a statement's guard, if it had one. True when the statement had failed and was undone. A guard that cannot be
+    /// ended is reported, not thrown: the statement's own outcome matters more, and the state shown comes from the server.
+    /// </summary>
+    private async Task<bool> EndGuardAsync(ConnectionState state, bool guarded, bool failed)
+    {
+        if (!guarded) return false;
+        try { return await state.Connection.Transactions.AfterStatementAsync(failed, CancellationToken.None); }
+        catch (Exception ex)
+        {
+            Event(new { type = "transactionUnknown", connectionId = state.Id, message = $"The failed statement could not be undone: {ex.Message}" });
+            return false;
         }
     }
 
@@ -360,7 +387,8 @@ public sealed partial class EngineHost : IAsyncDisposable
     /// Asks the server where the session stands and tells the UI. The caller holds the session lock, so the connection is
     /// idle. A failure here must not break the statement that triggered it, so it is reported rather than thrown.
     /// </summary>
-    private async Task ObserveTransactionAsync(ConnectionState state, bool statement, long rowsAffected)
+    /// <param name="statementUndone">The statement failed and its guard undid it: the transaction carries on as before it.</param>
+    private async Task ObserveTransactionAsync(ConnectionState state, bool statement, long rowsAffected, bool statementUndone = false)
     {
         try
         {
@@ -382,7 +410,8 @@ public sealed partial class EngineHost : IAsyncDisposable
                 }
             }
 
-            if (statement) state.Tracker.StatementCompleted(snapshot, rowsAffected, now);
+            // An undone statement left nothing behind, so it does not count towards "3 statements · 42 rows changed".
+            if (statement && !statementUndone) state.Tracker.StatementCompleted(snapshot, rowsAffected, now);
             else state.Tracker.Observed(snapshot, now);
 
             // Auto-transaction keeps one open: when the session is outside a transaction (it just connected, or one was
@@ -398,7 +427,7 @@ public sealed partial class EngineHost : IAsyncDisposable
             {
                 type = "transaction", connectionId = state.Id, state = t.State, startedAt = t.StartedAt,
                 statements = t.Statements, rowsChanged = t.RowsChanged,
-                canDetectWrites = monitor.CanDetectWrites, automatic = t.Automatic, autoReset,
+                canDetectWrites = monitor.CanDetectWrites, automatic = t.Automatic, autoReset, statementUndone,
             });
         }
         catch (Exception ex)

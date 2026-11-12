@@ -517,11 +517,20 @@ export class Sheet {
   get txPending(): boolean { return this.tx.state === 'changed' || this.tx.state === 'failed'; }
 
   /** An engine "transaction" event for this sheet's session. */
-  onTransaction(e: { state: TxState; startedAt: string | null; statements: number; rowsChanged: number; automatic?: boolean; autoReset?: boolean }) {
+  onTransaction(e: {
+    state: TxState; startedAt: string | null; statements: number; rowsChanged: number; automatic?: boolean; autoReset?: boolean;
+    statementUndone?: boolean;
+  }) {
     this.tx.automatic = !!e.automatic;
     this.setTx(e.state, e.startedAt ?? null, e.statements, e.rowsChanged);
     // A statement failed in the automatic transaction while nothing had changed: it was rolled back and started again.
     if (e.autoReset) this.setMessage('The statement failed. Nothing had changed, so the transaction was rolled back and a new one started.');
+    // The failed statement was undone on its own (a savepoint): the transaction carries on, so say so beside the red result.
+    else if (e.statementUndone) {
+      this.setMessage(e.state === 'changed'
+        ? 'The statement failed and was undone. The transaction is still open, with the changes made before it still pending.'
+        : 'The statement failed and was undone. The transaction is still open.');
+    }
   }
 
   private setTx(state: TxState, startedAt: string | null, statements: number, rowsChanged: number) {

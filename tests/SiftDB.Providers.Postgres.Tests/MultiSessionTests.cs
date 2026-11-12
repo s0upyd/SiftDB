@@ -29,6 +29,7 @@ public class MultiSessionTests : IAsyncLifetime
     private readonly string? _cs = Environment.GetEnvironmentVariable("SIFTDB_SPIKE_CONN");
     private readonly string _table = "siftdb_ms_" + Guid.NewGuid().ToString("N")[..8];
     private readonly Sink _sink = new();
+    private readonly PostgresProvider _pg = new();
     private EngineHost? _engine;
     private int _request;
     private int _a, _b;
@@ -36,7 +37,7 @@ public class MultiSessionTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         if (string.IsNullOrEmpty(_cs)) return;
-        _engine = new EngineHost([new PostgresProvider()], _sink);
+        _engine = new EngineHost([_pg], _sink);
         _a = await Connect();
         _b = await Connect();
         await Run(_b, $"create table {_table} (x int)");
@@ -127,9 +128,10 @@ public class MultiSessionTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task An_error_aborts_only_the_session_it_happened_in()
+    public async Task With_abort_chosen_an_error_aborts_only_the_session_it_happened_in()
     {
         Require();
+        OnError.Abort(_pg);
         await Tx(_a, "begin");
         await Tx(_b, "begin");
         await Run(_a, "select 1/0");
@@ -195,9 +197,26 @@ public class MultiSessionTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Cancelling_inside_a_transaction_aborts_it_and_the_bar_says_so()
+    public async Task By_default_cancelling_inside_a_transaction_undoes_the_statement_and_keeps_the_changes()
     {
         Require();
+        await Tx(_a, "begin");
+        await Run(_a, $"insert into {_table} values (1)");
+        var (execute, _) = await StartSlowStatement(_a);
+
+        await _engine!.HandleCommandAsync(JsonSerializer.Serialize(new { type = "cancel", connectionId = _a }));
+        Assert.Same(execute, await Task.WhenAny(execute, Task.Delay(15_000)));
+
+        Assert.Equal("changed", State(_a));                             // the insert is still pending
+        await Tx(_a, "commit");
+        Assert.Equal(1, await Count(_b));
+    }
+
+    [SkippableFact]
+    public async Task With_abort_chosen_cancelling_inside_a_transaction_aborts_it_and_the_bar_says_so()
+    {
+        Require();
+        OnError.Abort(_pg);
         await Tx(_a, "begin");
         var (execute, _) = await StartSlowStatement(_a);
 

@@ -6,9 +6,9 @@ public static class ProviderContract
 {
     /// <summary>
     /// Current version of the provider contract. v2 added connection fields, read-only sessions and CannotRunInTransaction;
-    /// v3 added GenericTypeOf.
+    /// v3 added GenericTypeOf; v4 added provider settings and the statement guard (ITransactionMonitor.BeforeStatementAsync).
     /// </summary>
-    public const int CurrentVersion = 3;
+    public const int CurrentVersion = 4;
 }
 
 public interface IDatabaseProvider
@@ -58,6 +58,16 @@ public interface IDatabaseProvider
     /// (<see cref="DbDataReader.GetDataTypeName"/>). Anything without a closer match is <see cref="GenericType.Text"/>.
     /// </summary>
     GenericType GenericTypeOf(string dataTypeName);
+
+    /// <summary>Settings only this kind of database has (design section 10), shown as its own category. None by default.</summary>
+    IReadOnlyList<ProviderSetting> Settings => [];
+
+    /// <summary>
+    /// The user's values for <see cref="Settings"/>: one per setting, always one of its choices (the engine fills in
+    /// defaults and drops anything else). Called at startup and whenever the settings are saved, so it can arrive while
+    /// sessions are open; it applies from their next statement.
+    /// </summary>
+    void ApplySettings(IReadOnlyDictionary<string, string> values) { }
 
     Task<IProviderConnection> OpenAsync(string connectionString, ConnectionOptions options, CancellationToken ct);
 }

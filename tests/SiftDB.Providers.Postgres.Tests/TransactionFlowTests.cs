@@ -30,6 +30,7 @@ public class TransactionFlowTests : IAsyncLifetime
 
     private readonly string? _cs = Environment.GetEnvironmentVariable("SIFTDB_SPIKE_CONN");
     private readonly Sink _sink = new();
+    private readonly PostgresProvider _pg = new();
     private EngineHost? _engine;
     private int _nextQuery;     // mirrors the engine's query ids: bumped only when a statement is executed
     private int _nextRequest;   // ids for transaction commands
@@ -37,7 +38,7 @@ public class TransactionFlowTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         if (string.IsNullOrEmpty(_cs)) return;
-        _engine = new EngineHost([new PostgresProvider()], _sink);
+        _engine = new EngineHost([_pg], _sink);
         await _engine.HandleCommandAsync(JsonSerializer.Serialize(new { type = "connect", id = 1, provider = "postgres", connectionString = _cs }));
         await Run("create temp table flow_probe (x int)");
     }
@@ -149,9 +150,10 @@ public class TransactionFlowTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task A_failing_statement_turns_the_bar_red_until_rollback()
+    public async Task With_abort_chosen_a_failing_statement_turns_the_bar_red_until_rollback()
     {
         Require();
+        OnError.Abort(_pg);
         await Do("begin");
         await Run("insert into flow_probe values (1)");
         await Run("select 1/0");
@@ -165,12 +167,95 @@ public class TransactionFlowTests : IAsyncLifetime
         Assert.Equal(0, await Count());
     }
 
+    // ---- undoing just the failed statement (the default; design section 7) ----
+
+    private bool Undone() => Tx().GetProperty("statementUndone").GetBoolean();
+
+    [SkippableTheory]
+    [InlineData("select 1/0")]                                                       // fails as it starts
+    [InlineData("selec 1")]                                                          // a typo: does not even parse
+    [InlineData("select case when x = 90000 then 1/0 else x end from generate_series(1, 100000) x")] // fails part way through the rows
+    [InlineData("insert into flow_probe values (1), (2), ('three')")]              // a write that fails: none of it stays
+    public async Task By_default_a_failed_statement_is_undone_and_the_transaction_keeps_its_changes(string failing)
+    {
+        Require();
+        await Do("begin");
+        await Run("insert into flow_probe values (1)");
+        await Run(failing);
+
+        Assert.Equal("changed", State());                                   // not red: carry on
+        Assert.True(Undone());
+        Assert.Equal(1, Tx().GetProperty("statements").GetInt32());        // the undone one does not count
+        Assert.Equal(1, Tx().GetProperty("rowsChanged").GetInt64());
+        Assert.Empty(_sink.Of("transactionUnknown"));
+
+        await Run("insert into flow_probe values (2)");                     // the transaction still works
+        Assert.False(Undone());
+        await Do("commit");
+        Assert.Equal(2, await Count());
+    }
+
+    [SkippableFact]
+    public async Task A_failure_with_nothing_changed_yet_leaves_the_transaction_open()
+    {
+        Require();
+        await Do("begin");
+        await Run("select no_such_column from flow_probe");
+        Assert.Equal("open", State());
+        Assert.True(Undone());
+        await Do("rollback");
+    }
+
+    [SkippableFact]
+    public async Task Typed_savepoints_act_on_the_users_transaction_not_the_guard()
+    {
+        Require();
+        await Do("begin");
+        await Run("insert into flow_probe values (1)");
+        await Run("savepoint mine");
+        await Run("insert into flow_probe values (2)");
+        await Run("select 1/0");                                            // undone: "mine" is still there
+        await Run("rollback to savepoint mine");                            // undoes the second insert
+        Assert.Equal("changed", State());
+        Assert.DoesNotContain(_sink.Of("error"), e => !e.GetProperty("message").GetString()!.Contains("division by zero"));
+        await Do("commit");
+        Assert.Equal(1, await Count());
+    }
+
+    [SkippableFact]
+    public async Task A_typed_commit_is_not_guarded_and_commits()
+    {
+        Require();
+        await Run("begin");
+        await Run("insert into flow_probe values (1)");
+        await Run("commit");
+        Assert.Equal("none", State());
+        Assert.Empty(_sink.Of("transactionUnknown"));
+        Assert.Equal(1, await Count());
+    }
+
+    [SkippableFact]
+    public async Task Choosing_abort_applies_from_the_next_statement_of_an_open_session()
+    {
+        Require();
+        await Do("begin");
+        await Run("select 1/0");
+        Assert.Equal("open", State());                                      // undone, the default
+        OnError.Abort(_pg);
+        await Run("select 1/0");
+        Assert.Equal("failed", State());                                    // now Postgres's own behaviour
+        Assert.False(Undone());
+        await Do("rollback");
+    }
+
     [SkippableFact]
     public async Task An_error_outside_a_transaction_leaves_the_bar_off()
     {
         Require();
         await Run("select 1/0");
         Assert.Equal("none", State());
+        Assert.False(Undone());                                             // nothing to guard outside a transaction
+        Assert.Empty(_sink.Of("transactionUnknown"));
     }
 
     [SkippableFact]

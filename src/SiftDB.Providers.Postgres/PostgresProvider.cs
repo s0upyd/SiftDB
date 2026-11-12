@@ -32,6 +32,12 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     public GenericType GenericTypeOf(string dataTypeName) => PostgresTypes.GenericTypeOf(dataTypeName);
 
+    private readonly PostgresSettings _settings = new();
+
+    public IReadOnlyList<ProviderSetting> Settings => PostgresSettings.All;
+
+    public void ApplySettings(IReadOnlyDictionary<string, string> values) => _settings.Apply(values);
+
     public async Task<IProviderConnection> OpenAsync(string connectionString, ConnectionOptions options, CancellationToken ct)
     {
         var cs = PostgresConnectionFields.WithOptions(connectionString, options);
@@ -49,12 +55,12 @@ public sealed class PostgresProvider : IDatabaseProvider
                 throw new ConnectionAuthenticationException(ex.Message, ex);
             throw;
         }
-        return new PostgresConnection(conn, cs);
+        return new PostgresConnection(conn, cs, _settings);
     }
 
-    private sealed class PostgresConnection(NpgsqlConnection conn, string connectionString) : IProviderConnection
+    private sealed class PostgresConnection(NpgsqlConnection conn, string connectionString, PostgresSettings settings) : IProviderConnection
     {
-        public ITransactionMonitor Transactions { get; } = new PostgresTransactionMonitor(conn);
+        public ITransactionMonitor Transactions { get; } = new PostgresTransactionMonitor(conn, settings);
 
         // Metadata gets its own connection: this one may be streaming a query or holding an open transaction,
         // and Npgsql allows one command at a time per connection.

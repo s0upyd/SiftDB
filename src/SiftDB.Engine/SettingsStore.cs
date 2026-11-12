@@ -10,9 +10,15 @@ namespace SiftDB.Engine;
 /// </summary>
 /// <param name="NewSheetMode">The mode new sheets open in (design section 3): "assisted" or "strict".</param>
 /// <param name="ResultRules">Result styling, as one ordered list: the first rule that matches styles the cell.</param>
-public sealed record UserSettings(string NewSheetMode, IReadOnlyList<StyleRule> ResultRules)
+/// <param name="ProviderSettings">Settings only one kind of database has, by provider id, then setting key. Kept as
+/// stored: the engine checks them against each loaded provider's own descriptions when it applies them, so the settings
+/// of a provider that is not loaded survive.</param>
+public sealed record UserSettings(
+    string NewSheetMode,
+    IReadOnlyList<StyleRule> ResultRules,
+    IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> ProviderSettings)
 {
-    public static readonly UserSettings Default = new("assisted", StyleRules.Default);
+    public static readonly UserSettings Default = new("assisted", StyleRules.Default, new Dictionary<string, IReadOnlyDictionary<string, string>>());
 
     /// <summary>
     /// Only values this version knows are kept. <paramref name="strict"/>: a user rule that is not valid throws (saving)
@@ -72,6 +78,8 @@ public sealed class SettingsStore(string path)
                 Version = FormatVersion,
                 NewSheetMode = normalised.NewSheetMode,
                 ResultRules = normalised.ResultRules.Select(StoredRule.From).ToList(),
+                ProviderSettings = normalised.ProviderSettings.Count == 0 ? null
+                    : normalised.ProviderSettings.ToDictionary(p => p.Key, p => new Dictionary<string, string>(p.Value)),
                 Other = _unknown,
             };
             AtomicFile.WriteAllText(path, JsonSerializer.Serialize(file, Json));
@@ -92,7 +100,9 @@ public sealed class SettingsStore(string path)
                 throw new InvalidDataException($"It was written by a newer SiftDB (format {file.Version}; this version reads {FormatVersion}).");
             _unknown = file.Other;
             var rules = file.ResultRules?.Where(r => r is not null).Select(r => r.ToRule()) ?? StyleRules.Default;
-            return _settings = new UserSettings(file.NewSheetMode ?? UserSettings.Default.NewSheetMode, rules.ToList()).Normalised();
+            var providers = (file.ProviderSettings ?? []).Where(p => p.Value is not null)
+                .ToDictionary(p => p.Key, p => (IReadOnlyDictionary<string, string>)p.Value);
+            return _settings = new UserSettings(file.NewSheetMode ?? UserSettings.Default.NewSheetMode, rules.ToList(), providers).Normalised();
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
@@ -107,6 +117,7 @@ public sealed class SettingsStore(string path)
         public int Version { get; set; }
         public string? NewSheetMode { get; set; }
         public List<StoredRule>? ResultRules { get; set; }
+        public Dictionary<string, Dictionary<string, string>>? ProviderSettings { get; set; }
 
         /// <summary>Settings a later version added keep their values when this version rewrites the file.</summary>
         [JsonExtensionData] public Dictionary<string, JsonElement>? Other { get; set; }

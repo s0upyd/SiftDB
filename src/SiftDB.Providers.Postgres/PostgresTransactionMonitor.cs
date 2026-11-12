@@ -17,7 +17,7 @@ namespace SiftDB.Providers.Postgres;
 /// Whether the open transaction has written anything is a read-only SQL probe (an assigned xid). It runs only inside an
 /// open transaction block, never assigns an xid, and so cannot change the state it measures.
 /// </summary>
-internal sealed class PostgresTransactionMonitor(NpgsqlConnection conn) : ITransactionMonitor
+internal sealed class PostgresTransactionMonitor(NpgsqlConnection conn, PostgresSettings settings) : ITransactionMonitor
 {
     private static readonly PropertyInfo? ConnectorProperty = typeof(NpgsqlConnection)
         .GetProperty("Connector", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
@@ -36,6 +36,44 @@ internal sealed class PostgresTransactionMonitor(NpgsqlConnection conn) : ITrans
     public Task BeginAsync(CancellationToken ct) => Run("begin", ct);
     public Task CommitAsync(CancellationToken ct) => Run("commit", ct);
     public Task RollbackAsync(CancellationToken ct) => Run("rollback", ct);
+
+    /// <summary>The savepoint that guards each statement. Released (or rolled back to) as soon as the statement is over.</summary>
+    private const string Guard = "siftdb_statement";
+
+    /// <summary>
+    /// Any error aborts a Postgres transaction. With the setting on (the default), a statement inside a transaction runs
+    /// behind a savepoint, so a failure undoes just that statement (design section 7), as psql's ON_ERROR_ROLLBACK does.
+    /// Not guarded: statements outside a transaction (nothing to protect), a transaction that has already failed, and
+    /// statements that control the transaction themselves (BEGIN, COMMIT, ROLLBACK, SAVEPOINT…), which must act on the
+    /// user's transaction, not ours. SQL that does not parse is guarded: a typo is exactly what this is for.
+    /// </summary>
+    public async Task<bool> BeforeStatementAsync(string sql, CancellationToken ct)
+    {
+        if (!settings.UndoFailedStatement || ReadProtocolStatus() != "InTransactionBlock") return false;
+        if (PostgresTransactionRules.ControlsTransaction(sql)) return false;
+        await Run($"savepoint {Guard}", ct);
+        return true;
+    }
+
+    /// <summary>
+    /// A failed statement left the transaction aborted: roll back to the guard, which undoes the statement and nothing
+    /// before it. Otherwise just release the guard. The protocol status decides, not <paramref name="failed"/>: a
+    /// cancelled SELECT that streamed fine has nothing to undo.
+    /// </summary>
+    public async Task<bool> AfterStatementAsync(bool failed, CancellationToken ct)
+    {
+        switch (ReadProtocolStatus())
+        {
+            case "InFailedTransactionBlock":
+                await Run($"rollback to savepoint {Guard}; release savepoint {Guard}", ct);
+                return true;
+            case "InTransactionBlock":
+                await Run($"release savepoint {Guard}", ct);
+                return false;
+            default:
+                return false; // the transaction is over (a function cannot end it, but be safe): no guard left to release
+        }
+    }
 
     private async Task Run(string sql, CancellationToken ct)
     {

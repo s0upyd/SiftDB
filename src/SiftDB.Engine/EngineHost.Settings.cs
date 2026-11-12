@@ -1,4 +1,5 @@
 using System.Text.Json;
+using SiftDB.Abstractions;
 
 namespace SiftDB.Engine;
 
@@ -7,12 +8,11 @@ public sealed partial class EngineHost
 {
     private readonly SettingsStore? _settings;
 
+    private UserSettings CurrentSettings => _settings?.Get() ?? UserSettings.Default;
+
     /// <summary>Without a store (tests, a host that keeps none) the defaults apply and saving is refused.</summary>
-    private void GetSettings(int id)
-    {
-        var settings = _settings?.Get() ?? UserSettings.Default;
-        Event(new { type = "settings", replyTo = id, settings = SettingsOut(settings), error = _settings?.LoadError });
-    }
+    private void GetSettings(int id) =>
+        Event(new { type = "settings", replyTo = id, settings = SettingsOut(CurrentSettings), providers = ProviderSettingsOut(), error = _settings?.LoadError });
 
     /// <summary>A setting left out of the command keeps its current value. A rule that is not valid is refused with the reason.</summary>
     private void SaveSettings(int id, JsonElement root)
@@ -26,10 +26,68 @@ public sealed partial class EngineHost
             ResultRules = s.TryGetProperty("resultRules", out var rules) && rules.ValueKind == JsonValueKind.Array
                 ? rules.EnumerateArray().Select(ReadRule).ToList()
                 : current.ResultRules,
+            ProviderSettings = s.TryGetProperty("providerSettings", out var ps) && ps.ValueKind == JsonValueKind.Object
+                ? ReadProviderSettings(ps, current.ProviderSettings)
+                : current.ProviderSettings,
         };
         var saved = _settings.Save(next);
-        Event(new { type = "settings", replyTo = id, settings = SettingsOut(saved), error = (string?)null });
+        ApplyProviderSettings(saved);
+        Event(new { type = "settings", replyTo = id, settings = SettingsOut(saved), providers = ProviderSettingsOut(), error = (string?)null });
     }
+
+    /// <summary>Hands each loaded provider its values. At startup, and after every save, so open sessions follow at once.</summary>
+    private void ApplyProviderSettings(UserSettings settings)
+    {
+        foreach (var p in _providers.Values)
+            if (p.Settings.Count > 0) p.ApplySettings(EffectiveValues(p, settings));
+    }
+
+    /// <summary>One value per setting the provider describes: the stored one if it is still a choice, else the default.</summary>
+    private static Dictionary<string, string> EffectiveValues(IDatabaseProvider p, UserSettings settings)
+    {
+        var stored = settings.ProviderSettings.GetValueOrDefault(p.Id);
+        return p.Settings.ToDictionary(d => d.Key, d =>
+            stored?.GetValueOrDefault(d.Key) is { } v && d.Choices.Any(c => c.Value == v) ? v : d.Default);
+    }
+
+    /// <summary>
+    /// The providers' values from the editor, over the stored ones. Each provider sent replaces its own set; providers not
+    /// sent (or not loaded) keep theirs. A value that is not one of the setting's choices is refused.
+    /// </summary>
+    private IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> ReadProviderSettings(
+        JsonElement sent, IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> current)
+    {
+        var result = current.ToDictionary(p => p.Key, p => p.Value);
+        foreach (var provider in sent.EnumerateObject())
+        {
+            if (provider.Value.ValueKind != JsonValueKind.Object) continue;
+            _providers.TryGetValue(provider.Name, out var p);
+            var values = new Dictionary<string, string>();
+            foreach (var kv in provider.Value.EnumerateObject())
+            {
+                if (kv.Value.ValueKind != JsonValueKind.String) continue;
+                var value = kv.Value.GetString()!;
+                var setting = p?.Settings.FirstOrDefault(d => d.Key == kv.Name);
+                if (p is not null && setting is null) continue; // a setting this provider no longer has
+                if (setting is not null && setting.Choices.All(c => c.Value != value))
+                    throw new ArgumentException($"'{value}' is not a choice for \"{setting.Label}\".");
+                values[kv.Name] = value;
+            }
+            result[provider.Name] = values;
+        }
+        return result;
+    }
+
+    private object ProviderSettingsOut() => _providers.Values.Where(p => p.Settings.Count > 0).Select(p => new
+    {
+        id = p.Id, displayName = p.DisplayName,
+        settings = p.Settings.Select(d => new
+        {
+            key = d.Key, label = d.Label, help = d.Help, @default = d.Default,
+            choices = d.Choices.Select(c => new { value = c.Value, label = c.Label, help = c.Help }),
+        }),
+        values = EffectiveValues(p, CurrentSettings),
+    });
 
     private static object SettingsOut(UserSettings s) => new
     {

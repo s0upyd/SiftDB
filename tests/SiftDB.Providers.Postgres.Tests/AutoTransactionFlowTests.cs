@@ -28,6 +28,7 @@ public sealed class AutoTransactionFlowTests : IAsyncLifetime
     private readonly string? _cs = Environment.GetEnvironmentVariable("SIFTDB_SPIKE_CONN");
     private readonly Sink _sink = new();
     private readonly DirectoryInfo _dir = Directory.CreateTempSubdirectory("siftdb-auto-");
+    private readonly PostgresProvider _pg = new();
     private EngineHost? _engine;
     private int _nextId;
     private int _connectionId;
@@ -35,8 +36,7 @@ public sealed class AutoTransactionFlowTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         if (string.IsNullOrEmpty(_cs)) return;
-        var pg = new PostgresProvider();
-        _engine = new EngineHost([pg], _sink, new ConnectionStore(Path.Combine(_dir.FullName, "connections.json"), new MemorySecrets()));
+        _engine = new EngineHost([_pg], _sink, new ConnectionStore(Path.Combine(_dir.FullName, "connections.json"), new MemorySecrets()));
         _connectionId = await Open(readOnly: false);
         // The sheet is inside a transaction from the start, so even this DDL waits for Commit.
         await Run("create temp table auto_probe (x int)");
@@ -173,18 +173,33 @@ public sealed class AutoTransactionFlowTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task A_failure_with_nothing_changed_is_rolled_back_and_started_again()
+    public async Task By_default_a_failure_is_undone_and_the_automatic_transaction_carries_on()
     {
         Require();
+        await Run("delete from auto_probe where x = 1");
+        var tx = await Run("insert into auto_probe values ('not a number')");
+        Assert.Equal("changed", State(tx));                // the delete is still pending, nothing is red
+        Assert.True(tx.GetProperty("statementUndone").GetBoolean());
+        Assert.False(tx.GetProperty("autoReset").GetBoolean());
+        Assert.True(Automatic(tx));
+        Assert.Equal("open", State(await Rollback()));
+    }
+
+    [SkippableFact]
+    public async Task With_abort_chosen_a_failure_with_nothing_changed_is_rolled_back_and_started_again()
+    {
+        Require();
+        OnError.Abort(_pg);
         var tx = await Run("select no_such_column from auto_probe");
         Assert.Equal("open", State(tx));
         Assert.True(tx.GetProperty("autoReset").GetBoolean());
     }
 
     [SkippableFact]
-    public async Task A_failure_after_a_change_leaves_it_aborted_for_the_user()
+    public async Task With_abort_chosen_a_failure_after_a_change_leaves_it_aborted_for_the_user()
     {
         Require();
+        OnError.Abort(_pg);
         await Run("delete from auto_probe where x = 1");
         var tx = await Run("insert into auto_probe values ('not a number')");
         Assert.Equal("failed", State(tx)); // the delete is in there: only the user may throw it away

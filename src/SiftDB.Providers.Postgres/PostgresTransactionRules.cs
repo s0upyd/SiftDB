@@ -16,7 +16,16 @@ internal static class PostgresTransactionRules
         "CreateSubscriptionStmt", "DropSubscriptionStmt",
     ];
 
-    public static bool CannotRunInTransaction(string sql)
+    public static bool CannotRunInTransaction(string sql) => AnyStatement(sql, Refuses);
+
+    /// <summary>
+    /// True when any statement in <paramref name="sql"/> is transaction control: BEGIN, START TRANSACTION, COMMIT, END,
+    /// ROLLBACK, ABORT, SAVEPOINT, RELEASE, ROLLBACK TO, PREPARE TRANSACTION, COMMIT/ROLLBACK PREPARED. SQL that does not
+    /// parse is false.
+    /// </summary>
+    public static bool ControlsTransaction(string sql) => AnyStatement(sql, (type, _) => type == "TransactionStmt");
+
+    private static bool AnyStatement(string sql, Func<string, JsonElement, bool> test)
     {
         var parsed = PgSqlParser.Parser.Parse(sql, new PgSqlParser.ParserOptions());
         if (parsed.Error is not null || parsed.Value is null) return false;
@@ -26,7 +35,7 @@ internal static class PostgresTransactionRules
         {
             if (!raw.TryGetProperty("stmt", out var stmt)) continue;
             var node = stmt.EnumerateObject().FirstOrDefault();
-            if (node.Value.ValueKind == JsonValueKind.Object && Refuses(node.Name, node.Value)) return true;
+            if (node.Value.ValueKind == JsonValueKind.Object && test(node.Name, node.Value)) return true;
         }
         return false;
     }

@@ -32,4 +32,18 @@ public interface ITransactionMonitor
 
     /// <summary>Asks the server. The session must be idle: never call this while a query is streaming on it.</summary>
     Task<TransactionSnapshot> GetStateAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Called just before a statement (the text of one run) is sent, with the session idle. A database where an error
+    /// aborts the whole transaction (Postgres) can guard the statement here, e.g. with a savepoint, so a failure undoes only
+    /// that statement (design section 7). Returns whether it set a guard; by default nothing is guarded.
+    /// </summary>
+    Task<bool> BeforeStatementAsync(string sql, CancellationToken ct) => Task.FromResult(false);
+
+    /// <summary>
+    /// Called once a guarded statement is over (its last row read, or it failed or was cancelled), with the session idle.
+    /// Returns true when the statement had failed the transaction and was undone, leaving the transaction open as it was
+    /// before the statement.
+    /// </summary>
+    Task<bool> AfterStatementAsync(bool failed, CancellationToken ct) => Task.FromResult(false);
 }
