@@ -101,6 +101,8 @@
            background: var(--tab); border: 1px solid var(--line); border-bottom: none; border-radius: 6px 6px 0 0; color: var(--dim); }
     .tab[aria-selected="true"] { background: var(--bg); color: var(--fg); font-weight: 600; margin-bottom: -1px; padding-bottom: 6px; }
     .tab .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    /* Unsaved edits: a dot after the name, in the text colour (no extra colour to learn). */
+    .tab .unsaved { flex: none; font-size: 10px; color: var(--fg); margin-left: -2px; }
     .tab .close, .rtab .close, .rtab .pin { border: none; background: transparent; padding: 0 5px; line-height: 1; color: var(--dim); border-radius: 3px; }
     .tab .close { font-size: 16px; }
     .tab .close:hover, .rtab .close:hover, .rtab .pin:hover { background: var(--line); color: var(--fg); }
@@ -216,6 +218,8 @@
     <button id="saveAs" hidden title="Save this connection string as a named connection">Save as…</button>
     <button id="newConn" title="Save a new connection">New…</button>
     <span class="grow"></span>
+    <button id="openFile" title="Open a .sql file in a sheet (Ctrl+O)">Open…</button>
+    <button id="saveFile" title="Save the visible sheet (Ctrl+S). Ctrl+Shift+S saves it under a new name.">Save</button>
     <button id="newSheet" title="Open a new SQL sheet in a new tab (Ctrl+T). Each sheet has its own session.">+ New sheet</button>
   </div>
   <div id="main">

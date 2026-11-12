@@ -203,15 +203,3 @@ public sealed class ConnectionStore
         [JsonExtensionData] public Dictionary<string, JsonElement>? Other { get; set; }
     }
 }
-
-internal static class AtomicFile
-{
-    /// <summary>Writes beside the target, then swaps it in, so readers see the old file or the new one, never a torn one.</summary>
-    public static void WriteAllText(string path, string text)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-        var temp = path + ".tmp";
-        File.WriteAllText(temp, text);
-        File.Move(temp, path, overwrite: true);
-    }
-}

@@ -1,8 +1,10 @@
 import { BatchMeta, Bridge, BridgeEvent, DatabaseSchema, connectBridge } from './bridge';
 import { ConnectionCatalog, EditResult, askPassword, editConnection } from './connections';
+import { askSaveChanges } from './dialogs';
 import { lockIcon } from './icons';
 import { ResultView } from './results';
-import { Sheet, SheetContext, Target, TxState, targetKey } from './sheet';
+import { FileState, Sheet, SheetContext, Target, TxState, targetKey } from './sheet';
+import type { QueryMode } from './editor';
 import { revealSelectedTab, scrollTabsWithWheel } from './tabs';
 import { SchemaTree, TreeRoot } from './tree';
 
@@ -63,6 +65,7 @@ const ctx: SheetContext = {
   unregisterConnection: (id) => connections.delete(id),
   changed: () => { renderTabs(); updateHostState(); },
   askPassword,
+  persist: () => scheduleAutosave(),
 };
 
 // ---- events from the engine --------------------------------------------------------------------------------------
@@ -73,6 +76,10 @@ function onEvent(e: BridgeEvent) {
       dark = !!e.dark;
       document.documentElement.dataset.theme = dark ? 'dark' : 'light';
       sheets.forEach((s) => s.setTheme(dark));
+      return;
+    case 'flushBeforeClose':
+      // The window is closing: write the last edits now, then let the host close it.
+      void autosaveNow().finally(() => bridge.send({ type: 'flushed' }));
       return;
     case 'transaction':
       connections.get(e.connectionId)?.onTransaction(e as unknown as Parameters<Sheet['onTransaction']>[0]);
@@ -111,6 +118,16 @@ function renderTabs() {
     const title = document.createElement('span');
     title.className = 'title';
     title.textContent = sheet.title;
+    tab.title = sheet.file?.path ?? '';
+
+    // A dot after the name while the sheet has edits that are not in its file (design section 6).
+    const unsaved = document.createElement('span');
+    unsaved.className = 'unsaved';
+    unsaved.textContent = '●';
+    unsaved.hidden = !sheet.dirty;
+    unsaved.title = 'Unsaved changes';
+    unsaved.setAttribute('role', 'img');
+    unsaved.setAttribute('aria-label', 'unsaved changes');
 
     // A lock on a read-only sheet: a refused write is then never a mystery, whichever tab you are looking at.
     const lock = document.createElement('span');
@@ -128,7 +145,7 @@ function renderTabs() {
     close.setAttribute('aria-label', `Close ${sheet.title}`);
     close.onclick = (e) => { e.stopPropagation(); void closeSheet(sheet); };
 
-    tab.append(dot, lock, title, close);
+    tab.append(dot, lock, title, unsaved, close);
     return tab;
   }));
   revealSelectedTab(tabsEl);
@@ -141,22 +158,36 @@ function activate(sheet: Sheet) {
   renderTabs();
   rebuildTree();
   sheet.focusEditor();
+  scheduleAutosave(); // which sheet is active comes back after a restart
+}
+
+/** A sheet added to the strip, not yet shown or connected. */
+function createSheet(untitled: string, text = '', cursorLine = 1): Sheet {
+  const sheet = new Sheet(ctx, sheetsEl, untitled, text, cursorLine);
+  sheet.setTheme(dark);
+  sheets.push(sheet);
+  return sheet;
 }
 
 function addSheet(first = false): Sheet {
   // A new sheet starts on the connection of the sheet you were looking at, with a session of its own.
   const inherit = active?.target ?? null;
-  const sheet = new Sheet(ctx, sheetsEl, `Sheet ${++sheetCounter}`, first ? INITIAL_SHEET : '', first ? 3 : 1);
+  const sheet = createSheet(`Sheet ${++sheetCounter}`, first ? INITIAL_SHEET : '', first ? 3 : 1);
   sheet.draftChoice = inherit ? choiceFor(inherit) : active?.draftChoice ?? defaultChoice();
   sheet.draftText = inherit?.kind === 'string' ? inherit.cs : active?.draftText ?? '';
-  sheets.push(sheet);
   activate(sheet);
-  sheet.setTheme(dark);
   if (inherit) void connectSheet(sheet, inherit);
   return sheet;
 }
 
 async function closeSheet(sheet: Sheet) {
+  // Unsaved text would be gone with the tab (the window closing never asks: autosave brings everything back).
+  if (sheet.dirty && sheet.text.trim() !== '') {
+    activate(sheet);
+    const answer = await askSaveChanges(sheet.title);
+    if (answer === 'cancel') return;
+    if (answer === 'save' && !(await saveSheet(sheet))) return;
+  }
   if (sheet.txPending &&
       !window.confirm(`"${sheet.title}" has changes that are not committed. Closing it rolls them back.\n\nClose anyway?`)) return;
   const at = sheets.indexOf(sheet);
@@ -168,6 +199,7 @@ async function closeSheet(sheet: Sheet) {
   else if (wasActive) activate(sheets[Math.min(at, sheets.length - 1)]);
   else renderTabs();
   updateHostState();
+  scheduleAutosave(); // its autosaved text goes with it
 }
 
 function cycle(step: 1 | -1) {
@@ -188,6 +220,8 @@ function updateHostState() {
 // its own choice, so switching tabs shows that sheet's.
 
 const STRING_CHOICE = 'string';
+/** No connection chosen: a file named one that is not saved here, and SiftDB never guesses (design section 6). */
+const NONE_CHOICE = 'none';
 const choiceFor = (t: Target) => (t.kind === 'saved' ? `saved:${t.id}` : STRING_CHOICE);
 const savedIdOf = (choice: string) => (choice.startsWith('saved:') ? choice.slice(6) : null);
 
@@ -208,12 +242,15 @@ function draftTarget(sheet: Sheet): Target | null {
 
 function renderPicker() {
   const option = (value: string, text: string) => Object.assign(document.createElement('option'), { value, textContent: text });
+  const sheet = active;
+  let choice = sheet?.draftChoice ?? defaultChoice();
+  const none = option(NONE_CHOICE, sheet?.connectionName ? `Pick a connection (the file names ${sheet.connectionName})` : 'Pick a connection');
+  none.disabled = true;
   pickEl.replaceChildren(
+    ...(choice === NONE_CHOICE ? [none] : []),
     ...catalog.saved.map((c) => option(`saved:${c.id}`, `${c.name}${c.readOnly ? ' (read-only)' : ''} — ${catalog.describe(c)}`)),
     option(STRING_CHOICE, 'Connection string…'));
 
-  const sheet = active;
-  let choice = sheet?.draftChoice ?? defaultChoice();
   const id = savedIdOf(choice);
   if (id && !catalog.byId(id)) { // deleted since this sheet last showed it
     choice = defaultChoice();
@@ -224,7 +261,7 @@ function renderPicker() {
   const isString = choice === STRING_CHOICE;
   connEl.hidden = !isString;
   saveAsBtn.hidden = !isString;
-  editBtn.disabled = isString || !!catalog.error;
+  editBtn.disabled = isString || choice === NONE_CHOICE || !!catalog.error;
   newConnBtn.disabled = !!catalog.error || catalog.providers.length === 0;
   const picked = id ? catalog.byId(id) : null;
   pickEl.title = picked
@@ -237,6 +274,7 @@ pickEl.addEventListener('change', () => {
   active.draftChoice = pickEl.value;
   renderPicker();
   if (pickEl.value === STRING_CHOICE) connEl.focus();
+  scheduleAutosave();
 });
 connEl.addEventListener('input', () => { if (active) active.draftText = connEl.value; });
 connEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') void connectActive(); });
@@ -342,7 +380,9 @@ async function connectActive() {
   if (!sheet) return;
   const target = draftTarget(sheet);
   if (!target) {
-    sheet.setMessage('Type a connection string, or pick a saved connection, then press Connect.', 'warning');
+    sheet.setMessage(sheet.draftChoice === NONE_CHOICE
+      ? 'Pick a connection first. SiftDB does not guess which database a file is for.'
+      : 'Type a connection string, or pick a saved connection, then press Connect.', 'warning');
     if (sheet.draftChoice === STRING_CHOICE) connEl.focus();
     return;
   }
@@ -376,6 +416,154 @@ refreshBtn.onclick = () => void refreshSchema();
 treeFilter.addEventListener('input', () => tree.setFilter(treeFilter.value));
 $('newSheet').onclick = () => addSheet();
 $('newTab').onclick = () => addSheet();
+
+// ---- files and autosave (design section 6) -----------------------------------------------------------------------
+// Opening and saving go through the host (the native dialogs) and the engine (the file). Autosave keeps every sheet,
+// saved or not, a moment after each change, so closing the window loses nothing.
+
+const AUTOSAVE_DELAY_MS = 600;
+/** Per sheet id, the editor version last written to the session: unchanged text is not sent again. */
+const autosaved = new Map<string, number>();
+let autosaveTimer: number | undefined;
+let autosaveRunning: Promise<void> | null = null;
+let autosavePending = false;
+/** While sheets are being restored, their setup must not trigger saves of a half-built session. */
+let restoring = true;
+
+/** The saved connection a sheet will be saved with: the one it is connected to, else the one picked. */
+function savedIdFor(sheet: Sheet): string | null {
+  if (sheet.target) return sheet.target.kind === 'saved' ? sheet.target.id : null;
+  const id = savedIdOf(sheet.draftChoice);
+  return id && catalog.byId(id) ? id : null;
+}
+
+function scheduleAutosave() {
+  if (restoring) return;
+  window.clearTimeout(autosaveTimer);
+  autosaveTimer = window.setTimeout(() => void autosaveNow(), AUTOSAVE_DELAY_MS);
+}
+
+/** Writes the session now. One write at a time; a request during a write runs straight after it. */
+async function autosaveNow(): Promise<void> {
+  window.clearTimeout(autosaveTimer);
+  if (restoring) return;
+  if (autosaveRunning) { autosavePending = true; return autosaveRunning; }
+  autosaveRunning = (async () => {
+    do {
+      autosavePending = false;
+      const versions = sheets.map((s) => [s.id, s.version] as const);
+      const payload = sheets.map((s) => {
+        const savedId = savedIdFor(s);
+        return {
+          id: s.id, title: s.untitled, path: s.file?.path ?? null, dirty: s.dirty, savedId,
+          // A pasted connection string is never kept (it may hold a password); a name is, so a file's intent survives.
+          connectionName: savedId ? catalog.byId(savedId)?.name ?? null : s.connectionName,
+          mode: s.mode, lineEnding: s.file?.lineEnding ?? 'crlf', encoding: s.file?.encoding ?? 'utf-8',
+          headerOther: s.file?.headerOther ?? [],
+          ...(autosaved.get(s.id) !== s.version ? { text: s.text } : {}),
+        };
+      });
+      const r = await bridge.request({ type: 'saveSession', active: active?.id ?? null, sheets: payload });
+      if (r.type === 'error') { active?.setMessage(`Autosave failed: ${r.message}`, 'error'); break; }
+      autosaved.clear();
+      for (const [id, v] of versions) autosaved.set(id, v);
+    } while (autosavePending);
+  })();
+  try { await autosaveRunning; } finally { autosaveRunning = null; }
+}
+
+/** Points a sheet at the connection a file (or a restored session) names: saved here, or unknown and said so. */
+function applyConnection(sheet: Sheet, savedId: string | null, connectionName: string | null) {
+  sheet.connectionName = savedId ? null : connectionName;
+  if (savedId) sheet.draftChoice = `saved:${savedId}`;
+  else if (connectionName) {
+    sheet.draftChoice = NONE_CHOICE;
+    sheet.setMessage(sheet.file
+      ? `This file names the connection '${connectionName}', which is not saved here. Pick a connection.`
+      : `This sheet was on the connection '${connectionName}', which is no longer saved. Pick a connection.`, 'warning');
+  }
+}
+
+/** Ctrl+O: the native dialog, then the file in a sheet (an already-open file just comes to the front). */
+async function openFile() {
+  const d = await bridge.request({ type: 'openFileDialog', currentPath: active?.file?.path ?? null });
+  if (!d.path) return;
+  const already = sheets.find((s) => s.file?.path.toLowerCase() === String(d.path).toLowerCase());
+  if (already) { activate(already); return; }
+  const r = await bridge.request({ type: 'openFile', path: d.path });
+  if (r.type === 'error') { active?.setMessage(`Could not open ${d.path}: ${r.message}`, 'error'); return; }
+
+  // A blank untitled sheet is reused, unless the file names a connection and that sheet is connected elsewhere.
+  const namesConnection = !!(r.savedId || r.connectionName);
+  let sheet: Sheet;
+  if (active?.blank && !(namesConnection && active.connected)) sheet = active;
+  else if (namesConnection) {
+    sheet = createSheet(`Sheet ${++sheetCounter}`); // its own connection: not inherited from the sheet you were on
+    sheet.draftText = '';
+  } else sheet = addSheet();
+  const file: FileState = { path: r.path, fileName: r.fileName, lineEnding: r.lineEnding, encoding: r.encoding, headerOther: r.headerOther };
+  sheet.load(r.text, file, false);
+  sheet.setMode((r.mode as QueryMode | null) ?? 'assisted');
+  sheet.setMessage('');
+  if (namesConnection) applyConnection(sheet, r.savedId ?? null, r.connectionName ?? null);
+  activate(sheet);
+}
+
+/**
+ * Ctrl+S (Save As when the sheet has no file yet) and Ctrl+Shift+S. An Assisted sheet saves the SQL that runs: its
+ * greyed quotes become real text first. False when nothing was saved (cancelled, or it failed).
+ */
+async function saveSheet(sheet: Sheet, as = false): Promise<boolean> {
+  let path = sheet.file?.path ?? null;
+  if (!path || as) {
+    const d = await bridge.request({
+      type: 'saveFileDialog', currentPath: path, suggestedName: sheet.file?.fileName ?? `${sheet.untitled}.sql`,
+    });
+    if (!d.path) return false;
+    path = d.path as string;
+  }
+  let note = '';
+  if (sheet.mode === 'assisted' && !(await sheet.acceptCorrectionsForSave())) note = ', as typed (connect first to have its quoting checked)';
+  const savedId = savedIdFor(sheet);
+  const lineEnding = sheet.file?.lineEnding ?? 'crlf', encoding = sheet.file?.encoding ?? 'utf-8', headerOther = sheet.file?.headerOther ?? [];
+  const r = await bridge.request({
+    type: 'saveFile', path, text: sheet.text, savedId, connectionName: savedId ? null : sheet.connectionName,
+    mode: sheet.mode, lineEnding, encoding, headerOther,
+  });
+  if (r.type === 'error') { sheet.setMessage(`Not saved: ${r.message}`, 'error'); return false; }
+  sheet.markSaved({ path: r.path, fileName: r.fileName, lineEnding, encoding, headerOther });
+  sheet.setMessage(`Saved ${r.fileName}${note}.`);
+  renderTabs();
+  return true;
+}
+
+$('openFile').onclick = () => void openFile();
+$('saveFile').onclick = () => { if (active) void saveSheet(active); };
+
+/** At startup: the sheets from last time, in order, without connecting (design section 6). Nothing saved: one new sheet. */
+async function restoreSession() {
+  const r = await bridge.request({ type: 'loadSession' });
+  const saved = r.type === 'session' ? (r.sheets as any[]) : [];
+  let toShow: Sheet | null = null;
+  for (const s of saved) {
+    const n = /^Sheet (\d+)$/.exec(s.title)?.[1];
+    if (n) sheetCounter = Math.max(sheetCounter, Number(n));
+    const sheet = createSheet(s.title ?? `Sheet ${++sheetCounter}`);
+    const file: FileState | null = s.path
+      ? { path: s.path, fileName: s.fileName, lineEnding: s.lineEnding, encoding: s.encoding, headerOther: s.headerOther ?? [] }
+      : null;
+    sheet.load(s.text ?? '', file, !!s.dirty && !(file === null && !s.text));
+    sheet.setMode(s.mode === 'strict' ? 'strict' : 'assisted');
+    sheet.draftChoice = defaultChoice();
+    applyConnection(sheet, s.savedId ?? null, s.connectionName ?? null);
+    if (s.missing) sheet.setMessage(`${s.path} is no longer there. This is the text autosaved before; save it to keep it.`, 'warning');
+    if (s.id === r.active) toShow = sheet;
+  }
+  restoring = false;
+  if (sheets.length === 0) addSheet(true);
+  else activate(toShow ?? sheets[0]);
+  await autosaveNow(); // the session now names these sheets
+}
 
 // ---- schema tree width -------------------------------------------------------------------------------------------
 
@@ -429,7 +617,10 @@ window.addEventListener('keydown', (e) => {
   if (e.ctrlKey && !e.shiftKey && !e.altKey) {
     if (key === 't') return handled(() => addSheet());
     if (key === 'w' && active) return handled(() => void closeSheet(active!));
+    if (key === 's' && active) return handled(() => void saveSheet(active!));
+    if (key === 'o') return handled(() => void openFile());
   }
+  if (e.ctrlKey && e.shiftKey && !e.altKey && key === 's' && active) return handled(() => void saveSheet(active!, true));
   if (e.ctrlKey && !e.altKey && e.key === 'Tab') return handled(() => cycle(e.shiftKey ? -1 : 1));
 
   if (e.ctrlKey && e.shiftKey && active) {
@@ -452,8 +643,13 @@ window.addEventListener('keydown', (e) => {
 bridge = connectBridge(onEvent, onBatch);
 catalog = new ConnectionCatalog(bridge);
 // The first sheet starts on the last connection used, selected but not connected (design section 8).
-void catalog.load().then(() => {
+void catalog.load().then(async () => {
   if (catalog.error) connectNote = catalog.error; // unreadable file: say why, and pasted strings still work
-  addSheet(true);
+  try {
+    await restoreSession();
+  } catch {
+    restoring = false; // a session that cannot be restored must not stop the app starting
+    if (sheets.length === 0) addSheet(true);
+  }
 });
 setInterval(() => active?.tick(), 250);

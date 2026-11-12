@@ -181,6 +181,9 @@ export class SqlEditor {
       quickSuggestions: { other: true, comments: false, strings: false },
       suggestOnTriggerCharacters: true,
       tabCompletion: 'on',
+      // Monaco's experimental EditContext input sends typing to the first editor created once there are several (one per
+      // sheet): text typed in Sheet 2 landed in Sheet 1. The text-area input is the long-proven one and follows focus.
+      editContext: false,
     });
     this.model = this.editor.getModel()!;
     editors.set(this.model.uri.toString(), this);
@@ -263,6 +266,39 @@ export class SqlEditor {
     if (a.pick.reason === 'none' || a.pick.sql === null) return { kind: 'none' };
     if (a.pick.blocked) return { kind: 'blocked', reason: a.pick.blocked };
     return { kind: 'run', sql: a.pick.sql };
+  }
+
+  // ---- the text, for files and autosave ----------------------------------------------------------------------------
+
+  getText(): string { return this.model.getValue(); }
+
+  /** Replaces the whole text (opening a file, restoring a sheet). Undo history starts again from here. */
+  setText(text: string) {
+    this.model.setValue(text);
+    this.model.setEOL(monaco.editor.EndOfLineSequence.LF);
+  }
+
+  /**
+   * A number that changes with every edit and comes back when edits are undone: equal to the number at the last save
+   * means "nothing unsaved", even after typing and undoing.
+   */
+  versionId(): number { return this.model.getAlternativeVersionId(); }
+
+  /** Called after every change to the text. */
+  onChange(fn: () => void) { this.model.onDidChangeContent(fn); }
+
+  /**
+   * Saving an Assisted sheet writes the SQL that runs (design section 6): the greyed quotes become real text first.
+   * Asks the engine afresh, so corrections from before the last keystroke are never applied. False when there is no
+   * analysis to go on (not connected), so the caller can say the text was saved as typed.
+   */
+  async acceptCorrectionsForSave(): Promise<boolean> {
+    const { text, start, end } = this.snapshot();
+    const a = await this.analyze(text, start, end, this.mode);
+    if (!a || text !== this.model.getValue()) return false;
+    this.corrections = a.corrections;
+    this.acceptAll();
+    return true;
   }
 
   /** Applies every automatic correction as real text ("Accept all", design section 3). */

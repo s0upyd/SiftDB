@@ -1,4 +1,5 @@
 import type { Bridge } from './bridge';
+import { el, showDialog } from './dialogs';
 
 // Saved connections (design section 8): the list from the engine, the edit form, and the password prompt. The engine owns
 // the store; a password goes from these forms to the engine once and never comes back.
@@ -65,13 +66,6 @@ export class ConnectionCatalog {
 
 // ---- small DOM helpers ------------------------------------------------------------------------------------------
 
-// NoInfer: the tag alone decides the element type. Inferring it from the props as well is too much work for the compiler.
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[NoInfer<K>]> = {}, ...children: (Node | string)[]): HTMLElementTagNameMap[K] {
-  const e: HTMLElementTagNameMap[K] = Object.assign(document.createElement(tag), props);
-  e.append(...children);
-  return e;
-}
-
 let fieldSeq = 0;
 
 /** A labelled row: the label is tied to its control, and help text is announced with it. */
@@ -91,13 +85,6 @@ function check(label: string, checked: boolean, help?: string) {
   const wrap = el('label', { className: 'fcheck' }, box, el('span', {}, label));
   if (help) wrap.append(el('span', { className: 'fhelp', textContent: help }));
   return { box, wrap };
-}
-
-/** Shows a modal dialog and resolves when it closes. Escape and the Cancel button both close it with no value. */
-function showDialog(dialog: HTMLDialogElement): Promise<void> {
-  document.body.append(dialog);
-  dialog.showModal();
-  return new Promise((resolve) => dialog.addEventListener('close', () => { dialog.remove(); resolve(); }, { once: true }));
 }
 
 // ---- the password prompt ----------------------------------------------------------------------------------------

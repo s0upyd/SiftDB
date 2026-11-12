@@ -23,6 +23,17 @@ export interface SheetContext {
   changed(sheet: Sheet): void;
   /** Asks for a saved connection's password; null if the user cancelled. */
   askPassword(name: string, retry: boolean, message?: string): Promise<string | null>;
+  /** The text, the mode or the file changed: the session needs autosaving. */
+  persist(sheet: Sheet): void;
+}
+
+/** A sheet's file, as the engine reported it (design section 6). */
+export interface FileState {
+  path: string;
+  fileName: string;
+  lineEnding: string;
+  encoding: string;
+  headerOther: [string, string][];
 }
 
 /** `cancelled`: the user dismissed the password prompt, which is not a failure worth showing in red. */
@@ -97,7 +108,18 @@ export class Sheet {
   private readonly resultsCtx: ResultsContext;
 
   /** `parent` is where the sheet lives: it is attached before the editor is built, because Monaco measures its container. */
-  constructor(private ctx: SheetContext, parent: HTMLElement, public title: string, initialText: string, cursorLine = 1) {
+  /** Stable for the sheet's life: names its autosaved text. */
+  readonly id = crypto.randomUUID();
+  /** The file it was opened from or saved to, or null for an untitled sheet. */
+  file: FileState | null = null;
+  /** A connection the sheet's file named that is not saved here: kept, so saving does not lose it, and shown until one is chosen. */
+  connectionName: string | null = null;
+  /** The editor's version at the last open or save; -1 when unknown (restored with unsaved edits). */
+  private savedVersion: number;
+  private wasDirty = false;
+
+  /** `untitled` is the name shown until the sheet has a file ("Sheet 3"). */
+  constructor(private ctx: SheetContext, parent: HTMLElement, readonly untitled: string, initialText: string, cursorLine = 1) {
     this.root.className = 'sheet';
     this.root.innerHTML = TEMPLATE;
     parent.append(this.root);
@@ -128,6 +150,9 @@ export class Sheet {
       complete: this.complete,
     }, initialText);
     this.editor.setCursor(cursorLine);
+    // A new sheet with only the starter text has nothing worth asking about; with text from elsewhere it does (see restore).
+    this.savedVersion = this.editor.versionId();
+    this.editor.onChange(() => this.textChanged());
 
     this.el.run.onclick = () => void this.runFromEditor();
     this.el.cancel.onclick = () => this.cancel();
@@ -263,11 +288,60 @@ export class Sheet {
   focusEditor() { this.editor.focus(); }
 
   /** Switches how this sheet treats identifier problems, and shows which is active. A blocked-run message is cleared: it described the old mode. */
-  private setMode(mode: QueryMode) {
+  setMode(mode: QueryMode) {
     this.editor.setMode(mode);
     this.el.modeAssisted.setAttribute('aria-pressed', String(mode === 'assisted'));
     this.el.modeStrict.setAttribute('aria-pressed', String(mode === 'strict'));
     if (this.el.msg.dataset.kind === 'warning' && this.el.msgText.textContent?.startsWith('not run:')) this.setMessage('');
+    this.ctx.persist(this);
+  }
+
+  get mode(): QueryMode { return this.editor.getMode(); }
+
+  // ---- the file (design section 6) ------------------------------------------------------------------------------
+
+  /** The tab's name: the file's, or "Sheet 3" until it has one. */
+  get title(): string { return this.file?.fileName ?? this.untitled; }
+
+  /** Edits not in the sheet's file (or, untitled, any text at all beyond the starter). */
+  get dirty(): boolean { return this.editor.versionId() !== this.savedVersion; }
+
+  get text(): string { return this.editor.getText(); }
+
+  /** A version number that changes with every edit, for autosave to know what it has already written. */
+  get version(): number { return this.editor.versionId(); }
+
+  /** True for an untitled sheet nobody has typed in: opening a file can use it instead of adding a tab. */
+  get blank(): boolean { return !this.file && this.text.trim() === ''; }
+
+  /**
+   * Fills the sheet from a file or a restored session. `dirty` says whether this text has edits its file does not (a
+   * restored sheet with unsaved edits): then it counts as unsaved until the next save.
+   */
+  load(text: string, file: FileState | null, dirty: boolean) {
+    this.editor.setText(text);
+    this.file = file;
+    this.savedVersion = dirty ? -1 : this.editor.versionId();
+    this.textChanged();
+  }
+
+  /** The sheet was written to `file`: nothing is unsaved now. */
+  markSaved(file: FileState) {
+    this.file = file;
+    this.savedVersion = this.editor.versionId();
+    this.textChanged();
+  }
+
+  /** Before saving an Assisted sheet: the greyed quotes become real text. False when there was no analysis (not connected). */
+  acceptCorrectionsForSave(): Promise<boolean> { return this.editor.acceptCorrectionsForSave(); }
+
+  private textChanged() {
+    const dirty = this.dirty;
+    if (dirty !== this.wasDirty) {
+      this.wasDirty = dirty;
+      this.ctx.changed(this); // the tab's unsaved marker
+    }
+    this.ctx.persist(this);
   }
 
   setTheme(dark: boolean) {
