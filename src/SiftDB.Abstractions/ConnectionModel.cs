@@ -65,3 +65,4 @@ public enum ReadOnlyEnforcement
 /// needed and not given), so the app can ask for it again instead of just showing an error.
 /// </summary>
 public sealed class ConnectionAuthenticationException(string message, Exception inner) : Exception(message, inner);
+

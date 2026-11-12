@@ -37,7 +37,8 @@ const TEMPLATE = `
       <button class="modeAssisted" aria-pressed="true" title="Assisted: write loosely. The quotes the database needs are added for you and shown greyed, and what runs is exactly what you see.">Assisted</button>
       <button class="modeStrict" aria-pressed="false" title="Strict: the text you write is the text that runs. Quoting problems are squiggles with quick fixes (Alt+Enter), and a statement with any is not run.">Strict</button>
     </div>
-    <span class="rochip" hidden title="This sheet's connection is read-only: the server refuses changes. To change data, connect the sheet to a writable connection."><span aria-hidden="true">🔒</span> Read-only</span>
+    <span class="autochip" hidden title="Auto-transaction: this sheet is always inside a transaction. Changes wait for Commit, and Rollback undoes them; a new transaction starts after either.">Auto-transaction</span>
+    <span class="rochip" hidden title="This sheet's connection is read-only: the server refuses changes. To change data, connect the sheet to a writable connection.">Read-only</span>
     <label><input class="fetchAll" type="checkbox" checked> fetch all</label>
     <button class="bench" disabled>Scroll benchmark</button>
   </div>
@@ -80,7 +81,7 @@ export class Sheet {
   draftChoice = 'string';
   /** The connection string typed for this sheet, for when the picker is on "Connection string…". */
   draftText = '';
-  readonly tx = { state: 'none' as TxState, startedAt: null as string | null, statements: 0, rowsChanged: 0 };
+  readonly tx = { state: 'none' as TxState, startedAt: null as string | null, statements: 0, rowsChanged: 0, automatic: false };
 
   private readonly editor: SqlEditor;
   private results: ResultView[] = [];
@@ -90,7 +91,7 @@ export class Sheet {
   private readonly el: {
     run: HTMLButtonElement; cancel: HTMLButtonElement; begin: HTMLButtonElement;
     modeAssisted: HTMLButtonElement; modeStrict: HTMLButtonElement;
-    fetchAll: HTMLInputElement; bench: HTMLButtonElement; roChip: HTMLElement;
+    fetchAll: HTMLInputElement; bench: HTMLButtonElement; roChip: HTMLElement; autoChip: HTMLElement;
     txBar: HTMLElement; txIcon: HTMLElement; txLabel: HTMLElement; txDetail: HTMLElement;
     txEnd: HTMLButtonElement; txCommit: HTMLButtonElement; txRollback: HTMLButtonElement;
     editor: HTMLElement; splitter: HTMLElement; msg: HTMLElement; msgIcon: HTMLElement; msgText: HTMLElement; tabs: HTMLElement; results: HTMLElement; empty: HTMLElement;
@@ -105,7 +106,7 @@ export class Sheet {
     const $ = <T extends HTMLElement = HTMLElement>(selector: string) => this.root.querySelector(selector) as T;
     this.el = {
       run: $('.run'), cancel: $('.cancel'), begin: $('.begin'), modeAssisted: $('.modeAssisted'), modeStrict: $('.modeStrict'),
-      fetchAll: $('.fetchAll'), bench: $('.bench'), roChip: $('.rochip'),
+      fetchAll: $('.fetchAll'), bench: $('.bench'), roChip: $('.rochip'), autoChip: $('.autochip'),
       txBar: $('.txbar'), txIcon: $('.txIcon'), txLabel: $('.txLabel'), txDetail: $('.txDetail'),
       txEnd: $('.txEnd'), txCommit: $('.txCommit'), txRollback: $('.txRollback'),
       editor: $('.editor'), splitter: $('.splitter'), msg: $('.msg'), msgIcon: $('.msgIcon'), msgText: $('.msgText'), tabs: $('.resulttabs'), results: $('.results'), empty: $('.empty'),
@@ -211,6 +212,7 @@ export class Sheet {
     this.target = target;
     this.readOnly = !!r.readOnly;
     this.el.roChip.hidden = !this.readOnly;
+    this.el.autoChip.hidden = !r.autoTransaction;
     this.ctx.registerConnection(this.connectionId, this);
     this.ctx.changed(this); // the tab shows the read-only lock
     this.updateButtons();
@@ -238,6 +240,7 @@ export class Sheet {
     this.target = null;
     this.readOnly = false;
     this.el.roChip.hidden = true;
+    this.el.autoChip.hidden = true;
     this.setTx('none', null, 0, 0);
     await this.ctx.bridge.request({ type: 'disconnect', connectionId: id });
     this.updateButtons();
@@ -407,12 +410,16 @@ export class Sheet {
   get txPending(): boolean { return this.tx.state === 'changed' || this.tx.state === 'failed'; }
 
   /** An engine "transaction" event for this sheet's session. */
-  onTransaction(e: { state: TxState; startedAt: string | null; statements: number; rowsChanged: number }) {
+  onTransaction(e: { state: TxState; startedAt: string | null; statements: number; rowsChanged: number; automatic?: boolean; autoReset?: boolean }) {
+    this.tx.automatic = !!e.automatic;
     this.setTx(e.state, e.startedAt ?? null, e.statements, e.rowsChanged);
+    // A statement failed in the automatic transaction while nothing had changed: it was rolled back and started again.
+    if (e.autoReset) this.setMessage('The statement failed. Nothing had changed, so the transaction was rolled back and a new one started.');
   }
 
   private setTx(state: TxState, startedAt: string | null, statements: number, rowsChanged: number) {
     Object.assign(this.tx, { state, startedAt, statements, rowsChanged });
+    if (state === 'none') this.tx.automatic = false;
     this.renderTx();
     this.ctx.changed(this);
   }
@@ -425,9 +432,11 @@ export class Sheet {
     if (s !== 'none') {
       el.txIcon.textContent = s === 'open' ? 'ⓘ' : s === 'changed' ? '✎' : '✖';
       el.txLabel.textContent = s === 'open' ? 'Transaction open' : s === 'changed' ? 'Changes pending' : 'Transaction aborted';
-      el.txEnd.hidden = s !== 'open';      // nothing changed: ending it is just a commit
+      // An automatic transaction with nothing in it: ending or rolling it back would only start another, so no buttons.
+      const idleAuto = s === 'open' && this.tx.automatic;
+      el.txEnd.hidden = s !== 'open' || idleAuto; // nothing changed: ending it is just a commit
       el.txCommit.hidden = s !== 'changed';
-      el.txRollback.hidden = false;        // the only way out of a failed transaction
+      el.txRollback.hidden = idleAuto;     // the only way out of a failed transaction
       this.updateTxDetail();
     }
     this.updateButtons();
@@ -442,6 +451,8 @@ export class Sheet {
     else if (t.state === 'changed') parts.push(`${plural(t.statements, 'statement')} · ${plural(t.rowsChanged, 'row')} changed`);
     else parts.push('an error aborted it: roll back to continue');
     if (t.startedAt) parts.push(`open ${elapsed(Date.now() - Date.parse(t.startedAt))}`);
+    // Say who started it: with auto-transaction, a plain UPDATE leaves a transaction open that the user never typed.
+    if (t.automatic) parts.push('started automatically');
     this.el.txDetail.textContent = parts.join(' · ');
   }
 
@@ -470,7 +481,14 @@ export class Sheet {
     const connected = this.connected;
     this.el.run.disabled = !connected || this.running !== null;
     this.el.cancel.disabled = this.running === null;
-    this.el.begin.disabled = !connected || this.tx.state !== 'none';
+    // Begin only means something on a writable session outside a transaction. When it is greyed, the tooltip says why.
+    const begin = this.el.begin;
+    begin.disabled = !connected || this.readOnly || this.tx.state !== 'none';
+    begin.title = !connected ? 'Connect first.'
+      : this.readOnly ? 'Not on a read-only connection: nothing can change, so there is nothing to commit or roll back.'
+      : this.tx.automatic ? 'Auto-transaction: this sheet is always inside a transaction.'
+      : this.tx.state !== 'none' ? 'A transaction is already open.'
+      : 'Begin a transaction. You can also just type BEGIN: the bar follows the server either way.';
     this.el.bench.disabled = !connected || !this.activeResult;
   }
 }

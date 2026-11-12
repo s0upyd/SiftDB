@@ -6,13 +6,16 @@ namespace SiftDB.Engine;
 /// <summary>A saved connection (design section 8): one database. Its password, if remembered, is kept in the secret store.</summary>
 /// <param name="Fields">The provider's fields, by key. Never holds a password.</param>
 /// <param name="RememberPassword">False: connecting asks for the password (once per app run).</param>
+/// <param name="AutoTransaction">Begin a transaction before the first statement that may change something (design
+/// section 7). Has no effect on a read-only connection.</param>
 public sealed record SavedConnection(
     string Id,
     string Name,
     string Provider,
     IReadOnlyDictionary<string, string> Fields,
     bool RememberPassword,
-    bool ReadOnly);
+    bool ReadOnly,
+    bool AutoTransaction = false);
 
 /// <summary>Where saved passwords live. Values are secrets: never log them or send them to the UI.</summary>
 public interface ISecretStore
@@ -148,7 +151,7 @@ public sealed class ConnectionStore
                 .ToList();
             foreach (var c in stored) if (c.Other is { Count: > 0 } other) _unknown[c.Id!] = other;
             _connections = stored
-                .Select(c => new SavedConnection(c.Id!, c.Name!, c.Provider!, c.Fields ?? new(), c.RememberPassword, c.ReadOnly))
+                .Select(c => new SavedConnection(c.Id!, c.Name!, c.Provider!, c.Fields ?? new(), c.RememberPassword, c.ReadOnly, c.AutoTransaction))
                 .ToList();
             _lastUsed = file.LastUsed;
             return _connections;
@@ -170,7 +173,7 @@ public sealed class ConnectionStore
             Connections = connections.Select(c => new StoredConnection
             {
                 Id = c.Id, Name = c.Name, Provider = c.Provider, Fields = new Dictionary<string, string>(c.Fields),
-                RememberPassword = c.RememberPassword, ReadOnly = c.ReadOnly,
+                RememberPassword = c.RememberPassword, ReadOnly = c.ReadOnly, AutoTransaction = c.AutoTransaction,
                 Other = _unknown.GetValueOrDefault(c.Id),
             }).ToList(),
         };
@@ -194,6 +197,7 @@ public sealed class ConnectionStore
         public Dictionary<string, string>? Fields { get; set; }
         public bool RememberPassword { get; set; }
         public bool ReadOnly { get; set; }
+        public bool AutoTransaction { get; set; }
 
         /// <summary>Settings a later version added keep their values when this version rewrites the file.</summary>
         [JsonExtensionData] public Dictionary<string, JsonElement>? Other { get; set; }

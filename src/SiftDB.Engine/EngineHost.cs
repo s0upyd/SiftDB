@@ -128,14 +128,17 @@ public sealed partial class EngineHost : IAsyncDisposable
     }
 
     /// <summary>Opens a session. <paramref name="savedId"/> is the saved connection it came from, or null for a pasted string.</summary>
-    private async Task<bool> ConnectAsync(int id, string provider, string connectionString, ConnectionOptions options, string? savedId)
+    private async Task<bool> ConnectAsync(int id, string provider, string connectionString, ConnectionOptions options, string? savedId,
+        bool autoTransaction = false)
     {
         if (!_providers.TryGetValue(provider, out var p)) { Error(id, $"No provider '{provider}'"); return false; }
         var conn = await p.OpenAsync(connectionString, options, CancellationToken.None);
         var connId = Interlocked.Increment(ref _nextConnection);
-        var state = new ConnectionState(connId, p, conn) { SavedId = savedId, ReadOnly = options.ReadOnly };
+        // Auto-transaction is for writable sessions: on a read-only one there is nothing to roll back.
+        var auto = autoTransaction && !options.ReadOnly;
+        var state = new ConnectionState(connId, p, conn) { SavedId = savedId, ReadOnly = options.ReadOnly, AutoTransaction = auto };
         _connections[connId] = state;
-        Event(new { type = "connected", replyTo = id, connectionId = connId, savedId, readOnly = options.ReadOnly });
+        Event(new { type = "connected", replyTo = id, connectionId = connId, savedId, readOnly = options.ReadOnly, autoTransaction = auto });
         await state.SessionLock.WaitAsync();
         try { await ObserveTransactionAsync(state, statement: false, rowsAffected: -1); }
         finally { state.SessionLock.Release(); }
@@ -230,6 +233,7 @@ public sealed partial class EngineHost : IAsyncDisposable
         {
             // The statement it replaced has wound down; if nobody drained it, free it now.
             if (state.Active is { } previous) _queries.TryRemove(previous.Id, out _);
+            if (await PrepareAutoTransactionAsync(state, sql) is { } refusal) { Error(id, refusal); return; }
             var sw = Stopwatch.StartNew();
             var cts = new CancellationTokenSource();
             state.Starting = cts; // until the database answers, this is the only handle on the statement: cancel and close use it
@@ -318,17 +322,41 @@ public sealed partial class EngineHost : IAsyncDisposable
     {
         try
         {
-            var snapshot = await state.Connection.Transactions.GetStateAsync(CancellationToken.None);
+            var monitor = state.Connection.Transactions;
+            var snapshot = await monitor.GetStateAsync(CancellationToken.None);
             var now = DateTimeOffset.UtcNow;
+
+            // Auto-transaction: a statement failed (or was cancelled) in the automatic transaction while nothing had changed
+            // in it. Nothing can be lost, so roll back rather than leave a red bar after a typo in a SELECT.
+            var autoReset = false;
+            if (statement && state.ResetIfItFails)
+            {
+                state.ResetIfItFails = false;
+                if (snapshot.State == TransactionState.Failed)
+                {
+                    await monitor.RollbackAsync(CancellationToken.None);
+                    snapshot = await monitor.GetStateAsync(CancellationToken.None);
+                    autoReset = true;
+                }
+            }
+
             if (statement) state.Tracker.StatementCompleted(snapshot, rowsAffected, now);
             else state.Tracker.Observed(snapshot, now);
+
+            // Auto-transaction keeps one open: when the session is outside a transaction (it just connected, or one was
+            // committed or rolled back, from the bar or typed), begin the next. The state still comes from the server.
+            if (state.AutoTransaction && snapshot.State == TransactionState.None)
+            {
+                await monitor.BeginAsync(CancellationToken.None);
+                state.Tracker.StartedAutomatically(await monitor.GetStateAsync(CancellationToken.None), DateTimeOffset.UtcNow);
+            }
 
             var t = state.Tracker;
             Event(new
             {
                 type = "transaction", connectionId = state.Id, state = t.State, startedAt = t.StartedAt,
                 statements = t.Statements, rowsChanged = t.RowsChanged,
-                canDetectWrites = state.Connection.Transactions.CanDetectWrites,
+                canDetectWrites = monitor.CanDetectWrites, automatic = t.Automatic, autoReset,
             });
         }
         catch (Exception ex)
@@ -366,6 +394,33 @@ public sealed partial class EngineHost : IAsyncDisposable
             Event(new { type = "error", queryId, message = ex.Message });
             _queries.TryRemove(queryId, out _);
         }
+    }
+
+    /// <summary>
+    /// Auto-transaction (design section 7), before a statement runs. The sheet is always inside a transaction, so:
+    /// a statement the server refuses inside one (VACUUM, CREATE DATABASE…) ends the automatic transaction first when
+    /// nothing has changed in it, and is refused while there are changes, so nothing is committed behind the user's back.
+    /// Returns why the statement must not run, or null. The caller holds the session lock.
+    /// </summary>
+    private async Task<string?> PrepareAutoTransactionAsync(ConnectionState state, string sql)
+    {
+        state.ResetIfItFails = false;
+        if (!state.AutoTransaction) return null;
+        var monitor = state.Connection.Transactions;
+        var current = (await monitor.GetStateAsync(CancellationToken.None)).State;
+        var unchangedAutomatic = current == TransactionState.Open && state.Tracker.Automatic;
+
+        if (state.Provider.CannotRunInTransaction(sql))
+        {
+            if (current == TransactionState.Failed) return "This statement cannot run inside a transaction. Roll back first.";
+            if (current == TransactionState.Changed)
+                return "This statement cannot run inside a transaction, and this one has changes. Commit or roll back first.";
+            if (unchangedAutomatic) await monitor.CommitAsync(CancellationToken.None); // nothing in it: ending it loses nothing
+            return null; // a new automatic transaction begins once the statement has run
+        }
+
+        state.ResetIfItFails = unchangedAutomatic;
+        return null;
     }
 
     /// <summary>Cancels whatever the session is doing: a statement still waiting for its first result, or one streaming rows.</summary>
@@ -406,5 +461,11 @@ public sealed partial class EngineHost : IAsyncDisposable
 
         /// <summary>Opened read-only: the server refuses writes, and statements that would switch that off are not sent.</summary>
         public bool ReadOnly { get; init; }
+
+        /// <summary>Keep a transaction open on this session, so every change waits for Commit (never on a read-only session).</summary>
+        public bool AutoTransaction { get; init; }
+
+        /// <summary>The running statement started in an automatic transaction with no changes: if it fails, roll back.</summary>
+        public bool ResetIfItFails { get; set; }
     }
 }

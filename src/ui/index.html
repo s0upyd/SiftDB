@@ -26,8 +26,14 @@
     select { color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
     #connPick { min-width: 220px; max-width: 420px; }
     /* Read-only shows the same way everywhere: a lock and words, never colour alone. */
-    .tab .lock { flex: none; font-size: 11px; }
-    .rochip { font-size: 12px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 10px; color: var(--fg); background: var(--bg); }
+    /* Read-only: a flat amber padlock on the tab and the tree root, a green chip on the sheet. One colour each, no shading. */
+    .lockicon { display: block; flex: none; }
+    .tab .lock { flex: none; display: flex; color: var(--tx-changed); }
+    .badge.ro { display: inline-flex; align-items: center; gap: 3px; color: var(--tx-changed); border-color: var(--tx-changed); }
+    /* Amber, so it stands out: on this sheet a change waits for Commit. */
+    .autochip { font-size: 12px; padding: 1px 8px; border: 1px solid var(--tx-changed); border-radius: 10px; color: var(--fg); background: var(--tx-changed-bg); font-weight: 600; }
+    .fcheck.off { opacity: 0.5; }
+    .rochip { font-size: 12px; padding: 1px 8px; border: 1px solid var(--tx-open); border-radius: 10px; color: var(--fg); background: var(--tx-open-bg); font-weight: 600; }
 
     /* Connection form and password prompt. */
     dialog.modal { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; padding: 0;

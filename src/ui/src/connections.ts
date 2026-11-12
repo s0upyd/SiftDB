@@ -28,6 +28,8 @@ export interface SavedConnection {
   fields: Record<string, string>;
   rememberPassword: boolean;
   readOnly: boolean;
+  /** Begin a transaction before the first change (ignored on a read-only connection). */
+  autoTransaction: boolean;
   /** A password is saved (never the password itself). */
   hasPassword: boolean;
 }
@@ -242,6 +244,25 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
     ? 'The server refuses any change on this connection. To change data, save a second, writable connection.'
     : 'SiftDB refuses statements that change data. To change data, save a second, writable connection.';
   const readOnly = check('Read-only', existing?.readOnly ?? false, readOnlyHelp());
+  const auto = check('Auto-transaction', existing?.autoTransaction ?? false,
+    'Sheets on this connection are always inside a transaction: one starts on connecting and after every Commit or Rollback. Changes wait for Commit, so a mistake (a missing WHERE) can still be rolled back.');
+  // On a read-only connection nothing can change, so there is nothing to roll back: auto-transaction is off there, and
+  // the box says so (unticked, not just greyed, which read as "on"). Unticking Read-only brings back what was chosen.
+  const autoHelp = auto.wrap.querySelector('.fhelp')!;
+  const autoHelpText = autoHelp.textContent!;
+  let autoWanted = auto.box.checked;
+  auto.box.addEventListener('change', () => { autoWanted = auto.box.checked; });
+  const syncAuto = () => {
+    const ro = readOnly.box.checked;
+    auto.box.disabled = ro;
+    auto.box.checked = ro ? false : autoWanted;
+    auto.wrap.classList.toggle('off', ro);
+    autoHelp.textContent = ro
+      ? 'Not on a read-only connection: the server refuses every change, so there is never anything to roll back.'
+      : autoHelpText;
+  };
+  readOnly.box.addEventListener('change', syncAuto);
+  syncAuto();
 
   // A new connection can switch type. Values the user typed carry over where the new type has the same field; anything
   // still at the old type's default takes the new type's default instead (a port, say).
@@ -273,7 +294,7 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
     for (const [key, c] of controls) values[key] = c.disabled ? '' : c.value.trim();
     return {
       id: existing?.id, name: name.value.trim(), provider: provider.id, fields: { ...values },
-      rememberPassword: remember.box.checked, readOnly: readOnly.box.checked,
+      rememberPassword: remember.box.checked, readOnly: readOnly.box.checked, autoTransaction: auto.box.checked,
     };
   };
   /** The password parts of a save or test: a typed one, else the pasted string's, else (absent) the saved one. */
@@ -316,7 +337,7 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
     row('Name', name, 'Sheet files refer to the connection by this name, so it must be unique.'),
     el('fieldset', {}, legend, serverFields, row('Password', passwordBox), remember.wrap),
     securitySet,
-    el('fieldset', {}, el('legend', { textContent: 'Safety' }), readOnly.wrap),
+    el('fieldset', {}, el('legend', { textContent: 'Safety' }), readOnly.wrap, auto.wrap),
     advanced,
     status,
     el('div', { className: 'factions' },

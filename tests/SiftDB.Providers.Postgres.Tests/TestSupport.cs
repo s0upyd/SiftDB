@@ -25,6 +25,7 @@ internal sealed class InMemoryProvider(DatabaseSchema schema) : IDatabaseProvide
     public ParsedConnection ParseConnectionString(string connectionString) => _pg.ParseConnectionString(connectionString);
     public ReadOnlyEnforcement ReadOnlyEnforcement => _pg.ReadOnlyEnforcement;
     public string? CheckReadOnly(string sql) => _pg.CheckReadOnly(sql);
+    public bool CannotRunInTransaction(string sql) => _pg.CannotRunInTransaction(sql);
     public Task<IProviderConnection> OpenAsync(string cs, ConnectionOptions options, CancellationToken ct) => Task.FromResult<IProviderConnection>(new Conn(schema));
 
     private sealed class Conn(DatabaseSchema schema) : IProviderConnection

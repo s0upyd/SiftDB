@@ -17,6 +17,19 @@ public sealed class TransactionTracker
 
     public long RowsChanged { get; private set; }
 
+    /// <summary>The app started this transaction itself (auto-transaction), not the user. Cleared when it ends.</summary>
+    public bool Automatic { get; private set; }
+
+    /// <summary>
+    /// Auto-transaction began a transaction (the session connected, or the last one ended). Every statement from here on
+    /// counts as one in it.
+    /// </summary>
+    public void StartedAutomatically(TransactionSnapshot observed, DateTimeOffset now)
+    {
+        Apply(observed, now);
+        Automatic = observed.State != TransactionState.None;
+    }
+
     /// <summary>A statement finished and the monitor was asked afterwards.</summary>
     /// <param name="rowsAffected">The statement's reported row count, or a negative number when it has none (a SELECT).</param>
     public void StatementCompleted(TransactionSnapshot observed, long rowsAffected, DateTimeOffset now)
@@ -39,6 +52,7 @@ public sealed class TransactionTracker
             StartedAt = null;
             Statements = 0;
             RowsChanged = 0;
+            Automatic = false;
             return;
         }
         // The server tells us when it began; if it cannot (a failed transaction), keep what we had, or "now".

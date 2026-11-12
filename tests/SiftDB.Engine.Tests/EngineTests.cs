@@ -21,6 +21,7 @@ public class EngineTests
         public ParsedConnection ParseConnectionString(string connectionString) => throw new NotSupportedException();
         public ReadOnlyEnforcement ReadOnlyEnforcement => ReadOnlyEnforcement.Client;
         public string? CheckReadOnly(string sql) => null;
+        public bool CannotRunInTransaction(string sql) => false;
         public ISqlParser Parser { get; } = new SemicolonParser();
         public IIdentifierPolicy Identifiers => throw new NotSupportedException();
 
@@ -228,6 +229,7 @@ public class EngineTests
         public ParsedConnection ParseConnectionString(string connectionString) => throw new NotSupportedException();
         public ReadOnlyEnforcement ReadOnlyEnforcement => ReadOnlyEnforcement.Client;
         public string? CheckReadOnly(string sql) => null;
+        public bool CannotRunInTransaction(string sql) => false;
         public ISqlParser Parser => throw new NotSupportedException();
         public IIdentifierPolicy Identifiers => throw new NotSupportedException();
 

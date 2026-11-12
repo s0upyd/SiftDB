@@ -1,4 +1,5 @@
 import type { DatabaseSchema, RelationInfo, RelationKind } from './bridge';
+import { lockIcon } from './icons';
 
 const KIND: Record<RelationKind, { letter: string; label: string }> = {
   table: { letter: 'T', label: 'Table' },
@@ -134,7 +135,12 @@ export class SchemaTree {
       const head = this.row(nKey, 0, nOpen, [this.text(root.label), this.dim(schema ? `${relCount}` : 'loading…')], 'Connection');
       head.classList.add('root');
       // The lock goes right after the name: the sidebar is often narrow, and it must not be the part that scrolls away.
-      if (root.readOnly) head.insertBefore(this.badge('🔒 read-only', 'Read-only connection: the server refuses changes'), head.children[2] ?? null);
+      if (root.readOnly) {
+        const ro = this.badge('read-only', 'Read-only connection: the server refuses changes');
+        ro.classList.add('ro');
+        ro.prepend(lockIcon());
+        head.insertBefore(ro, head.children[2] ?? null);
+      }
       if (root.detail) head.append(this.dim(root.detail));
       head.classList.toggle('current', root.current);
       frag.append(head, ...rows);

@@ -50,6 +50,16 @@ public sealed class ConnectionStoreTests : IDisposable
     }
 
     [Fact]
+    public void Auto_transaction_is_saved_and_off_unless_asked_for()
+    {
+        var store = NewStore();
+        var off = store.Save(Conn("off"), null);
+        var on = store.Save(Conn("on") with { AutoTransaction = true }, null);
+        Assert.False(NewStore().Get(off.Id)!.AutoTransaction);
+        Assert.True(NewStore().Get(on.Id)!.AutoTransaction);
+    }
+
+    [Fact]
     public void Names_are_unique_ignoring_case_but_renaming_itself_is_fine()
     {
         var store = NewStore();
@@ -139,14 +149,14 @@ public sealed class ConnectionStoreTests : IDisposable
     public void Settings_a_later_version_added_survive_a_rewrite()
     {
         File.WriteAllText(FilePath, """
-            {"version":1,"connections":[{"id":"a1","name":"dev","provider":"postgres","fields":{"host":"h"},"autoTransaction":true}]}
+            {"version":1,"connections":[{"id":"a1","name":"dev","provider":"postgres","fields":{"host":"h"},"colour":"red"}]}
             """);
         var store = NewStore();
         store.Save(store.Get("a1")! with { Name = "dev2" }, null);
         using var doc = JsonDocument.Parse(File.ReadAllText(FilePath));
         var c = doc.RootElement.GetProperty("connections")[0];
         Assert.Equal("dev2", c.GetProperty("name").GetString());
-        Assert.True(c.GetProperty("autoTransaction").GetBoolean());
+        Assert.Equal("red", c.GetProperty("colour").GetString());
     }
 
     [Fact]

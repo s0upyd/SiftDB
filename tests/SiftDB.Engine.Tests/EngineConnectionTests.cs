@@ -37,6 +37,8 @@ public sealed class EngineConnectionTests : IAsyncLifetime
 
         public string? CheckReadOnly(string sql) => sql.Contains("UNLOCK") ? "would switch read-only off" : null;
 
+        public bool CannotRunInTransaction(string sql) => false;
+
         public Task<IProviderConnection> OpenAsync(string cs, ConnectionOptions options, CancellationToken ct)
         {
             Opened.Enqueue((cs, options));

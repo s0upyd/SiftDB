@@ -42,7 +42,7 @@ public sealed partial class EngineHost
         try
         {
             var cs = p.BuildConnectionString(saved.Fields, password);
-            if (!await ConnectAsync(id, saved.Provider, cs, new ConnectionOptions(saved.ReadOnly), savedId)) return;
+            if (!await ConnectAsync(id, saved.Provider, cs, new ConnectionOptions(saved.ReadOnly), savedId, saved.AutoTransaction)) return;
         }
         catch (ConnectionAuthenticationException ex)
         {
@@ -67,7 +67,7 @@ public sealed partial class EngineHost
             connections = store.List().Select(c => new
             {
                 id = c.Id, name = c.Name, provider = c.Provider, fields = c.Fields, rememberPassword = c.RememberPassword,
-                readOnly = c.ReadOnly, hasPassword = c.RememberPassword && store.HasPassword(c.Id),
+                readOnly = c.ReadOnly, autoTransaction = c.AutoTransaction, hasPassword = c.RememberPassword && store.HasPassword(c.Id),
             }),
             lastUsed = store.LastUsed,
         });
@@ -148,7 +148,8 @@ public sealed partial class EngineHost
             OptionalString(c, "provider") ?? "",
             fields,
             c.TryGetProperty("rememberPassword", out var r) && r.ValueKind == JsonValueKind.True,
-            c.TryGetProperty("readOnly", out var ro) && ro.ValueKind == JsonValueKind.True);
+            c.TryGetProperty("readOnly", out var ro) && ro.ValueKind == JsonValueKind.True,
+            c.TryGetProperty("autoTransaction", out var at) && at.ValueKind == JsonValueKind.True);
     }
 
     private static string? OptionalString(JsonElement e, string name) =>

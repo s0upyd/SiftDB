@@ -1,5 +1,6 @@
 import { BatchMeta, Bridge, BridgeEvent, DatabaseSchema, connectBridge } from './bridge';
 import { ConnectionCatalog, EditResult, askPassword, editConnection } from './connections';
+import { lockIcon } from './icons';
 import { ResultView } from './results';
 import { Sheet, SheetContext, Target, TxState, targetKey } from './sheet';
 import { revealSelectedTab, scrollTabsWithWheel } from './tabs';
@@ -117,7 +118,7 @@ function renderTabs() {
     // A lock on a read-only sheet: a refused write is then never a mystery, whichever tab you are looking at.
     const lock = document.createElement('span');
     lock.className = 'lock';
-    lock.textContent = '🔒';
+    lock.append(lockIcon());
     lock.hidden = !sheet.readOnly;
     lock.title = 'Read-only connection: the server refuses changes';
     lock.setAttribute('role', 'img');
@@ -211,7 +212,7 @@ function draftTarget(sheet: Sheet): Target | null {
 function renderPicker() {
   const option = (value: string, text: string) => Object.assign(document.createElement('option'), { value, textContent: text });
   pickEl.replaceChildren(
-    ...catalog.saved.map((c) => option(`saved:${c.id}`, `${c.readOnly ? '🔒 ' : ''}${c.name}${c.readOnly ? ' (read-only)' : ''} — ${catalog.describe(c)}`)),
+    ...catalog.saved.map((c) => option(`saved:${c.id}`, `${c.name}${c.readOnly ? ' (read-only)' : ''} — ${catalog.describe(c)}`)),
     option(STRING_CHOICE, 'Connection string…'));
 
   const sheet = active;
@@ -230,7 +231,7 @@ function renderPicker() {
   newConnBtn.disabled = !!catalog.error || catalog.providers.length === 0;
   const picked = id ? catalog.byId(id) : null;
   pickEl.title = picked
-    ? `${picked.name}: ${catalog.provider(picked.provider)?.displayName ?? picked.provider}, ${catalog.describe(picked)}${picked.readOnly ? '. Read-only: the server refuses changes.' : ''}`
+    ? `${picked.name}: ${catalog.provider(picked.provider)?.displayName ?? picked.provider}, ${catalog.describe(picked)}${picked.readOnly ? '. Read-only: the server refuses changes.' : picked.autoTransaction ? '. Auto-transaction: always inside a transaction; changes wait for Commit.' : ''}`
     : 'Type a connection string, or save a connection to pick it here';
 }
 

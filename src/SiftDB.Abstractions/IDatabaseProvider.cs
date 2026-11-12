@@ -4,7 +4,7 @@ namespace SiftDB.Abstractions;
 
 public static class ProviderContract
 {
-    /// <summary>Current version of the provider contract. v2 added connection fields and read-only sessions.</summary>
+    /// <summary>Current version of the provider contract. v2 added connection fields, read-only sessions and CannotRunInTransaction.</summary>
     public const int CurrentVersion = 2;
 }
 
@@ -41,6 +41,14 @@ public interface IDatabaseProvider
     /// a function body is not seen.
     /// </summary>
     string? CheckReadOnly(string sql);
+
+    /// <summary>
+    /// True when <paramref name="sql"/> (one or more statements) refuses to run inside a transaction block (Postgres:
+    /// VACUUM, CREATE DATABASE, CREATE INDEX CONCURRENTLY…). Auto-transaction keeps a transaction open, so it ends an
+    /// unchanged one before such a statement, and refuses the statement while there are changes. SQL that does not
+    /// parse is false: the server reports it.
+    /// </summary>
+    bool CannotRunInTransaction(string sql);
 
     Task<IProviderConnection> OpenAsync(string connectionString, ConnectionOptions options, CancellationToken ct);
 }
