@@ -1,5 +1,6 @@
 import { BatchMeta, Bridge, BridgeEvent, Column } from './bridge';
 import { Grid, GridTheme, darkTheme, lightTheme } from './grid';
+import { spinner } from './icons';
 import { ResultStore, decodeBatch } from './store';
 
 /** Batches requested ahead of the ones received, so the engine never waits on the page. */
@@ -31,7 +32,8 @@ export function parseError(message: string): { headline: string; extra: string }
 
 export type ResultState = 'idle' | 'running' | 'complete' | 'cancelled' | 'error';
 
-const ICON: Record<ResultState, string> = { idle: '', running: '⟳', complete: '✓', cancelled: '⊘', error: '✖' };
+/** Running has no character: it is the shared spinner (icons.ts). */
+const ICON: Record<ResultState, string> = { idle: '', running: '', complete: '✓', cancelled: '⊘', error: '✖' };
 
 /** Whether the timing details are open. Shared, so opening them on one result keeps them open on the next. */
 let detailsOpen = false;
@@ -285,7 +287,8 @@ export class ResultView {
     this.statusEl.hidden = this.state === 'idle';
     // A failure interrupts: announce it. Everything else is polite.
     this.statusEl.setAttribute('role', this.state === 'error' ? 'alert' : 'status');
-    this.iconEl.textContent = ICON[this.state];
+    if (this.state === 'running') { if (!this.iconEl.querySelector('.spinner')) this.iconEl.replaceChildren(spinner()); }
+    else this.iconEl.textContent = ICON[this.state];
     if (this.headlineEl.textContent !== headline) this.headlineEl.textContent = headline;
     if (this.extraEl.textContent !== extra) this.extraEl.textContent = extra;
 

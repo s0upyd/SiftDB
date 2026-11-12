@@ -26,10 +26,10 @@
     select { color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
     #connPick { min-width: 220px; max-width: 420px; }
     /* Read-only shows the same way everywhere: a lock and words, never colour alone. */
-    /* Read-only: a flat amber padlock on the tab and the tree root, a green chip on the sheet. One colour each, no shading. */
+    /* Read-only: a flat amber padlock on the tab; green chips on the sheet and the tree root. One colour each, no shading. */
     .lockicon { display: block; flex: none; }
     .tab .lock { flex: none; display: flex; color: var(--tx-changed); }
-    .badge.ro { display: inline-flex; align-items: center; gap: 3px; color: var(--tx-changed); border-color: var(--tx-changed); }
+    .badge.ro { display: inline-flex; align-items: center; gap: 3px; color: var(--fg); border-color: var(--tx-open); background: var(--tx-open-bg); }
     /* Amber, so it stands out: on this sheet a change waits for Commit. */
     .autochip { font-size: 12px; padding: 1px 8px; border: 1px solid var(--tx-changed); border-radius: 10px; color: var(--fg); background: var(--tx-changed-bg); font-weight: 600; }
     .fcheck.off { opacity: 0.5; }
@@ -102,6 +102,15 @@
     .tab[aria-selected="true"] { background: var(--bg); color: var(--fg); font-weight: 600; margin-bottom: -1px; padding-bottom: 6px; }
     .tab .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     /* Unsaved edits: a dot after the name, in the text colour (no extra colour to learn). */
+    /* The one "running" mark (sheet tabs, result tabs, the result status bar): a small ring in one colour. */
+    .spinner { display: inline-block; flex: none; width: 10px; height: 10px; border: 2px solid var(--accent); border-right-color: transparent;
+               border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; box-sizing: border-box; }
+    .tab .running { flex: none; display: flex; }
+    /* A long statement finished while you were on another sheet: its outcome, in its colour, until you look. */
+    .tabdone { flex: none; font-size: 11px; font-weight: 700; line-height: 1; }
+    .tabdone.complete { color: var(--tx-open); }
+    .tabdone.error { color: var(--tx-failed); }
+    .tabdone.cancelled { color: var(--tx-changed); }
     .tab .unsaved { flex: none; font-size: 10px; color: var(--fg); margin-left: -2px; }
     .tab .close, .rtab .close, .rtab .pin { border: none; background: transparent; padding: 0 5px; line-height: 1; color: var(--dim); border-radius: 3px; }
     .tab .close { font-size: 16px; }
@@ -190,7 +199,7 @@
     .details { margin: 0; padding: 5px 10px 7px 35px; border-top: 1px solid var(--line); color: var(--dim);
                font: 12px Consolas, monospace; white-space: pre-wrap; }
     .status[data-state="running"] { border-left-color: var(--accent); }
-    .status[data-state="running"] .statusIcon { color: var(--accent); display: inline-block; animation: spin 1s linear infinite; }
+    .status[data-state="running"] .statusIcon { display: flex; align-items: center; justify-content: center; height: 20px; }
     .status[data-state="complete"] { border-left-color: var(--tx-open); }
     .status[data-state="complete"] .statusIcon { color: var(--tx-open); }
     .status[data-state="cancelled"] { border-left-color: var(--tx-changed); }
@@ -199,13 +208,13 @@
     .status[data-state="error"] .extra, .status[data-state="error"] .details { color: var(--fg); opacity: 0.75; }
     .status[data-state="error"] .details { border-top-color: var(--tx-failed); }
     @keyframes spin { to { transform: rotate(360deg); } }
-    @media (prefers-reduced-motion: reduce) { .status[data-state="running"] .statusIcon, .rtab[data-state="running"] .mark { animation: none; } }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 
     /* The same cues on a result's tab, so a failure shows with several tabs open. */
     .rtab .mark { flex: none; font-size: 11px; margin-right: 5px; }
     .rtab[data-state="error"] { border-top: 2px solid var(--tx-failed); }
     .rtab[data-state="error"] .mark { color: var(--tx-failed); }
-    .rtab[data-state="running"] .mark { color: var(--accent); display: inline-block; animation: spin 1s linear infinite; }
+    .rtab[data-state="running"] .mark { display: inline-flex; align-items: center; }
     .grid { flex: 1; min-height: 0; }
   </style>
 </head>

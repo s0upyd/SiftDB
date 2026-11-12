@@ -1,9 +1,16 @@
 import type { Bridge, DatabaseSchema } from './bridge';
 import { CompletionResponse, QueryMode, RunTarget, SheetAnalysis, SqlEditor } from './editor';
 import { ResultView, ResultsContext, plural } from './results';
+import { spinner } from './icons';
 import { revealSelectedTab, scrollTabsWithWheel } from './tabs';
 
 export type TxState = 'none' | 'open' | 'changed' | 'failed';
+
+/** A statement that finished while its sheet was not on screen: shown on the tab until the sheet is looked at. */
+export interface FinishedRun { outcome: 'complete' | 'error' | 'cancelled'; ms: number }
+
+/** Shorter runs never mark the tab: you would hardly have switched away, and a marker for every query is noise. */
+const FINISHED_MARK_MIN_MS = 10_000;
 
 /** What a sheet connects to: a saved connection, or a pasted connection string (which never reaches the DOM). */
 export type Target = { kind: 'saved'; id: string } | { kind: 'string'; cs: string };
@@ -92,6 +99,11 @@ export class Sheet {
   draftText = '';
   readonly tx = { state: 'none' as TxState, startedAt: null as string | null, statements: 0, rowsChanged: 0, automatic: false };
 
+  /** Set when a long statement finished while this sheet was hidden; cleared when the sheet is shown. */
+  finished: FinishedRun | null = null;
+  private runStartedAt = 0;
+  private visible = false;
+
   private readonly editor: SqlEditor;
   private results: ResultView[] = [];
   private activeResult: ResultView | null = null;
@@ -137,9 +149,16 @@ export class Sheet {
       registerQuery: (id, v) => ctx.registerQuery(id, v),
       unregisterQuery: (id) => ctx.unregisterQuery(id),
       onFinished: (v) => {
-        if (this.running === v) this.running = null;
+        if (this.running !== v) { this.renderResultTabs(); return; }
+        this.running = null;
+        const ms = performance.now() - this.runStartedAt;
+        // Mark the tab only if nobody was watching: on screen, the result itself says it finished.
+        if (!this.visible && ms >= FINISHED_MARK_MIN_MS && (v.state === 'complete' || v.state === 'error' || v.state === 'cancelled')) {
+          this.finished = { outcome: v.state, ms };
+        }
         this.updateButtons();
         this.renderResultTabs(); // a failed statement is marked on its tab
+        this.ctx.changed(this); // the sheet's tab: the spinner goes, a finished mark may come
       },
     };
 
@@ -204,6 +223,15 @@ export class Sheet {
   // ---- the session ----------------------------------------------------------------------------------------------
 
   get connected(): boolean { return this.connectionId !== 0; }
+
+  /** A statement is running on this sheet (its tab shows a spinner). */
+  get isRunning(): boolean { return this.running !== null; }
+
+  /** Words for a finished mark's tooltip and screen readers, e.g. "Finished after 2 min 05 s". */
+  static describeFinished(f: FinishedRun): string {
+    const took = elapsed(f.ms);
+    return f.outcome === 'complete' ? `Finished after ${took}` : f.outcome === 'error' ? `Failed after ${took}` : `Cancelled after ${took}`;
+  }
 
   /**
    * Opens this sheet's own session. `wantSchema` is true for the one sheet whose schema fills the sidebar. A saved
@@ -280,7 +308,9 @@ export class Sheet {
 
   setActive(active: boolean) {
     this.root.hidden = !active;
+    this.visible = active;
     if (!active) return;
+    this.finished = null; // seen now (the caller redraws the tabs)
     this.editor.layout();
     this.activeResult?.grid.invalidate();
   }
@@ -388,8 +418,11 @@ export class Sheet {
     this.setMessage('');
     const view = this.viewForRun();
     this.running = view;
+    this.runStartedAt = performance.now();
+    this.finished = null;
     this.updateButtons();
     this.renderResultTabs();
+    this.ctx.changed(this); // the sheet's tab shows a spinner while it runs
     await view.run(this.connectionId, sql);
     this.renderResultTabs(); // its label now names this statement
   }
@@ -445,8 +478,9 @@ export class Sheet {
       const mark = document.createElement('span');
       mark.className = 'mark';
       mark.setAttribute('aria-hidden', 'true');
-      mark.textContent = view.state === 'error' ? '✖' : view.state === 'running' ? '⟳' : '';
-      mark.hidden = mark.textContent === '';
+      if (view.state === 'running') mark.append(spinner());
+      else mark.textContent = view.state === 'error' ? '✖' : '';
+      mark.hidden = view.state !== 'running' && view.state !== 'error';
 
       const label = document.createElement('span');
       label.className = 'label';

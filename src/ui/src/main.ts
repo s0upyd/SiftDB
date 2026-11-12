@@ -1,7 +1,7 @@
 import { BatchMeta, Bridge, BridgeEvent, DatabaseSchema, connectBridge } from './bridge';
 import { ConnectionCatalog, EditResult, askPassword, editConnection } from './connections';
 import { askSaveChanges } from './dialogs';
-import { lockIcon } from './icons';
+import { lockIcon, spinner } from './icons';
 import { ResultView } from './results';
 import { FileState, Sheet, SheetContext, Target, TxState, targetKey } from './sheet';
 import type { QueryMode } from './editor';
@@ -145,7 +145,24 @@ function renderTabs() {
     close.setAttribute('aria-label', `Close ${sheet.title}`);
     close.onclick = (e) => { e.stopPropagation(); void closeSheet(sheet); };
 
-    tab.append(dot, lock, title, unsaved, close);
+    // While a statement runs: a small spinner, so you can work on another sheet and still see it going. When a long one
+    // finished while you were elsewhere: its outcome, until you look at the sheet.
+    const run = document.createElement('span');
+    run.setAttribute('role', 'img');
+    if (sheet.isRunning) {
+      run.className = 'running';
+      run.append(spinner());
+      run.title = 'Running';
+      run.setAttribute('aria-label', 'running');
+    } else if (sheet.finished) {
+      const f = sheet.finished;
+      run.className = `tabdone ${f.outcome}`;
+      run.textContent = f.outcome === 'complete' ? '✓' : f.outcome === 'error' ? '✖' : '■';
+      run.title = Sheet.describeFinished(f);
+      run.setAttribute('aria-label', run.title.toLowerCase());
+    } else run.hidden = true;
+
+    tab.append(dot, lock, run, title, unsaved, close);
     return tab;
   }));
   revealSelectedTab(tabsEl);

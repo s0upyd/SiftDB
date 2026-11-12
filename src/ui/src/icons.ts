@@ -3,6 +3,17 @@
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+/**
+ * The one "running" mark, used on sheet tabs, result tabs and the result status bar: a ring in one colour, turning.
+ * Still when the system asks for reduced motion (see .spinner in index.html).
+ */
+export function spinner(): HTMLSpanElement {
+  const s = document.createElement('span');
+  s.className = 'spinner';
+  s.setAttribute('aria-hidden', 'true');
+  return s;
+}
+
 /** A padlock: a shackle and a filled body. */
 export function lockIcon(): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
