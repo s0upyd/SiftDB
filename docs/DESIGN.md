@@ -225,6 +225,16 @@ There is no "production" flag or environment concept, and no per-connection defa
 
 The read-only lock that used to be here became the read-only connection setting (§8).
 
+### Proposed: result styling
+Make results easier to read by colouring values, the way users are used to seeing their data.
+- **Rules** are a condition plus a style. Conditions: NULL, equals, one of a list, a number range, negative, a pattern. Styles: background, text colour, bold.
+- **Where a rule applies:** everywhere, or to columns whose **name matches** a simple wildcard pattern (`status`, `is_*`, `*_flag`; case-insensitive). Later, by table and column (`orders.status`), once the grid knows which table each result column came from (the server reports it).
+- **Colours:** a user rule **must set both** a text and a background colour (`#rgb` / `#rrggbb`), so the cell carries its own background and reads the same in the light and dark themes. The settings editor shows a **live example** of each rule, and warns when the two colours are hard to read together. Built-in presets use the app's flat green, amber and red, with their own light and dark variants.
+- **Built-in presets**, each switched on or off in the styling settings: a NULL background tint; booleans (true/1/Y/yes green, false/0/N/no amber) for boolean and bit columns; negative numbers red.
+- **Which rule wins:** user rules are an ordered list, checked from the top; the **first rule that matches styles the cell** (the same as applying them bottom to top, the top one winning). Since a user rule sets both colours, the winner decides the whole look, nothing is mixed. Built-in presets apply only when **no user rule matches**, so any user rule overrides them. The editor reorders rules (drag, or move up and down).
+- Rules are matched to columns once per result, so drawing a cell stays one lookup and scrolling is unaffected. The value always stays readable as text, so colour is never the only signal.
+- To settle: where rules are stored (likely the first real use of **user settings**), and the editor (a rules list in a form, or a JSON file at first).
+
 ### Later
 - **Watch open files** (low priority): notice when another program (git pull, another editor) changes an open `.sql` file; reload it when the sheet has no unsaved edits, ask when it has. Until then, saving overwrites the file as it is.
 - **User settings**, a feature of its own. First known setting: the preferred mode for new sheets (§3).
