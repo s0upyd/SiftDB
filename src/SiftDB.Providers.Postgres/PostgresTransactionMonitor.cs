@@ -59,30 +59,53 @@ internal sealed class PostgresTransactionMonitor(NpgsqlConnection conn, Postgres
     /// A failed statement left the transaction aborted: roll back to the guard, which undoes the statement and nothing
     /// before it. Otherwise just release the guard. The protocol status decides, not <paramref name="failed"/>: a
     /// cancelled SELECT that streamed fine has nothing to undo.
+    ///
+    /// The SQL is not sent here but held, and goes out at the front of the next command, which is always the state check
+    /// that follows a statement: one round trip instead of two. Every command this monitor sends flushes it first, so
+    /// nothing (a Commit, say) can ever run with the guard still in place.
     /// </summary>
-    public async Task<bool> AfterStatementAsync(bool failed, CancellationToken ct)
+    public Task<bool> AfterStatementAsync(bool failed, CancellationToken ct)
     {
         switch (ReadProtocolStatus())
         {
             case "InFailedTransactionBlock":
-                await Run($"rollback to savepoint {Guard}; release savepoint {Guard}", ct);
-                return true;
+                _pending = $"rollback to savepoint {Guard}; release savepoint {Guard}";
+                return Task.FromResult(true);
             case "InTransactionBlock":
-                await Run($"release savepoint {Guard}", ct);
-                return false;
+                _pending = $"release savepoint {Guard}";
+                return Task.FromResult(false);
             default:
-                return false; // the transaction is over (a function cannot end it, but be safe): no guard left to release
+                return Task.FromResult(false); // the transaction is over (a function cannot end it, but be safe): no guard left
         }
+    }
+
+    /// <summary>The end of the last statement's guard, not sent yet: it rides along with the next command.</summary>
+    private string? _pending;
+
+    /// <summary>Hands over the held guard SQL, if any, to go in front of a command.</summary>
+    private string TakePending(string sql)
+    {
+        var pending = _pending;
+        _pending = null;
+        return pending is null ? sql : $"{pending}; {sql}";
     }
 
     private async Task Run(string sql, CancellationToken ct)
     {
-        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var cmd = new NpgsqlCommand(TakePending(sql), conn);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
     public async Task<TransactionSnapshot> GetStateAsync(CancellationToken ct)
     {
+        // A held guard ending changes the state (a rollback to the guard leaves the transaction open again), so it goes first.
+        if (_pending is not null)
+        {
+            // Sent with the probe once the probe is known to work here: if the probe failed in the same command, the
+            // failure would abort the transaction just rescued.
+            if (_xidFunctionKnown) return await ProbeAsync(ct);
+            await Run("select 1", ct);
+        }
         switch (ReadProtocolStatus())
         {
             case "Idle": return new TransactionSnapshot(TransactionState.None, null);
@@ -105,13 +128,18 @@ internal sealed class PostgresTransactionMonitor(NpgsqlConnection conn, Postgres
         return StatusProperty!.GetValue(connector)?.ToString() ?? "";
     }
 
+    /// <summary>Set once a probe has worked: from then on a held guard ending can share its command.</summary>
+    private bool _xidFunctionKnown;
+
     private async Task<TransactionSnapshot> ProbeAsync(CancellationToken ct)
     {
         try
         {
-            await using var cmd = new NpgsqlCommand($"select {_xidFunction} is not null, transaction_timestamp()", conn);
+            await using var cmd = new NpgsqlCommand(TakePending($"select {_xidFunction} is not null, transaction_timestamp()"), conn);
             await using var r = await cmd.ExecuteReaderAsync(ct);
+            while (r.FieldCount == 0 && await r.NextResultAsync(ct)) { } // past the guard ending's results, to the probe's
             await r.ReadAsync(ct);
+            _xidFunctionKnown = true;
             return new TransactionSnapshot(
                 r.GetBoolean(0) ? TransactionState.Changed : TransactionState.Open,
                 new DateTimeOffset(r.GetFieldValue<DateTime>(1).ToUniversalTime()));

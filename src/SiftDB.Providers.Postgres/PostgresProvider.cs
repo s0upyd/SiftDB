@@ -34,6 +34,9 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     private readonly PostgresSettings _settings = new();
 
+    /// <summary>Postgres refuses <c>SET a.col</c> and <c>boolean = 1</c>, with messages that do not say why.</summary>
+    public DialectRules Dialect { get; } = new(QualifiedSetColumns: false, NumbersAsBooleans: false);
+
     public IReadOnlyList<ProviderSetting> Settings => PostgresSettings.All;
 
     public void ApplySettings(IReadOnlyDictionary<string, string> values) => _settings.Apply(values);

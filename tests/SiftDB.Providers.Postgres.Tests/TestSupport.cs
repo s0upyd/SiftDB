@@ -18,6 +18,7 @@ internal sealed class InMemoryProvider(DatabaseSchema schema) : IDatabaseProvide
     public string Id => "postgres";
     public int ContractVersion => _pg.ContractVersion;
     public ISqlParser Parser => _pg.Parser;
+    public DialectRules Dialect => _pg.Dialect;
     public IIdentifierPolicy Identifiers => _pg.Identifiers;
     public string DisplayName => _pg.DisplayName;
     public IReadOnlyList<ConnectionField> ConnectionFields => _pg.ConnectionFields;

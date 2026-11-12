@@ -182,7 +182,7 @@ public sealed partial class EngineHost : IAsyncDisposable
 
         // Identifier problems are worked out against the cached schema; with none loaded there is nothing to say.
         var resolved = state.Schema is { } schema
-            ? IdentifierResolver.Resolve(schema, parser, state.Provider.Identifiers, text)
+            ? IdentifierResolver.Resolve(schema, parser, state.Provider.Identifiers, text, state.Provider.Dialect, state.Provider.GenericTypeOf)
             : ResolverResult.Empty;
 
         // Two statements on adjacent lines with no ';' between them read as one, which fails. Say that, rather than the

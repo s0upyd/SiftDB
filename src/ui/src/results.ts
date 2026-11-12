@@ -70,11 +70,17 @@ export class ResultView {
   queryId = 0;
   /** Where the statement stands. A failed one is shown red in the bar and marked on its tab. */
   state: ResultState = 'idle';
+  /**
+   * Shown after a later run on the same sheet did not happen (blocked, or not connected): the bar then says it is from an
+   * earlier run, so an old red error cannot be read as the outcome of what was just attempted. A new run clears it.
+   */
+  stale = false;
   /** The headline of a failure, for the tab's tooltip. */
   errorHeadline = '';
 
   private readonly statusEl = document.createElement('div');
   private readonly iconEl = document.createElement('span');
+  private readonly staleEl = document.createElement('span');
   private readonly headlineEl = document.createElement('span');
   private readonly extraEl = document.createElement('span');
   private readonly toggleEl = document.createElement('button');
@@ -102,7 +108,11 @@ export class ResultView {
     text.className = 'statusText';
     this.headlineEl.className = 'headline';
     this.extraEl.className = 'extra';
-    text.append(this.headlineEl, this.extraEl);
+    this.staleEl.className = 'stalechip';
+    this.staleEl.textContent = 'Earlier run';
+    this.staleEl.title = 'This result is from an earlier run. The last attempt on this sheet did not run (see the message above).';
+    this.staleEl.hidden = true;
+    text.append(this.staleEl, this.headlineEl, this.extraEl);
     this.toggleEl.className = 'statusToggle';
     this.toggleEl.textContent = 'Details';
     this.toggleEl.title = 'Show the timings: first batch, first paint, engine split, drawing';
@@ -166,6 +176,7 @@ export class ResultView {
     this.errorExtra = '';
     this.outstanding = 0;
     this.done = false;
+    this.stale = false;
     this.state = 'running';
     this.grid.setStore(this.store, []);
     this.refreshStats();
@@ -285,8 +296,10 @@ export class ResultView {
     const { headline, extra } = this.describe();
     this.statusEl.dataset.state = this.state;
     this.statusEl.hidden = this.state === 'idle';
-    // A failure interrupts: announce it. Everything else is polite.
-    this.statusEl.setAttribute('role', this.state === 'error' ? 'alert' : 'status');
+    this.statusEl.classList.toggle('stale', this.stale);
+    this.staleEl.hidden = !this.stale;
+    // A failure interrupts: announce it (once: not again when it becomes an earlier run's). Everything else is polite.
+    this.statusEl.setAttribute('role', this.state === 'error' && !this.stale ? 'alert' : 'status');
     if (this.state === 'running') { if (!this.iconEl.querySelector('.spinner')) this.iconEl.replaceChildren(spinner()); }
     else this.iconEl.textContent = ICON[this.state];
     if (this.headlineEl.textContent !== headline) this.headlineEl.textContent = headline;
@@ -307,6 +320,13 @@ export class ResultView {
       ` · engine first/total ${ms(m.engineFirst)}/${ms(m.engineTotal)}\n` +
       (m.engineSplit ? `engine split: ${m.engineSplit}\n` : '') +
       `draw avg ${d.avg.toFixed(2)} ms, max ${d.max.toFixed(1)} ms`;
+  }
+
+  /** A later attempt on the sheet did not run: say this result is from before it. Nothing to say for an empty tab or a running one. */
+  markStale() {
+    if (this.state === 'idle' || this.state === 'running' || this.stale) return;
+    this.stale = true;
+    this.refreshStats();
   }
 
   dispose() {

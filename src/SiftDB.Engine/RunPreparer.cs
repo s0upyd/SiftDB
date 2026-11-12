@@ -37,14 +37,15 @@ public static class RunPreparer
             var blocking = issues.Where(i => i.Code != IssueCode.UnknownColumn).ToList();
             var count = corrections.Count + blocking.Count;
             if (count == 0) return new PreparedRun(raw, null);
-            var first = corrections.Count > 0 ? corrections[0].Message : blocking[0].Message;
+            var first = (corrections.Count > 0 ? corrections[0].Message : blocking[0].Message).TrimEnd('.'); // the sentence below adds its own
             return new PreparedRun(raw,
                 $"{count} identifier problem{(count == 1 ? "" : "s")} to fix first. {first}. Use the quick fixes, or switch to Assisted mode.");
         }
 
-        // Assisted: nothing is filled in for an ambiguity, so it has to be settled before the query runs.
-        var ambiguous = issues.FirstOrDefault(i => i.Code == IssueCode.Ambiguous);
-        if (ambiguous is not null) return new PreparedRun(raw, ambiguous.Message);
+        // Assisted: nothing is filled in for an ambiguity, so it has to be settled before the query runs. A qualified SET
+        // column is certain to fail, with a server message that does not say why, so it is stopped here with one that does.
+        var stopper = issues.FirstOrDefault(i => i.Code is IssueCode.Ambiguous or IssueCode.QualifiedSetColumn);
+        if (stopper is not null) return new PreparedRun(raw, stopper.Message);
 
         var sql = raw;
         foreach (var c in corrections.OrderByDescending(c => c.Start))

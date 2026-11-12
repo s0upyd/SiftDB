@@ -234,6 +234,11 @@
     .status[data-state="error"] .statusIcon { color: var(--tx-failed); }
     .status[data-state="error"] .extra, .status[data-state="error"] .details { color: var(--fg); opacity: 0.75; }
     .status[data-state="error"] .details { border-top-color: var(--tx-failed); }
+    /* A result from before an attempt that did not run: still readable, but plainly not the latest outcome. */
+    .stalechip { display: inline-block; margin-right: 8px; padding: 0 7px; font-size: 11px; font-weight: 600; line-height: 18px;
+                 border: 1px solid var(--line); border-radius: 9px; color: var(--fg); background: var(--bg); vertical-align: 1px; }
+    .status.stale .statusIcon, .status.stale .headline, .status.stale .extra { opacity: 0.6; }
+    .status.stale[data-state="error"] { background: var(--panel); }
     @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 

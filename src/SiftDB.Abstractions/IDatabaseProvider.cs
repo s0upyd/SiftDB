@@ -6,7 +6,8 @@ public static class ProviderContract
 {
     /// <summary>
     /// Current version of the provider contract. v2 added connection fields, read-only sessions and CannotRunInTransaction;
-    /// v3 added GenericTypeOf; v4 added provider settings and the statement guard (ITransactionMonitor.BeforeStatementAsync).
+    /// v3 added GenericTypeOf; v4 added provider settings, the statement guard (ITransactionMonitor.BeforeStatementAsync) and
+    /// Dialect.
     /// </summary>
     public const int CurrentVersion = 4;
 }
@@ -58,6 +59,9 @@ public interface IDatabaseProvider
     /// (<see cref="DbDataReader.GetDataTypeName"/>). Anything without a closer match is <see cref="GenericType.Text"/>.
     /// </summary>
     GenericType GenericTypeOf(string dataTypeName);
+
+    /// <summary>What the identifier checker should warn about in this dialect. Permissive (no such warnings) by default.</summary>
+    DialectRules Dialect => DialectRules.Permissive;
 
     /// <summary>Settings only this kind of database has (design section 10), shown as its own category. None by default.</summary>
     IReadOnlyList<ProviderSetting> Settings => [];

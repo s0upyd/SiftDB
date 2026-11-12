@@ -9,7 +9,7 @@ export interface Correction { start: number; length: number; text: string; messa
 export interface Issue {
   start: number;
   length: number;
-  code: 'caseMismatch' | 'ambiguous' | 'stringQuote' | 'unknownColumn' | 'missingSemicolon';
+  code: 'caseMismatch' | 'ambiguous' | 'stringQuote' | 'unknownColumn' | 'missingSemicolon' | 'qualifiedSetColumn' | 'numberForBoolean';
   severity: 'info' | 'warning' | 'error';
   message: string;
   fixText: string | null;

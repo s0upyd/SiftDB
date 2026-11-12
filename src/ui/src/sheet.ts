@@ -409,10 +409,12 @@ export class Sheet {
   private handleTarget(target: RunTarget) {
     switch (target.kind) {
       case 'run': void this.runSql(target.sql); break;
-      case 'blocked': this.setMessage(`not run: ${target.reason}`, 'warning'); break;
+      // Nothing ran, so the result on screen is from before: mark it, or its old red error reads as this attempt's outcome.
+      case 'blocked': this.setMessage(`not run: ${target.reason}`, 'warning'); this.activeResult?.markStale(); break;
       case 'none': this.setMessage('nothing to run: put the cursor in a statement, or select some text'); break;
       case 'disconnected':
         this.setMessage('Not connected. Connect first: the connection decides which SQL dialect splits your statements.', 'warning');
+        this.activeResult?.markStale();
         break;
     }
   }

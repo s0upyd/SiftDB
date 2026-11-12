@@ -2,7 +2,7 @@ using SiftDB.Abstractions;
 
 namespace SiftDB.Engine;
 
-public enum IssueCode { CaseMismatch, Ambiguous, StringQuote, UnknownColumn, MissingSemicolon }
+public enum IssueCode { CaseMismatch, Ambiguous, StringQuote, UnknownColumn, MissingSemicolon, QualifiedSetColumn, NumberForBoolean }
 
 public enum IssueSeverity { Info, Warning, Error }
 
@@ -36,25 +36,33 @@ public static class IdentifierResolver
     private static readonly HashSet<string> ClauseWords = new(StringComparer.OrdinalIgnoreCase)
         { "select", "from", "where", "by", "having", "set", "on", "using", "returning", "values", "into", "join", "limit", "window" };
 
-    public static ResolverResult Resolve(DatabaseSchema schema, ISqlParser parser, IIdentifierPolicy policy, string text)
+    /// <param name="dialect">What else to warn about in this dialect (qualified SET columns, 0/1 for booleans). Permissive if null.</param>
+    /// <param name="typeOf">The provider's mapping of a column's data type to a generic type; without it, types are not checked.</param>
+    public static ResolverResult Resolve(DatabaseSchema schema, ISqlParser parser, IIdentifierPolicy policy, string text,
+        DialectRules? dialect = null, Func<string, GenericType>? typeOf = null)
     {
         var corrections = new List<Correction>();
         var issues = new List<Issue>();
         var tokens = parser.Tokenize(text);
+        var rules = new Rules(dialect ?? DialectRules.Permissive, typeOf);
         foreach (var range in parser.Split(text))
         {
             var st = tokens.Where(t => t.Start >= range.Start && t.End <= range.End).ToList();
-            ResolveStatement(schema, policy, st, text, corrections, issues);
+            ResolveStatement(schema, policy, rules, st, text, corrections, issues);
         }
         return new ResolverResult(corrections, issues);
     }
 
-    private static void ResolveStatement(DatabaseSchema schema, IIdentifierPolicy policy, List<SqlToken> st, string text,
+    private sealed record Rules(DialectRules Dialect, Func<string, GenericType>? TypeOf);
+
+    private static void ResolveStatement(DatabaseSchema schema, IIdentifierPolicy policy, Rules rules, List<SqlToken> st, string text,
         List<Correction> corrections, List<Issue> issues)
     {
         var scope = ScopeAnalyzer.Analyze(schema, policy, st, text);
         var resolved = scope.Entries.Where(e => e.Rel is not null).ToList();
         if (resolved.Count == 0) return;
+
+        if (!rules.Dialect.QualifiedSetColumns) CheckSetTargets(st, text, policy, resolved, issues);
 
         // 1. The tables themselves.
         foreach (var e in resolved)
@@ -90,7 +98,11 @@ public static class IdentifierResolver
                 var owner = resolved.FirstOrDefault(e => (e.AliasId ?? e.NameId).Meaning(policy) == qualifier.Meaning(policy));
                 if (owner is null) continue;
                 var col = BestColumn(owner.Rel!, id, policy);
-                if (col is { } c) Check(t, id, c.Name, policy, text, corrections, issues, afterDot: true);
+                if (col is { } c)
+                {
+                    Check(t, id, c.Name, policy, text, corrections, issues, afterDot: true);
+                    CheckBooleanNumber(st, i, text, owner.Rel!, c.Name, policy, rules, issues);
+                }
                 else if (CanReportUnknown(st, i, text, mixedScope, checkClause: false)) ReportUnknown(t, id, [owner], policy, issues);
                 continue;
             }
@@ -116,6 +128,7 @@ public static class IdentifierResolver
                 else
                 {
                     Check(t, id, top[0].Column, policy, text, corrections, issues, afterDot: false);
+                    CheckBooleanNumber(st, i, text, top[0].Entry.Rel!, top[0].Column, policy, rules, issues);
                 }
                 continue;
             }
@@ -134,6 +147,67 @@ public static class IdentifierResolver
             var namesATable = scope.Entries.Any(e => (e.AliasId ?? e.NameId).Meaning(policy) == meaning || e.NameId.Meaning(policy) == meaning);
             if (!namesATable && CanReportUnknown(st, i, text, mixedScope, checkClause: true)) ReportUnknown(t, id, resolved, policy, issues);
         }
+    }
+
+    // ---- SQL the dialect refuses with an unhelpful message ---------------------------------------------------------
+
+    /// <summary>
+    /// <c>UPDATE t a SET a.col = …</c> where the dialect does not allow it (Postgres reads <c>a.col</c> as field <c>col</c>
+    /// of a column <c>a</c>, and says column "a" does not exist). Only when the qualifier is the updated table's alias or
+    /// name and the table has no column of that name, since <c>SET comp.field = …</c> on a composite column is valid.
+    /// </summary>
+    private static void CheckSetTargets(List<SqlToken> st, string text, IIdentifierPolicy policy, List<ScopeEntry> resolved,
+        List<Issue> issues)
+    {
+        var update = st.FindIndex(t => IsKeywordWord(t, text, "update"));
+        if (update < 0) return;
+        var target = resolved.Where(e => e.NameTok > update).MinBy(e => e.NameTok);
+        if (target is null) return;
+        var set = st.FindIndex(target.NameTok, t => IsKeywordWord(t, text, "set"));
+        if (set < 0) return;
+
+        var names = new[] { (target.AliasId ?? target.NameId).Meaning(policy), target.NameId.Meaning(policy) };
+        var depth = 0;
+        var assignmentStart = true;
+        for (var k = set + 1; k < st.Count; k++)
+        {
+            var t = st[k];
+            if (IsPunct(t, text, '(')) { depth++; assignmentStart = false; continue; }
+            if (IsPunct(t, text, ')')) { depth--; continue; }
+            if (depth > 0) continue;
+            if (IsKeywordWord(t, text, "from") || IsKeywordWord(t, text, "where") || IsKeywordWord(t, text, "returning")) return;
+            if (IsPunct(t, text, ',')) { assignmentStart = true; continue; }
+            if (!assignmentStart) continue;
+            assignmentStart = false;
+
+            if (k + 2 >= st.Count || !ScopeAnalyzer.IsName(t) || !IsPunct(st[k + 1], text, '.') || !ScopeAnalyzer.IsName(st[k + 2])) continue;
+            var qualifier = Ident.From(t, text);
+            if (!names.Contains(qualifier.Meaning(policy)) || BestColumn(target.Rel!, qualifier, policy) is not null) continue;
+            var column = Ident.From(st[k + 2], text);
+            var fix = BestColumn(target.Rel!, column, policy) is { } c ? policy.Quote(c.Name) : column.Raw;
+            issues.Add(new Issue(t.Start, st[k + 2].End - t.Start, IssueCode.QualifiedSetColumn, IssueSeverity.Error,
+                $"The column being set cannot be qualified with the table or alias here. Write {fix}, not {qualifier.Raw}.{column.Raw}.", fix));
+        }
+    }
+
+    /// <summary>
+    /// <c>boolcol = 0</c> or <c>set boolcol = 1</c> where the dialect has no integer booleans (Postgres: "operator does
+    /// not exist: boolean = integer"). Offers false / true. A cast (<c>1::boolean</c>) or a longer expression is left alone.
+    /// </summary>
+    private static void CheckBooleanNumber(List<SqlToken> st, int i, string text, RelationInfo rel, string column,
+        IIdentifierPolicy policy, Rules rules, List<Issue> issues)
+    {
+        if (rules.Dialect.NumbersAsBooleans || rules.TypeOf is null || i + 2 >= st.Count) return;
+        var op = st[i + 1];
+        if (op.Kind != SqlTokenKind.Operator || Text(op, text) is not ("=" or "<>" or "!=")) return;
+        var number = st[i + 2];
+        if (number.Kind != SqlTokenKind.Number || Text(number, text) is not ("0" or "1")) return;
+        if (i + 3 < st.Count && (st[i + 3].Kind == SqlTokenKind.Operator || IsPunct(st[i + 3], text, '.'))) return;
+        var info = rel.Columns.FirstOrDefault(c => c.Name == column);
+        if (info is null || rules.TypeOf(info.DataType) != GenericType.Boolean) return;
+        var word = Text(number, text) == "1" ? "true" : "false";
+        issues.Add(new Issue(number.Start, number.Length, IssueCode.NumberForBoolean, IssueSeverity.Warning,
+            $"{policy.Quote(column)} is a boolean column: write {word}, not {Text(number, text)}.", word));
     }
 
     // ---- columns that do not exist -------------------------------------------------------------------------------

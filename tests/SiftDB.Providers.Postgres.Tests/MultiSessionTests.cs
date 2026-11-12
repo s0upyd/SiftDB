@@ -96,7 +96,10 @@ public class MultiSessionTests : IAsyncLifetime
     private async Task<long> Count(int connectionId)
     {
         var queryId = await Run(connectionId, $"select count(*) from {_table}");
-        var d = _sink.FirstBatch[queryId];
+        if (queryId == 0)
+            Assert.Fail("The count did not start: " + string.Join(" | ", _sink.Of("error").Select(e => e.GetProperty("message").GetString())));
+        Assert.True(_sink.FirstBatch.TryGetValue(queryId, out var d),
+            "No rows arrived for the count. Events: " + string.Join(" | ", _sink.Of("error").Concat(_sink.Of("complete")).Select(e => e.ToString())));
         return BinaryPrimitives.ReadInt64LittleEndian(d.AsSpan((int)BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(12 + 4))));
     }
 
