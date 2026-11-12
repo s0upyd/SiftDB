@@ -2,7 +2,7 @@ using SiftDB.Abstractions;
 
 namespace SiftDB.Engine;
 
-public enum IssueCode { CaseMismatch, Ambiguous, StringQuote, UnknownColumn }
+public enum IssueCode { CaseMismatch, Ambiguous, StringQuote, UnknownColumn, MissingSemicolon }
 
 public enum IssueSeverity { Info, Warning, Error }
 

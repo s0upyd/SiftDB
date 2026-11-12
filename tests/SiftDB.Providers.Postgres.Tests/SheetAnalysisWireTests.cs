@@ -135,4 +135,31 @@ public class SheetAnalysisWireTests
         Assert.Equal("selection", pick.GetProperty("reason").GetString());
         Assert.Equal("select * from \"Person\"", pick.GetProperty("sql").GetString());
     }
+
+    [Fact]
+    public async Task Statements_kept_apart_by_a_blank_line_run_one_at_a_time_without_a_semicolon()
+    {
+        const string sheet = "update \"Person\" set \"FirstName\" = 'x'\n\nupdate \"Person\" p set \"FirstName\" = 'y' where p.\"PersonId\" = 2";
+        var r = await Analyze(sheet, sheet.Length - 1, "assisted");
+        Assert.Equal(2, r.GetProperty("statements").GetArrayLength());
+        var pick = r.GetProperty("pick");
+        Assert.Equal("update \"Person\" p set \"FirstName\" = 'y' where p.\"PersonId\" = 2", pick.GetProperty("sql").GetString());
+        Assert.Equal(JsonValueKind.Null, pick.GetProperty("blocked").ValueKind);
+        Assert.Equal(0, r.GetProperty("issues").GetArrayLength());
+    }
+
+    [Theory]
+    [InlineData("assisted")]
+    [InlineData("strict")]
+    public async Task Two_statements_on_adjacent_lines_say_a_semicolon_is_missing_not_that_columns_are_ambiguous(string mode)
+    {
+        const string sheet = "update \"Person\" set \"FirstName\" = 'x'\nupdate \"Person\" p set \"FirstName\" = 'y' where p.\"PersonId\" = 2";
+        var r = await Analyze(sheet, 3, mode);
+        var blocked = r.GetProperty("pick").GetProperty("blocked").GetString();
+        Assert.Equal("This looks like two statements. Is a ; missing at the end of line 1?", blocked);
+        var issues = r.GetProperty("issues").EnumerateArray().ToList();
+        Assert.DoesNotContain(issues, i => i.GetProperty("code").GetString() == "ambiguous");
+        var missing = issues.Single(i => i.GetProperty("code").GetString() == "missingSemicolon");
+        Assert.Equal(sheet.IndexOf("\nupdate", StringComparison.Ordinal) + 1, missing.GetProperty("start").GetInt32());
+    }
 }

@@ -175,14 +175,33 @@ public sealed partial class EngineHost : IAsyncDisposable
     private void AnalyzeSheet(int id, int connectionId, string text, int selectionStart, int selectionEnd, QueryMode mode)
     {
         if (!_connections.TryGetValue(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
-        var statements = state.Provider.Parser.Split(text);
+        var parser = StatementSplitter.For(state.Provider.Parser); // blank lines end statements too
+        var statements = parser.Split(text);
         var pick = StatementPicker.Pick(text, statements, selectionStart, selectionEnd);
 
         // Identifier problems are worked out against the cached schema; with none loaded there is nothing to say.
         var resolved = state.Schema is { } schema
-            ? IdentifierResolver.Resolve(schema, state.Provider.Parser, state.Provider.Identifiers, text)
+            ? IdentifierResolver.Resolve(schema, parser, state.Provider.Identifiers, text)
             : ResolverResult.Empty;
+
+        // Two statements on adjacent lines with no ';' between them read as one, which fails. Say that, rather than the
+        // confusing things the resolver finds in the joined text (the same table twice makes every column "ambiguous").
+        string? missingSemicolon = null;
+        if (pick.Range is { } picked && parser.MissingSemicolon(text, picked) is { } gap)
+        {
+            var line = text.AsSpan(0, gap.AboveEnd).Count('\n') + 1; // the line the statement above ends on
+            missingSemicolon = $"This looks like two statements. Is a ; missing at the end of line {line}?";
+            var word = parser.Tokenize(text).First(t => t.Start == gap.NextStart);
+            resolved = resolved with
+            {
+                Issues = [
+                    .. resolved.Issues.Where(i => i.Code != IssueCode.Ambiguous || i.Start < picked.Start || i.Start >= picked.End),
+                    new Issue(word.Start, word.Length, IssueCode.MissingSemicolon, IssueSeverity.Error, missingSemicolon, null),
+                ],
+            };
+        }
         var prepared = pick.Range is { } r ? RunPreparer.Prepare(text, r, resolved, mode) : null;
+        if (prepared is not null && missingSemicolon is not null) prepared = prepared with { Blocked = missingSemicolon };
         if (prepared is { Blocked: null } && state.ReadOnly && state.Provider.CheckReadOnly(prepared.Sql) is { } readOnlyReason)
             prepared = prepared with { Blocked = readOnlyReason };
 
@@ -235,7 +254,7 @@ public sealed partial class EngineHost : IAsyncDisposable
         var schema = state.Schema;
         var result = schema is null
             ? new CompletionResult(offset, offset, [])
-            : CompletionEngine.Complete(schema, state.Provider.Parser, state.Provider.Identifiers, text, offset);
+            : CompletionEngine.Complete(schema, StatementSplitter.For(state.Provider.Parser), state.Provider.Identifiers, text, offset);
         Event(new { type = "completions", replyTo = id, start = result.Start, end = result.End, items = result.Items });
     }
 
