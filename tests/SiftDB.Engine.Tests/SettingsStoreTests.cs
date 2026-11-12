@@ -13,6 +13,8 @@ public sealed class SettingsStoreTests : IDisposable
 
     private SettingsStore NewStore() => new(FilePath);
 
+    private static UserSettings Mode(string mode) => UserSettings.Default with { NewSheetMode = mode };
+
     [Fact]
     public void Without_a_file_the_defaults_apply_and_nothing_is_written()
     {
@@ -25,14 +27,14 @@ public sealed class SettingsStoreTests : IDisposable
     [Fact]
     public void A_saved_mode_survives_a_restart()
     {
-        NewStore().Save(new UserSettings("strict"));
+        NewStore().Save(Mode("strict"));
         Assert.Equal("strict", NewStore().Get().NewSheetMode);
     }
 
     [Fact]
     public void An_unknown_mode_reads_and_saves_as_assisted()
     {
-        Assert.Equal("assisted", NewStore().Save(new UserSettings("loose")).NewSheetMode);
+        Assert.Equal("assisted", NewStore().Save(Mode("loose")).NewSheetMode);
         File.WriteAllText(FilePath, """{ "version": 1, "newSheetMode": "STRICTISH" }""");
         Assert.Equal("assisted", NewStore().Get().NewSheetMode);
     }
@@ -41,7 +43,7 @@ public sealed class SettingsStoreTests : IDisposable
     public void Settings_a_newer_version_added_are_kept_on_rewrite()
     {
         File.WriteAllText(FilePath, """{ "version": 1, "newSheetMode": "assisted", "resultStyling": { "nullTint": true } }""");
-        NewStore().Save(new UserSettings("strict"));
+        NewStore().Save(Mode("strict"));
         using var doc = JsonDocument.Parse(File.ReadAllText(FilePath));
         Assert.Equal("strict", doc.RootElement.GetProperty("newSheetMode").GetString());
         Assert.True(doc.RootElement.GetProperty("resultStyling").GetProperty("nullTint").GetBoolean());
@@ -56,7 +58,7 @@ public sealed class SettingsStoreTests : IDisposable
         var store = NewStore();
         Assert.Equal("assisted", store.Get().NewSheetMode);
         Assert.Contains(expected, store.LoadError);
-        Assert.Throws<InvalidDataException>(() => store.Save(new UserSettings("strict")));
+        Assert.Throws<InvalidDataException>(() => store.Save(Mode("strict")));
         Assert.Equal(content, File.ReadAllText(FilePath));
     }
 }

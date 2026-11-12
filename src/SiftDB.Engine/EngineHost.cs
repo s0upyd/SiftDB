@@ -295,7 +295,7 @@ public sealed partial class EngineHost : IAsyncDisposable
             Event(new
             {
                 type = "columns", replyTo = id, queryId,
-                columns = writer.Columns.Select(c => new { name = c.Name, kind = (int)c.Kind }),
+                columns = writer.Columns.Select((c, i) => new { name = c.Name, kind = (int)c.Kind, type = GenericTypeOf(state.Provider, reader, i) }),
             });
             session.Start();
         }
@@ -451,6 +451,13 @@ public sealed partial class EngineHost : IAsyncDisposable
     {
         state.Starting?.Cancel();
         state.Active?.Cancel();
+    }
+
+    /// <summary>A result column's generic type, for result styling. A reader that cannot name the type gives Text.</summary>
+    private static GenericType GenericTypeOf(IDatabaseProvider provider, DbDataReader reader, int ordinal)
+    {
+        try { return provider.GenericTypeOf(reader.GetDataTypeName(ordinal)); }
+        catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException or IndexOutOfRangeException) { return GenericType.Text; }
     }
 
     private void Event(object payload) => _out.SendEvent(JsonSerializer.Serialize(payload, Json));

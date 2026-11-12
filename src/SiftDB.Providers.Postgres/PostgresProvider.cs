@@ -30,6 +30,8 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     public bool CannotRunInTransaction(string sql) => PostgresTransactionRules.CannotRunInTransaction(sql);
 
+    public GenericType GenericTypeOf(string dataTypeName) => PostgresTypes.GenericTypeOf(dataTypeName);
+
     public async Task<IProviderConnection> OpenAsync(string connectionString, ConnectionOptions options, CancellationToken ct)
     {
         var cs = PostgresConnectionFields.WithOptions(connectionString, options);

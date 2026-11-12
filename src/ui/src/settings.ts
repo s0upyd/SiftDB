@@ -1,6 +1,8 @@
 import type { Bridge } from './bridge';
 import { el, showDialog } from './dialogs';
 import type { QueryMode } from './editor';
+import { buildRulesPage } from './rules-editor';
+import { StyleRule, setRules } from './styles';
 
 // User settings (design section 10). The engine owns the store; this keeps the current values for the UI and draws the
 // settings editor. Every later feature adds its settings here, as a category of the editor (see CATEGORIES).
@@ -8,9 +10,12 @@ import type { QueryMode } from './editor';
 export interface UserSettings {
   /** The mode new sheets open in (design section 3). */
   newSheetMode: QueryMode;
+  /** Result styling (design section 10): one ordered list, presets included. The first rule that matches styles the cell. */
+  resultRules: StyleRule[];
 }
 
-const DEFAULTS: UserSettings = { newSheetMode: 'assisted' };
+/** Until the engine answers. Its defaults hold the presets; the page never invents them. */
+const DEFAULTS: UserSettings = { newSheetMode: 'assisted', resultRules: [] };
 
 /** The settings as the engine last reported them. Until loaded, or when they cannot be read, the defaults apply. */
 export class Settings {
@@ -36,7 +41,11 @@ export class Settings {
   }
 
   private take(s: Partial<UserSettings> | undefined) {
-    this.values = { newSheetMode: s?.newSheetMode === 'strict' ? 'strict' : 'assisted' };
+    this.values = {
+      newSheetMode: s?.newSheetMode === 'strict' ? 'strict' : 'assisted',
+      resultRules: Array.isArray(s?.resultRules) ? s.resultRules : [],
+    };
+    setRules(this.values.resultRules); // every grid re-matches its columns on its next draw
   }
 }
 
@@ -86,8 +95,18 @@ const sqlCategory: Category = {
   },
 };
 
-/** In the order they are listed. Result styling (design section 10) is expected next. */
-const CATEGORIES: Category[] = [sqlCategory];
+/** Result styling (design section 10): the rules list. */
+const resultsCategory: Category = {
+  id: 'results',
+  label: 'Results',
+  build(values) {
+    const rules = buildRulesPage(values.resultRules);
+    return { page: rules.page, apply: (into) => { into.resultRules = rules.rules(); }, focus: rules.focus };
+  },
+};
+
+/** In the order they are listed. */
+const CATEGORIES: Category[] = [sqlCategory, resultsCategory];
 
 /** The category last looked at, for this run of the app: reopening the editor goes back to it. */
 let lastCategory = CATEGORIES[0].id;

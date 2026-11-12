@@ -559,7 +559,11 @@ async function saveSheet(sheet: Sheet, as = false): Promise<boolean> {
 
 $('openFile').onclick = () => void openFile();
 $('saveFile').onclick = () => { if (active) void saveSheet(active); };
-$('settings').onclick = () => void editSettings(settings);
+/** Settings saved: open results pick up new styling rules straight away. */
+async function openSettings() {
+  if (await editSettings(settings)) sheets.forEach((s) => s.restyle());
+}
+$('settings').onclick = () => void openSettings();
 
 /** At startup: the sheets from last time, in order, without connecting (design section 6). Nothing saved: one new sheet. */
 async function restoreSession() {
@@ -640,7 +644,7 @@ window.addEventListener('keydown', (e) => {
     if (key === 'w' && active) return handled(() => void closeSheet(active!));
     if (key === 's' && active) return handled(() => void saveSheet(active!));
     if (key === 'o') return handled(() => void openFile());
-    if (key === ',') return handled(() => void editSettings(settings));
+    if (key === ',') return handled(() => void openSettings());
   }
   if (e.ctrlKey && e.shiftKey && !e.altKey && key === 's' && active) return handled(() => void saveSheet(active!, true));
   if (e.ctrlKey && !e.altKey && e.key === 'Tab') return handled(() => cycle(e.shiftKey ? -1 : 1));

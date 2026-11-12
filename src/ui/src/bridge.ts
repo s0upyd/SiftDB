@@ -3,7 +3,8 @@
 
 export const enum Kind { Text = 0, Int32 = 1, Int64 = 2, Float64 = 3 }
 
-export interface Column { name: string; kind: Kind }
+/** `type` is the column's generic type, for result styling. */
+export interface Column { name: string; kind: Kind; type?: import('./styles').GenericType }
 
 // Database structure as sent by the engine's "schema" event (mirrors SiftDB.Abstractions/SchemaModel.cs).
 export type RelationKind = 'table' | 'partitionedTable' | 'view' | 'materializedView' | 'foreignTable';

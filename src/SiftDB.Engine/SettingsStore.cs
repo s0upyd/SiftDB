@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using SiftDB.Abstractions;
 
 namespace SiftDB.Engine;
 
@@ -8,12 +9,20 @@ namespace SiftDB.Engine;
 /// missing or unrecognised in the file reads as the default.
 /// </summary>
 /// <param name="NewSheetMode">The mode new sheets open in (design section 3): "assisted" or "strict".</param>
-public sealed record UserSettings(string NewSheetMode = "assisted")
+/// <param name="ResultRules">Result styling, as one ordered list: the first rule that matches styles the cell.</param>
+public sealed record UserSettings(string NewSheetMode, IReadOnlyList<StyleRule> ResultRules)
 {
-    public static readonly UserSettings Default = new();
+    public static readonly UserSettings Default = new("assisted", StyleRules.Default);
 
-    /// <summary>Only the values this version knows are kept; anything else becomes the default.</summary>
-    public UserSettings Normalised() => this with { NewSheetMode = NewSheetMode is "strict" ? "strict" : "assisted" };
+    /// <summary>
+    /// Only values this version knows are kept. <paramref name="strict"/>: a user rule that is not valid throws (saving)
+    /// rather than being dropped (reading a file).
+    /// </summary>
+    public UserSettings Normalised(bool strict = false) => this with
+    {
+        NewSheetMode = NewSheetMode is "strict" ? "strict" : "assisted",
+        ResultRules = StyleRules.Normalise(ResultRules, strict),
+    };
 }
 
 /// <summary>
@@ -25,7 +34,12 @@ public sealed class SettingsStore(string path)
 {
     private const int FormatVersion = 1;
 
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
 
     private readonly object _gate = new();
     private UserSettings? _settings;
@@ -45,14 +59,21 @@ public sealed class SettingsStore(string path)
         lock (_gate) return Loaded();
     }
 
+    /// <summary>Saves the whole set. A rule that is not valid is refused (ArgumentException) with the reason, and nothing is written.</summary>
     public UserSettings Save(UserSettings settings)
     {
         lock (_gate)
         {
             Loaded();
             if (_loadError is not null) throw new InvalidDataException(_loadError);
-            var normalised = settings.Normalised();
-            var file = new StoreFile { Version = FormatVersion, NewSheetMode = normalised.NewSheetMode, Other = _unknown };
+            var normalised = settings.Normalised(strict: true);
+            var file = new StoreFile
+            {
+                Version = FormatVersion,
+                NewSheetMode = normalised.NewSheetMode,
+                ResultRules = normalised.ResultRules.Select(StoredRule.From).ToList(),
+                Other = _unknown,
+            };
             AtomicFile.WriteAllText(path, JsonSerializer.Serialize(file, Json));
             _settings = normalised;
             return normalised;
@@ -70,7 +91,8 @@ public sealed class SettingsStore(string path)
             if (file.Version > FormatVersion)
                 throw new InvalidDataException($"It was written by a newer SiftDB (format {file.Version}; this version reads {FormatVersion}).");
             _unknown = file.Other;
-            return _settings = new UserSettings(file.NewSheetMode ?? UserSettings.Default.NewSheetMode).Normalised();
+            var rules = file.ResultRules?.Where(r => r is not null).Select(r => r.ToRule()) ?? StyleRules.Default;
+            return _settings = new UserSettings(file.NewSheetMode ?? UserSettings.Default.NewSheetMode, rules.ToList()).Normalised();
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
@@ -84,8 +106,37 @@ public sealed class SettingsStore(string path)
     {
         public int Version { get; set; }
         public string? NewSheetMode { get; set; }
+        public List<StoredRule>? ResultRules { get; set; }
 
         /// <summary>Settings a later version added keep their values when this version rewrites the file.</summary>
         [JsonExtensionData] public Dictionary<string, JsonElement>? Other { get; set; }
+    }
+
+    /// <summary>A preset is stored as its id and whether it is on; its definition comes from this version of the app.</summary>
+    private sealed class StoredRule
+    {
+        public string? Id { get; set; }
+        public bool Enabled { get; set; } = true;
+        public string? Name { get; set; }
+        public string? Columns { get; set; }
+        public List<string>? Types { get; set; }
+        public string? Condition { get; set; }
+        public List<string>? Values { get; set; }
+        public string? Text { get; set; }
+        public string? Background { get; set; }
+        public bool? Bold { get; set; }
+
+        public static StoredRule From(StyleRule r) => r.IsPreset
+            ? new StoredRule { Id = r.Id, Enabled = r.Enabled }
+            : new StoredRule
+            {
+                Id = r.Id, Enabled = r.Enabled, Name = r.Name, Columns = r.Columns,
+                Types = r.Types.Select(t => JsonNamingPolicy.CamelCase.ConvertName(t.ToString())).ToList(),
+                Condition = r.Condition, Values = [.. r.Values], Text = r.Text, Background = r.Background, Bold = r.Bold,
+            };
+
+        public StyleRule ToRule() => new(
+            Id ?? "", Name ?? "", Enabled, Columns ?? "", StyleRules.ParseTypes(Types), Condition ?? "", Values ?? [],
+            Text ?? "", Background ?? "", Bold ?? false);
     }
 }

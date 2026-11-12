@@ -1,11 +1,14 @@
 import { Column, Kind } from './bridge';
 import { ResultStore, cellText } from './store';
+import { CellStyler, rulesVersion, stylersFor } from './styles';
 
 const ROW_H = 22;
 const HEADER_H = 28;
 const GUTTER_W = 76;
 const FONT = '13px Consolas, "Cascadia Mono", monospace';
 const NULL_FONT = 'italic 12px Consolas, "Cascadia Mono", monospace';
+const BOLD_FONT = 'bold 13px Consolas, "Cascadia Mono", monospace';
+const BOLD_NULL_FONT = 'italic bold 12px Consolas, "Cascadia Mono", monospace';
 const HEADER_FONT ='600 13px "Segoe UI", sans-serif';
 
 /** Column sizing: text padding each side, the narrowest a column gets, and caps for fitting (automatic, and on a double-click). */
@@ -31,6 +34,9 @@ export class Grid {
   private spacer = document.createElement('div');
   private canvas = document.createElement('canvas');
   private columns: Column[] = [];
+  /** Per column, the styling rules that apply to it (null: none), matched once per result and again when the rules change. */
+  private stylers: (CellStyler | null)[] = [];
+  private stylersVersion = -1;
   private colX: number[] = [];
   /** Each column's width. Fitted to the content when the first rows arrive, unless the user has dragged it. */
   private widths: number[] = [];
@@ -157,6 +163,7 @@ export class Grid {
   setStore(store: ResultStore, columns: Column[]) {
     this.store = store;
     this.columns = columns;
+    this.stylersVersion = -1;
     this.manual = columns.map(() => false);
     this.fitted = false;
     // Until rows arrive, each column is as wide as its header; then they are fitted to the content (see draw).
@@ -215,6 +222,10 @@ export class Grid {
     const first = Math.max(0, Math.floor(sy / ROW_H));
     const last = Math.min(rows - 1, Math.ceil((sy + h - HEADER_H) / ROW_H));
     const nCols = this.columns.length;
+    if (this.stylersVersion !== rulesVersion()) {
+      this.stylers = stylersFor(this.columns);
+      this.stylersVersion = rulesVersion();
+    }
 
     for (let r = first; r <= last; r++) {
       const y = HEADER_H + r * ROW_H - sy;
@@ -235,16 +246,23 @@ export class Grid {
         const right = this.columns[c].kind !== Kind.Text;
         ctx.textAlign = right ? 'right' : 'left';
         const value = cellText(batch, c, local);
+        // A styled cell carries its own background and text colour, so it reads the same in either theme.
+        const style = this.stylers[c]?.(value) ?? null;
+        if (style) {
+          ctx.fillStyle = style.background;
+          ctx.fillRect(x, y, cw, ROW_H);
+        }
         if (value === null) {
           // NULL is a value of its own: dim and italic so it can never be mistaken for the text "NULL", 0 or ''.
-          ctx.fillStyle = th.dim;
-          ctx.font = NULL_FONT;
+          ctx.fillStyle = style?.text ?? th.dim;
+          ctx.font = style?.bold ? BOLD_NULL_FONT : NULL_FONT;
           ctx.fillText('NULL', right ? x + cw - 8 : x + 8, y + ROW_H / 2);
-          ctx.font = FONT;
-          ctx.fillStyle = th.fg;
         } else {
+          if (style) { ctx.fillStyle = style.text; if (style.bold) ctx.font = BOLD_FONT; }
           ctx.fillText(this.fitText(value, cw - PAD * 2), right ? x + cw - PAD : x + PAD, y + ROW_H / 2);
         }
+        ctx.font = FONT;
+        ctx.fillStyle = th.fg;
         ctx.restore();
       }
     }

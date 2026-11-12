@@ -374,6 +374,9 @@ export class Sheet {
     this.ctx.persist(this);
   }
 
+  /** The styling rules changed: redraw the results (each grid re-matches its columns as it draws). */
+  restyle() { this.results.forEach((r) => r.grid.invalidate()); }
+
   setTheme(dark: boolean) {
     this.editor.setTheme(dark);
     this.results.forEach((r) => r.setTheme(dark));

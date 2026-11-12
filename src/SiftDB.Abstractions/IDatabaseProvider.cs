@@ -4,8 +4,11 @@ namespace SiftDB.Abstractions;
 
 public static class ProviderContract
 {
-    /// <summary>Current version of the provider contract. v2 added connection fields, read-only sessions and CannotRunInTransaction.</summary>
-    public const int CurrentVersion = 2;
+    /// <summary>
+    /// Current version of the provider contract. v2 added connection fields, read-only sessions and CannotRunInTransaction;
+    /// v3 added GenericTypeOf.
+    /// </summary>
+    public const int CurrentVersion = 3;
 }
 
 public interface IDatabaseProvider
@@ -49,6 +52,12 @@ public interface IDatabaseProvider
     /// parse is false: the server reports it.
     /// </summary>
     bool CannotRunInTransaction(string sql);
+
+    /// <summary>
+    /// The generic type (design section 10) of a result column, from the name the reader reports for it
+    /// (<see cref="DbDataReader.GetDataTypeName"/>). Anything without a closer match is <see cref="GenericType.Text"/>.
+    /// </summary>
+    GenericType GenericTypeOf(string dataTypeName);
 
     Task<IProviderConnection> OpenAsync(string connectionString, ConnectionOptions options, CancellationToken ct);
 }

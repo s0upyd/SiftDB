@@ -22,6 +22,7 @@ public class EngineSessionTests
         public ReadOnlyEnforcement ReadOnlyEnforcement => ReadOnlyEnforcement.Client;
         public string? CheckReadOnly(string sql) => null;
         public bool CannotRunInTransaction(string sql) => false;
+        public GenericType GenericTypeOf(string dataTypeName) => GenericType.Text;
         public ISqlParser Parser => throw new NotSupportedException();
         public IIdentifierPolicy Identifiers => throw new NotSupportedException();
 
