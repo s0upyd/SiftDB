@@ -10,6 +10,21 @@
     :root[data-theme="dark"] { color-scheme: dark; }
     :root { --bg:#fff; --fg:#1f2328; --dim:#57606a; --panel:#f6f8fa; --line:#d0d7de; --accent:#0969da; --tab:#eaeef2; }
     :root[data-theme="dark"] { --bg:#0d1117; --fg:#e6edf3; --dim:#8b949e; --panel:#151b23; --line:#30363d; --accent:#4493f8; --tab:#1c232c; }
+    /* Monaco's context menu is drawn outside the editor (in a shadow root on the body), where Monaco's own theme variables
+       are not defined, so it came out transparent. Custom properties inherit into shadow roots, so its colours are defined
+       here. They copy the Windows 11 menu that the tree and grid show (the browser's own, drawn by Windows), so every
+       right-click menu in the app looks the same: a near-white or dark grey menu with a subtle grey highlight. */
+    :root { --vscode-menu-background: #f9f9f9; --vscode-menu-foreground: #1a1a1a; --vscode-menu-border: #e5e5e5;
+            --vscode-menu-selectionBackground: #ebebeb; --vscode-menu-selectionForeground: #1a1a1a;
+            --vscode-menu-selectionBorder: transparent; --vscode-menu-separatorBackground: #e5e5e5;
+            --vscode-widget-shadow: rgba(0,0,0,.18);
+            /* Its shape too: Windows 11's 8px menu corners (4px on the highlighted item), no border, and a soft shadow. */
+            --vscode-cornerRadius-large: 8px; --vscode-cornerRadius-medium: 4px; --vscode-strokeThickness: 0px;
+            --vscode-shadow-lg: 0 8px 16px rgba(0,0,0,.14); }
+    :root[data-theme="dark"] { --vscode-menu-background: #2c2c2c; --vscode-menu-foreground: #ffffff; --vscode-menu-border: #3d3d3d;
+            --vscode-menu-selectionBackground: #383838; --vscode-menu-selectionForeground: #ffffff;
+            --vscode-menu-separatorBackground: #3d3d3d; --vscode-widget-shadow: rgba(0,0,0,.45);
+            --vscode-shadow-lg: 0 8px 16px rgba(0,0,0,.4); }
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
     body { display: flex; flex-direction: column; background: var(--bg); color: var(--fg); font: 13px "Segoe UI", sans-serif; }
