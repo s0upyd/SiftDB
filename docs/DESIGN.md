@@ -81,14 +81,14 @@ Extra: catch quote mix-ups, e.g. `where name = "bob"` with no column called `bob
 - Type `@name` to get autosuggestions of stored variables, with their values.
 - **The editor shows each value greyed inline**: `@surname 'Smith'`. Long values are shortened, with the full value on hover. Unset variables show a marker (`@dob ?`).
 - Only `@` followed directly by a name counts as a variable. Postgres's own `@>`, `<@`, `@@` and `@` operators are excluded, as are strings, comments and `$$` bodies.
-- **Missing values** are collected in one inline prompt when you run, not one dialog per variable. The input type comes from the parameter type Postgres reports when the query is prepared (date picker, number box, etc.).
-- **Execution** uses real parameters (`@surname` becomes `$1`), never pasted text. Arrays support `= ANY(@ids)`.
-- **Scopes:** global, per connection, or per tab. The narrowest scope wins.
-- **Named variable sets** (e.g. "Test customer Smith") let you switch sets and re-run the same queries against different data. The active set shows in the tab header.
+- **A variable is just a name**, usable from any sheet on any connection. There are no scopes or named sets; a per-connection level can be added later if it turns out to be needed.
+- **Missing values** are collected in one inline prompt when you run, not one dialog per variable. Each row has the value and a **type** chooser. The type is preselected from the parameter type Postgres reports when the query is prepared; when it cannot be inferred, a setting decides: **default to Text** (the default) or **ask** (nothing preselected, you must pick). The input follows the type (date picker, number box, etc.), and the chosen type is stored with the variable.
+- **Types are generic** (Text, Integer, Decimal, Boolean, Date, Date & time, and a list of any of these for `= ANY(@ids)`), and each provider maps them to its own, e.g. Postgres Text → `text`, Integer → `bigint`, Decimal → `numeric`, Date & time → `timestamp`.
+- **Execution** uses real parameters (`@surname` becomes `$1`), never pasted text.
 - **All stored values are encrypted** with DPAPI (CurrentUser). Decrypted values are kept in memory only and never logged.
 - History stores the parameter values used, encrypted.
 - A hide-values toggle masks values on screen, for screen sharing.
-- Exporting or sharing a set produces a passphrase-encrypted file.
+- Exporting or sharing variables produces a passphrase-encrypted file.
 - Copy options: keep `@vars`, write values in as correctly quoted literals, or use `$1` placeholders.
 
 ---
@@ -138,8 +138,8 @@ A query tab is a **sheet** that holds several queries. It can be saved to a file
 
 **Saving**
 - Plain `.sql` files, so they open in other tools.
-- Sheet settings go in a header comment, e.g. `-- db: connection=dev-pg; vars=Smith; mode=assisted`.
-- Variable values are never written to the file, only the name of the set.
+- Sheet settings go in a header comment, e.g. `-- db: connection=dev-pg; mode=assisted`.
+- Variable values are never written to the file.
 - Unsaved sheets are autosaved and restored on restart.
 - **Assisted sheets save the corrected SQL**, so the file runs in psql or any other tool. On save, the greyed quotes become real text in the editor, as *Accept all* (Ctrl+Alt+Q) does.
 - **The header line is SiftDB's, not the user's:** it is read and taken off when a file opens, and written back on save, so it never shows in the editor. It names the connection only for a *saved* connection (a pasted string is never written to a file). Other `--` comments at the top are left alone.
@@ -247,9 +247,6 @@ Make results easier to read by colouring values, the way users are used to seein
 ---
 
 ## 11. Open questions
-
-**Needed before building the editor features**
-- Variables with no inferable type: default to text, or ask?
 
 **Decided**
 - Parser: **`pgsqlparser` 2.1.0 (MIT, libpg_query 18.x) inside `SiftDB.Providers.Postgres` only**, behind a provider-neutral `ISqlParser` in Abstractions, so its types never leak and another engine (ScriptDom for SQL Server) can implement the same interface. Pin the version. Fallback if the wrapper is abandoned: our own P/Invoke over libpg_query (MSVC builds are supported upstream) or a fork. We do **not** write a full Postgres parser. Observed behaviour (see `PgSqlParserCharacterization` tests):
