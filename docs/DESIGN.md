@@ -60,7 +60,7 @@ The engine's resolver matches identifiers against the schema, ignoring case, and
 - You type `OrderItems` and the editor shows `"OrderItems"`, with the quotes greyed out (Monaco injected-text decorations that can't be edited and that the cursor skips).
 - What's executed is exactly what's displayed.
 
-**The mode switch shows both options.** Each sheet toolbar has an `Assisted | Strict` segmented control with the active option filled. An earlier single button changed its own label to the current mode, which read as "click for Strict". That made a correctly blocked Strict run look like Assisted failing. Mode is per sheet, and switching clears a stale "not run" message.
+**The mode switch shows both options.** Each sheet toolbar has an `Assisted | Strict` segmented control with the active option filled. An earlier single button changed its own label to the current mode, which read as "click for Strict". That made a correctly blocked Strict run look like Assisted failing. Mode is per sheet, and switching clears a stale "not run" message. **Mode belongs to the sheet, not the connection:** Assisted shows exactly what runs and blocks anything ambiguous, so Strict is a style choice (the file text is the real SQL), not a safety measure, and there is no per-connection default. New sheets open in **Assisted** until user settings (§10) add a preferred mode; then new sheets take that.
 
 **Rules for both modes**
 - Copy and save output the corrected SQL, or ask first.
@@ -124,7 +124,7 @@ A query tab is a **sheet** that holds several queries. It can be saved to a file
 2. The statement the cursor is in (if the cursor is on a blank line, the statement above; if nothing sensible is close by, nothing)
 3. The only statement in the sheet
 
-**`Shift+F5`** runs the **whole sheet as one script**: sent in one go, with an optional wrapping transaction. All result sets and `NOTICE`/`RAISE` messages are returned, and an error stops the script and jumps to the failing line. Connections marked as production ask for confirmation first. (There's no per-sheet "script mode" setting. That was considered and rejected.)
+**`Shift+F5`** runs the **whole sheet as one script**: sent in one go, with an optional wrapping transaction. All result sets and `NOTICE`/`RAISE` messages are returned, and an error stops the script and jumps to the failing line. (There's no per-sheet "script mode" setting. That was considered and rejected.)
 
 **`Ctrl+.` / `Esc`** cancels.
 
@@ -157,7 +157,7 @@ A transaction starts from a toolbar button or a typed statement (`BEGIN`). A bar
 - The yellow bar shows a summary (e.g. "3 statements · 42 rows changed") and how long the transaction has been open.
 - Shortcuts for commit and rollback. Closing a tab with changes pending shows a warning.
 - Each state also has an icon and a text label, not just a colour.
-- Optionally, a per-connection setting starts a transaction automatically on the first change (e.g. the default for production).
+- Optionally, a per-connection setting (**auto-transaction**, off by default) starts a transaction automatically on the first change, so a missing `WHERE` can still be rolled back. It applies to writable connections only (§8).
 
 **Split between core and providers**
 - **Core** owns the bar, the buttons and the states (None → Open → Changed → Failed).
@@ -175,7 +175,35 @@ A transaction starts from a toolbar button or a typed statement (`BEGIN`). A bar
 
 ---
 
-## 8. Delivery
+## 8. Connections
+
+A **saved connection** is **one database** (not a whole server; a second database on the same server is a second connection): a named set of structured fields (host, port, database, user, SSL mode), plus an *advanced* box for extra driver keywords. The provider describes its own fields, so the form and the store are provider-neutral (a provider contract change).
+
+**Storage**
+- The **engine** owns the store, so a future TUI gets the same connections. A JSON file in `%APPDATA%\SiftDB` holds the connections; **secrets never go in that file**. Passwords are kept separately, encrypted with DPAPI (CurrentUser), so the connection file could later be shared or committed without leaking anything.
+- A password travels **from the UI to the engine once** (typed into the edit form or the connect prompt) and is **never sent back**. Editing a connection shows *saved password* with a Change button, never the value.
+- **Remember password** is a per-connection checkbox. Without a saved password, connecting asks for it.
+
+**Identity**
+- Connections have a stable internal **id**; sheet files refer to them by **name** (`connection=dev-pg`), matched when a file is opened, so files move between machines and renames don't break the store. Names are unique.
+- Editing a connection takes effect the next time a sheet connects; deleting one is refused while a sheet uses it.
+- At startup the picker selects the **last-used** saved connection but does not connect until asked.
+- An ad-hoc pasted connection string still works as an **unsaved connection**, with *Save as…*.
+
+**Per-connection settings** (deliberately only two)
+- **Read-only.** The session opens with `default_transaction_read_only = on`, passed in the startup options (`-c ...`) rather than a `SET`, so `RESET`, `RESET ALL` and `DISCARD ALL` fall back to read-only. The server then refuses writes, including inside a typed `BEGIN`. The app blocks statements that would switch it off, recognised by the parser from the statement's structure rather than its text: `SET`/`SET SESSION CHARACTERISTICS ... READ WRITE`, `BEGIN`/`START TRANSACTION`/`SET TRANSACTION ... READ WRITE`, and `set_config('default_transaction_read_only' | 'transaction_read_only', ...)`. Anything inside a `DO` block or a function body gets through. Note the server also refuses every `CREATE`/`ALTER`/`DROP` (including `CREATE TEMP TABLE`) and `nextval` on ordinary sequences. There is **no per-tab lock or unlock**: to write, open the sheet on a writable connection. Users who want protection save a read-only and a writable connection to the same database and choose deliberately. This is a guard against mistakes, not security; real protection is a database role without write privileges. A read-only sheet can't go yellow. A lock icon and the words *Read-only* show on the tab, the tree root and the connection picker, so a refused write is never a mystery. SQL Server has no server-side equivalent and would rely on the app check (capability flag `ReadOnlyEnforcement = Server | Client`).
+- **Auto-transaction** (§7), for writable connections.
+
+There is no "production" flag or environment concept, and no per-connection default mode (§3).
+
+**First version**
+- Auth: password, and SSL modes including `verify-full` with a CA file. The stored fields leave room for Entra ID (Azure Postgres), client certificates and SSH tunnels, which come later.
+- The store file carries a format version and is written atomically (temp file, then replace).
+- UI: the schema tree stays the list of *open* connections. Above it, a picker: a dropdown of saved connections with *New…* and *Edit…*; the edit form is a modal with a **Test** button. Grouping or folders come later.
+
+---
+
+## 9. Delivery
 
 - The host is published self-contained, so no .NET runtime install is needed.
 - The UI is bundled and served locally, never from a remote URL. Engine and UI are released together.
@@ -186,24 +214,19 @@ A transaction starts from a toolbar button or a typed statement (`BEGIN`). A bar
 
 ---
 
-## 9. Back burner
+## 10. Back burner
 
-### Read-only lock
-A lock button on the toolbar protects users who have write permissions from themselves.
-- **App check:** the parser blocks writes before anything is sent, with a clear message and an "Unlock and run" option that asks for confirmation.
-- **Server enforcement where possible:** Postgres uses `SET default_transaction_read_only = on`, and the app also blocks statements that would switch it off. SQL Server has no equivalent, so it relies on the app check.
-- A capability flag `ReadOnlyEnforcement = Server | Client` decides whether the icon says "Enforced by server" or "Guarded by app".
-- The lock is per tab, with a default per connection (production connections open locked).
-- A locked tab can't go yellow. You can't toggle the lock while changes are pending.
+The read-only lock that used to be here became the read-only connection setting (§8).
 
 ### Later
+- **User settings**, a feature of its own. First known setting: the preferred mode for new sheets (§3).
 - A TUI front end on the same engine
 - AI completions
 - A SQL Server provider
 
 ---
 
-## 10. Open questions
+## 11. Open questions
 
 **Needed before building the editor features**
 - Variables with no inferable type: default to text, or ask?
@@ -223,23 +246,22 @@ A lock button on the toolbar protects users who have write permissions from them
 - NULLs: every batch column that contains a NULL carries a validity bitmap (one bit per row, set = NULL; no bitmap, no NULLs), with a well-formed 0 / empty string underneath. The grid draws NULL dim and italic so it can never be mistaken for `0`, `''` or the text "NULL". Verified with real Postgres NULLs through Npgsql, and by replaying the engine's real bytes into the real UI.
 - What F5 / Ctrl+Enter runs (§6) is decided **in the engine** (`StatementPicker`), not the UI, so a future TUI behaves identically. Rules in priority order: selection (trimmed); the statement the cursor is in or touching; blank space or a single `;` directly below a statement picks that statement; a sheet with one statement runs it from anywhere; otherwise nothing, with a message. The UI asks the engine afresh on every F5 (never a stale answer), and re-analyzes after a 120 ms pause for the margin ▶ and the statement highlight.
 - Autocomplete (§5) is computed by the engine from its cached schema (`CompletionEngine`), tolerant of half-typed SQL: tables after FROM/JOIN/INTO/UPDATE, columns after `alias.` and expression keywords, only from tables in the current statement, ambiguous names qualified, quoting from the dialect's `IIdentifierPolicy` (driven by libpg_query's keyword classes, not a list we keep). It offers nothing rather than something wrong (strings, comments, alias positions, unresolved names). Not yet: keywords, FK-driven `JOIN ... ON` ghost text.
-- Strict vs Assisted (§3): **Assisted is the default**, switched per sheet from the toolbar (per-connection defaults, e.g. production = Strict, wait for the connection manager). The resolver (`IdentifierResolver`) follows the database's own rules so it never "fixes" valid SQL (`ORDERS` already means `orders`). Findings: *needs quotes* (`Person` for `"Person"`, or a bare reserved word) is auto-applied in Assisted as greyed, non-editable quotes drawn around the word, and what runs is exactly what is shown; in Strict it is a squiggle with a quick fix (Alt+Enter) and running is blocked. *Case mismatch* (`person` for `"Person"`), *quote mix-up* (`name = "bob"` where `bob` is no column; offers `'bob'`) and *ambiguous column* (two tables in scope have it) are squiggles in both modes and never applied silently. Ambiguity blocks running even in Assisted ("nothing is filled in; needs a choice"). Ctrl+Alt+Q accepts all corrections as real text. Resolver limits, deliberately conservative: names it cannot resolve get no comment; derived tables/CTEs suppress guesses; output aliases and function names are skipped; a *bare* reserved-word column (`select user from t`) is not rewritten, because telling it from the clause keyword is unsafe. An *unknown column* (a name that is no column of any table in the statement, e.g. `id` when the key is `"PersonId"`) gets a hint with up to three ranked candidates (ends with what was typed, starts with it, a near miss, contains it; a name two tables share is offered qualified) and a quick fix per candidate, but is **never applied automatically** (a fuzzy guess silently changing a query could run the wrong one) and **never blocks, even in Strict**: only the server knows for sure, and a wrong squiggle must not stop valid SQL. It is silent unless every table in the statement is known (a derived table, CTE or function could own the column) and skips function names, casts, whole-row references (`select p from "Person" p`), aliases given without AS, named arguments, `extract(epoch from x)`, and bare names in ORDER BY / GROUP BY (which may be output columns). Not yet: unknown *tables* (CTE names make that unsafe without a CTE scanner), Copy/save output of corrected SQL, history recording both forms.
+- Strict vs Assisted (§3): **Assisted is the default**, switched per sheet from the toolbar; there is no per-connection default (§3), and new sheets open in Assisted until user settings exist. The resolver (`IdentifierResolver`) follows the database's own rules so it never "fixes" valid SQL (`ORDERS` already means `orders`). Findings: *needs quotes* (`Person` for `"Person"`, or a bare reserved word) is auto-applied in Assisted as greyed, non-editable quotes drawn around the word, and what runs is exactly what is shown; in Strict it is a squiggle with a quick fix (Alt+Enter) and running is blocked. *Case mismatch* (`person` for `"Person"`), *quote mix-up* (`name = "bob"` where `bob` is no column; offers `'bob'`) and *ambiguous column* (two tables in scope have it) are squiggles in both modes and never applied silently. Ambiguity blocks running even in Assisted ("nothing is filled in; needs a choice"). Ctrl+Alt+Q accepts all corrections as real text. Resolver limits, deliberately conservative: names it cannot resolve get no comment; derived tables/CTEs suppress guesses; output aliases and function names are skipped; a *bare* reserved-word column (`select user from t`) is not rewritten, because telling it from the clause keyword is unsafe. An *unknown column* (a name that is no column of any table in the statement, e.g. `id` when the key is `"PersonId"`) gets a hint with up to three ranked candidates (ends with what was typed, starts with it, a near miss, contains it; a name two tables share is offered qualified) and a quick fix per candidate, but is **never applied automatically** (a fuzzy guess silently changing a query could run the wrong one) and **never blocks, even in Strict**: only the server knows for sure, and a wrong squiggle must not stop valid SQL. It is silent unless every table in the statement is known (a derived table, CTE or function could own the column) and skips function names, casts, whole-row references (`select p from "Person" p`), aliases given without AS, named arguments, `extract(epoch from x)`, and bare names in ORDER BY / GROUP BY (which may be output columns). Not yet: unknown *tables* (CTE names make that unsafe without a CTE scanner), Copy/save output of corrected SQL, history recording both forms.
 - Transaction bar (§7): state always comes from the **server's protocol status** (ReadyForQuery), observed after every statement and after Begin/Commit/Rollback, so the button and a typed `BEGIN` cannot disagree; "changed" is a read-only `pg_current_xact_id_if_assigned()` probe that runs only inside an open block. Green = open, yellow = changes pending (`3 statements · 42 rows changed`, open for N), red = aborted (Rollback only); each state has colour, icon and words. Npgsql exposes the status only on an internal class, so it is read by reflection in **one place** (`PostgresTransactionMonitor`) with a test that fails loudly, with an explanation, if an Npgsql upgrade moves it. (Timestamp tricks were tried and do not work: Npgsql's extended protocol refreshes `statement_timestamp()` on every message.) Everything on a session connection is serialised by a lock held for a statement's whole streaming life, so a probe, a Commit and a stream cannot collide; a new statement cancels the running one. Shortcuts: Commit Ctrl+Shift+Enter, Rollback Ctrl+Shift+R. The host warns before the window closes while changes are pending. Not yet: auto-transaction on first change per connection, the SQL Server write-detection fallback (the interface flag exists).
-- Sheets and results (§6): the whole right-hand area is a **tab**, and each tab is a sheet with **its own database session**, so BEGIN/COMMIT, temp tables, SET, the transaction bar and the Strict/Assisted mode are all per sheet. New sheets (+ New sheet, the + on the strip, Ctrl+T) connect themselves on the shared connection; Ctrl+W closes, Ctrl+Tab and Ctrl+Shift+Tab cycle; closing the last sheet leaves a fresh one. A tab shows a coloured dot while its session is in a transaction, so one can't be forgotten behind another tab. Closing a sheet (or reconnecting) with uncommitted changes asks first, because closing the session rolls them back; the host warns the same way before the window closes. Under each editor is a second strip of **result tabs**, each labelled with the start of the SQL that ran (after any corrections): a run fills the unpinned tab, or opens a new one when every tab is pinned, so pinning keeps a result across runs. The engine gained `disconnect` and a quiet `introspect` (refresh a session's schema cache without re-sending the schema), and now releases finished queries. Engine events are routed by connection id (transactions) or query id (results and row batches). Two Monaco facts worth remembering: its keybindings and its completion/quick-fix providers are **global to the page**, not per editor, so each editor tags its own context key and scopes its F5/Ctrl+Enter/Ctrl+. bindings to it (otherwise the last editor created owns F5 for every sheet), and the providers register once and route by model. **The result status bar** is one line above each grid saying what happened, in four states: running (`Running… 120,000 rows so far · 1.4 s`, with a spinner), complete (`1,000,000 rows · 1.07 s`, or `3 rows affected · 4 ms` for INSERT/UPDATE/DELETE), cancelled (`Cancelled after 1.2 s`) and error. A **failure is red** (background, edge, ✖ and words, so it never depends on colour alone) with the server's message as the headline and its code and extra lines (`42703 · POSITION: 30`, `HINT: ...`) beside it, announced to screen readers as an alert; the failed result's **tab also carries a red ✖**, so it is visible with several tabs open. The detailed timings (first batch, first paint, engine split, drawing, the scroll benchmark) are behind a **Details** toggle on the same bar, which stays open across results. The sheet's **message bar** (between the editor and the results) uses the same tones: **amber** with a ⚠ for "cannot run yet" (not connected, including trying to run while disconnected, or a run blocked by identifier problems), **red** with a ✖ when something failed (a connection), neutral for information (`Connecting…`, `nothing to run`). **Cancel works before the first row.** A statement is registered under a query id only once the database starts answering, so a slow aggregate or `pg_sleep` has no id, yet that is when cancelling matters most (and it holds the session lock, so nothing else on that sheet works, and closing the tab would wait it out). The engine therefore keeps a handle on a statement that is still starting: \`cancel\` can name a connection instead of a query, and Cancel, Ctrl+., closing the sheet, a new statement and Begin/Commit/Rollback all cancel it. A statement cancelled before any result reports \`cancelled\`, not an error; inside a transaction the server aborts the transaction, and the bar shows that. Not yet: saving and opening `.sql` files, autosave and restore, a script run (Shift+F5) with several result sets per statement, per-connection default mode, renaming or reordering tabs, and sharing one schema cache between sessions on the same server (each session introspects for itself, about 0.2 s for 2,000 tables).
+- Sheets and results (§6): the whole right-hand area is a **tab**, and each tab is a sheet with **its own database session**, so BEGIN/COMMIT, temp tables, SET, the transaction bar and the Strict/Assisted mode are all per sheet. New sheets (+ New sheet, the + on the strip, Ctrl+T) connect themselves on the shared connection; Ctrl+W closes, Ctrl+Tab and Ctrl+Shift+Tab cycle; closing the last sheet leaves a fresh one. A tab shows a coloured dot while its session is in a transaction, so one can't be forgotten behind another tab. Closing a sheet (or reconnecting) with uncommitted changes asks first, because closing the session rolls them back; the host warns the same way before the window closes. Under each editor is a second strip of **result tabs**, each labelled with the start of the SQL that ran (after any corrections): a run fills the unpinned tab, or opens a new one when every tab is pinned, so pinning keeps a result across runs. The engine gained `disconnect` and a quiet `introspect` (refresh a session's schema cache without re-sending the schema), and now releases finished queries. Engine events are routed by connection id (transactions) or query id (results and row batches). Two Monaco facts worth remembering: its keybindings and its completion/quick-fix providers are **global to the page**, not per editor, so each editor tags its own context key and scopes its F5/Ctrl+Enter/Ctrl+. bindings to it (otherwise the last editor created owns F5 for every sheet), and the providers register once and route by model. **The result status bar** is one line above each grid saying what happened, in four states: running (`Running… 120,000 rows so far · 1.4 s`, with a spinner), complete (`1,000,000 rows · 1.07 s`, or `3 rows affected · 4 ms` for INSERT/UPDATE/DELETE), cancelled (`Cancelled after 1.2 s`) and error. A **failure is red** (background, edge, ✖ and words, so it never depends on colour alone) with the server's message as the headline and its code and extra lines (`42703 · POSITION: 30`, `HINT: ...`) beside it, announced to screen readers as an alert; the failed result's **tab also carries a red ✖**, so it is visible with several tabs open. The detailed timings (first batch, first paint, engine split, drawing, the scroll benchmark) are behind a **Details** toggle on the same bar, which stays open across results. The sheet's **message bar** (between the editor and the results) uses the same tones: **amber** with a ⚠ for "cannot run yet" (not connected, including trying to run while disconnected, or a run blocked by identifier problems), **red** with a ✖ when something failed (a connection), neutral for information (`Connecting…`, `nothing to run`). **Cancel works before the first row.** A statement is registered under a query id only once the database starts answering, so a slow aggregate or `pg_sleep` has no id, yet that is when cancelling matters most (and it holds the session lock, so nothing else on that sheet works, and closing the tab would wait it out). The engine therefore keeps a handle on a statement that is still starting: \`cancel\` can name a connection instead of a query, and Cancel, Ctrl+., closing the sheet, a new statement and Begin/Commit/Rollback all cancel it. A statement cancelled before any result reports \`cancelled\`, not an error; inside a transaction the server aborts the transaction, and the bar shows that. Not yet: saving and opening `.sql` files, autosave and restore, a script run (Shift+F5) with several result sets per statement, renaming or reordering tabs, and sharing one schema cache between sessions on the same server (each session introspects for itself, about 0.2 s for 2,000 tables).
 - Grid editing: none for now. The grid is read-only. Revisit later (it would interact with transactions and the lock).
 - Export formats: CSV and JSON are enough for now. Import is not decided.
 - Query history retention: deferred until later.
 - Audience: anyone (a public product, not just personal use). This raises the bar on installer, signing, docs and the plugin contract.
 
 **Not discussed yet**
-- Connections: auth methods (password, Entra ID for Azure Postgres, certificates), SSH tunnels, SSL, the connection manager UI
 - Schema browser scope: object tree, DDL view, search, ER diagrams
 - Query history: how it's searched, whether it's per connection
 - Licensing (plugin SDK, open source or closed): not a concern for now, and monetisation isn't a goal at this stage
 
 ---
 
-## 11. Suggested solution layout
+## 12. Suggested solution layout
 
 ```
 SiftDB.sln
@@ -259,7 +281,7 @@ SiftDB.sln
 
 ---
 
-## 12. First piece of work: the spike
+## 13. First piece of work: the spike
 
 Prove the riskiest part before building anything else:
 
@@ -287,6 +309,6 @@ The spike succeeds if the first rows appear in under 1s, scrolling stays smooth,
 | Draw time per frame | avg 0.51 ms, max 2.2 ms | – |
 | JS heap after load | 54 MB | bounded |
 
-Reading: first rows and scrolling pass comfortably. The bridge and UI add about 8 ms to the engine's own time, and the engine was blocked on the UI for only 2 ms, so the fetch loop does not stall the reader. The first measurement (5.1 s) was a Debug build; always benchmark in Release (`dotnet run -c Release`). Encoding text columns (one string per cell) is the largest remaining engine cost and the first thing to optimise if needed. For comparison, `psql` fetches the same rows in about 0.97 s. Engine-only numbers can be reproduced without the UI via the `StreamingBenchmark` test (set `SIFTDB_SPIKE_CONN`). Memory scales linearly with rows (heap is about the size of the data), so it is only bounded once the spill-to-disk cap from §10 exists.
+Reading: first rows and scrolling pass comfortably. The bridge and UI add about 8 ms to the engine's own time, and the engine was blocked on the UI for only 2 ms, so the fetch loop does not stall the reader. The first measurement (5.1 s) was a Debug build; always benchmark in Release (`dotnet run -c Release`). Encoding text columns (one string per cell) is the largest remaining engine cost and the first thing to optimise if needed. For comparison, `psql` fetches the same rows in about 0.97 s. Engine-only numbers can be reproduced without the UI via the `StreamingBenchmark` test (set `SIFTDB_SPIKE_CONN`). Memory scales linearly with rows (heap is about the size of the data), so it is only bounded once the spill-to-disk cap from §11 exists.
 
 **Known spike limitations:** no selection or copy; the scroll height is plain DOM, so it tops out around 33M px (about 1.5M rows at 22px); an oversized single row isn't specially handled; no spill-to-disk.
