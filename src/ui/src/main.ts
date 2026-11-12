@@ -3,6 +3,7 @@ import { ConnectionCatalog, EditResult, askPassword, editConnection } from './co
 import { askSaveChanges } from './dialogs';
 import { lockIcon, spinner } from './icons';
 import { ResultView } from './results';
+import { Settings, editSettings } from './settings';
 import { FileState, Sheet, SheetContext, Target, TxState, targetKey } from './sheet';
 import type { QueryMode } from './editor';
 import { revealSelectedTab, scrollTabsWithWheel } from './tabs';
@@ -35,6 +36,7 @@ const INITIAL_SHEET = [
 
 let bridge: Bridge;
 let catalog: ConnectionCatalog;
+let settings: Settings;
 let dark = false;
 /**
  * One entry per distinct target in use (a saved connection, or a pasted string), by targetKey. Sheets on the same target
@@ -190,6 +192,7 @@ function addSheet(first = false): Sheet {
   // A new sheet starts on the connection of the sheet you were looking at, with a session of its own.
   const inherit = active?.target ?? null;
   const sheet = createSheet(`Sheet ${++sheetCounter}`, first ? INITIAL_SHEET : '', first ? 3 : 1);
+  sheet.setMode(settings.values.newSheetMode); // the preferred mode (user settings)
   sheet.draftChoice = inherit ? choiceFor(inherit) : active?.draftChoice ?? defaultChoice();
   sheet.draftText = inherit?.kind === 'string' ? inherit.cs : active?.draftText ?? '';
   activate(sheet);
@@ -520,7 +523,7 @@ async function openFile() {
   } else sheet = addSheet();
   const file: FileState = { path: r.path, fileName: r.fileName, lineEnding: r.lineEnding, encoding: r.encoding, headerOther: r.headerOther };
   sheet.load(r.text, file, false);
-  sheet.setMode((r.mode as QueryMode | null) ?? 'assisted');
+  sheet.setMode((r.mode as QueryMode | null) ?? settings.values.newSheetMode); // a file that does not say takes the preferred mode
   sheet.setMessage('');
   if (namesConnection) applyConnection(sheet, r.savedId ?? null, r.connectionName ?? null);
   activate(sheet);
@@ -556,6 +559,7 @@ async function saveSheet(sheet: Sheet, as = false): Promise<boolean> {
 
 $('openFile').onclick = () => void openFile();
 $('saveFile').onclick = () => { if (active) void saveSheet(active); };
+$('settings').onclick = () => void editSettings(settings);
 
 /** At startup: the sheets from last time, in order, without connecting (design section 6). Nothing saved: one new sheet. */
 async function restoreSession() {
@@ -636,6 +640,7 @@ window.addEventListener('keydown', (e) => {
     if (key === 'w' && active) return handled(() => void closeSheet(active!));
     if (key === 's' && active) return handled(() => void saveSheet(active!));
     if (key === 'o') return handled(() => void openFile());
+    if (key === ',') return handled(() => void editSettings(settings));
   }
   if (e.ctrlKey && e.shiftKey && !e.altKey && key === 's' && active) return handled(() => void saveSheet(active!, true));
   if (e.ctrlKey && !e.altKey && e.key === 'Tab') return handled(() => cycle(e.shiftKey ? -1 : 1));
@@ -659,8 +664,9 @@ window.addEventListener('keydown', (e) => {
 
 bridge = connectBridge(onEvent, onBatch);
 catalog = new ConnectionCatalog(bridge);
+settings = new Settings(bridge);
 // The first sheet starts on the last connection used, selected but not connected (design section 8).
-void catalog.load().then(async () => {
+void Promise.all([catalog.load(), settings.load()]).then(async () => {
   if (catalog.error) connectNote = catalog.error; // unreadable file: say why, and pasted strings still work
   try {
     await restoreSession();

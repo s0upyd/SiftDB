@@ -40,6 +40,16 @@
                    color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
                    box-shadow: 0 12px 40px rgba(0,0,0,.35); }
     dialog.modal.small { width: min(400px, calc(100vw - 32px)); }
+    dialog.modal.wide { width: min(760px, calc(100vw - 32px)); }
+    /* Settings: categories on the left, the chosen one's page on the right. The body keeps one height across categories. */
+    .settingsbody { display: flex; gap: 16px; min-height: 320px; }
+    .settingsnav { flex: none; width: 150px; display: flex; flex-direction: column; gap: 2px; padding-right: 12px; border-right: 1px solid var(--line); }
+    .settingsnav button { text-align: left; border: none; background: transparent; padding: 6px 10px; border-radius: 4px; color: var(--dim); }
+    .settingsnav button:hover { background: var(--panel); color: var(--fg); }
+    .settingsnav button[aria-selected="true"] { background: var(--panel); color: var(--fg); font-weight: 600; box-shadow: inset 3px 0 0 var(--accent); }
+    .settingspages { flex: 1; min-width: 0; }
+    .settingspage { display: flex; flex-direction: column; gap: 10px; }
+    dialog.modal h3 { margin: 0; font-size: 14px; }
     dialog.modal::backdrop { background: rgba(0,0,0,.4); }
     dialog.modal form { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; }
     dialog.modal h2 { margin: 0; font-size: 16px; }
@@ -230,6 +240,7 @@
     <button id="openFile" title="Open a .sql file in a sheet (Ctrl+O)">Open…</button>
     <button id="saveFile" title="Save the visible sheet (Ctrl+S). Ctrl+Shift+S saves it under a new name.">Save</button>
     <button id="newSheet" title="Open a new SQL sheet in a new tab (Ctrl+T). Each sheet has its own session.">+ New sheet</button>
+    <button id="settings" title="Settings (Ctrl+,)">Settings…</button>
   </div>
   <div id="main">
     <aside id="side" aria-label="Schema browser">

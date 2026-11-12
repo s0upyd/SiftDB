@@ -31,10 +31,13 @@ public sealed partial class EngineHost : IAsyncDisposable
 
     /// <param name="store">Saved connections. Without one, only pasted connection strings can be used.</param>
     /// <param name="session">Autosave and restore of the open sheets. Without one, the session is not kept.</param>
-    public EngineHost(IEnumerable<IDatabaseProvider> providers, IEngineOutput output, ConnectionStore? store = null, SessionStore? session = null)
+    /// <param name="settings">User settings. Without one, the defaults apply.</param>
+    public EngineHost(IEnumerable<IDatabaseProvider> providers, IEngineOutput output, ConnectionStore? store = null, SessionStore? session = null,
+        SettingsStore? settings = null)
     {
         _store = store;
         _session = session;
+        _settings = settings;
         foreach (var p in providers)
         {
             if (p.ContractVersion != ProviderContract.CurrentVersion)
@@ -85,6 +88,12 @@ public sealed partial class EngineHost : IAsyncDisposable
                     break;
                 case "loadSession":
                     LoadSession(id);
+                    break;
+                case "getSettings":
+                    GetSettings(id);
+                    break;
+                case "saveSettings":
+                    SaveSettings(id, root);
                     break;
                 case "parseConnectionString":
                     ParseConnectionString(id, root.GetProperty("provider").GetString()!, root.GetProperty("connectionString").GetString()!);

@@ -29,7 +29,8 @@ public partial class MainWindow : Window, IEngineOutput
         // Saved connections and their DPAPI-encrypted passwords live in %APPDATA%\SiftDB, in separate files.
         var dir = ConnectionStore.DefaultDirectory;
         var store = new ConnectionStore(Path.Combine(dir, "connections.json"), new DpapiSecretStore(Path.Combine(dir, "secrets.json")));
-        _engine = new EngineHost([new PostgresProvider()], this, store, new SessionStore(SessionStore.DefaultDirectory));
+        _engine = new EngineHost([new PostgresProvider()], this, store, new SessionStore(SessionStore.DefaultDirectory),
+            new SettingsStore(SettingsStore.DefaultPath));
         SourceInitialized += (_, _) => ApplyTitleBarTheme(IsDarkTheme());
         Loaded += async (_, _) => await InitWebAsync();
         Closing += OnClosing;
