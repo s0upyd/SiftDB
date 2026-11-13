@@ -78,7 +78,17 @@ function onEvent(e: BridgeEvent) {
       dark = !!e.dark;
       document.documentElement.dataset.theme = dark ? 'dark' : 'light';
       sheets.forEach((s) => s.setTheme(dark));
+      if (e.version) $('settings').title = `Settings (Ctrl+,) · SiftDB ${e.version}`;
       return;
+    case 'updateReady': {
+      // Downloaded in the background by the host. Restarting goes through the usual close (warning, last autosave).
+      const button = $('update');
+      button.textContent = `Restart to update to ${e.version}`;
+      button.title = `SiftDB ${e.version} is downloaded. Restart now to use it: your sheets come back as they were.\n`
+        + 'Or keep working: it is installed the next time SiftDB starts.';
+      button.hidden = false;
+      return;
+    }
     case 'flushBeforeClose':
       // The window is closing: write the last edits now, then let the host close it.
       void autosaveNow().finally(() => bridge.send({ type: 'flushed' }));
@@ -564,6 +574,7 @@ async function openSettings() {
   if (await editSettings(settings)) sheets.forEach((s) => s.restyle());
 }
 $('settings').onclick = () => void openSettings();
+$('update').onclick = () => bridge.send({ type: 'applyUpdate' });
 
 /** At startup: the sheets from last time, in order, without connecting (design section 6). Nothing saved: one new sheet. */
 async function restoreSession() {

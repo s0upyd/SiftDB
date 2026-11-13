@@ -1,4 +1,5 @@
-﻿using System.IO;
+﻿using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
@@ -52,13 +53,18 @@ public partial class MainWindow : Window, IEngineOutput
             var answer = MessageBox.Show(this,
                 "A transaction has changes that have not been committed. Closing now rolls them back.\n\nClose anyway?",
                 "SiftDB", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
-            if (answer != MessageBoxResult.Yes) { e.Cancel = true; return; }
+            if (answer != MessageBoxResult.Yes) { e.Cancel = true; _updateOnClose = false; return; }
         }
         _closeConfirmed = true;
 
         // Edits made in the last moment before closing may not be autosaved yet (autosave waits for a pause in typing).
         // Ask the page to save now and close when it says it has, or after a short wait if it cannot answer.
-        if (_flushed || Web.CoreWebView2 is null) return;
+        if (_flushed || Web.CoreWebView2 is null)
+        {
+            // Closing for certain now. The updater waits for this process to exit, then applies the update and restarts.
+            if (_updateOnClose) _updater.ApplyAfterExit();
+            return;
+        }
         e.Cancel = true;
         if (_flushTimeout is not null) return; // already waiting
         _flushTimeout = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
@@ -95,9 +101,33 @@ public partial class MainWindow : Window, IEngineOutput
         SendEvent(JsonSerializer.Serialize(new { type = "fileDialog", replyTo, path }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
     }
 
+    /// <summary>
+    /// WebView2's own data (the page's localStorage, its cache). By default it sits next to the exe, which an update
+    /// replaces, so it lives in the user's local app data instead.
+    /// </summary>
+    private static string WebViewDataDirectory =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SiftDB", "WebView2");
+
     private async Task InitWebAsync()
     {
-        await Web.EnsureCoreWebView2Async();
+        try
+        {
+            var env = await CoreWebView2Environment.CreateAsync(userDataFolder: WebViewDataDirectory);
+            await Web.EnsureCoreWebView2Async(env);
+        }
+        catch (WebView2RuntimeNotFoundException)
+        {
+            // The installer installs it (design section 9), so this means a copy run without installing, or one removed since.
+            var answer = MessageBox.Show(this,
+                "SiftDB needs the Microsoft Edge WebView2 Runtime, which is not installed on this computer.\n\n" +
+                "Open Microsoft's download page now? Start SiftDB again once it is installed.",
+                "SiftDB", MessageBoxButton.YesNo, MessageBoxImage.Error, MessageBoxResult.Yes);
+            if (answer == MessageBoxResult.Yes)
+                Process.Start(new ProcessStartInfo("https://developer.microsoft.com/microsoft-edge/webview2/") { UseShellExecute = true });
+            _closeConfirmed = _flushed = true;
+            Close();
+            return;
+        }
         var core = Web.CoreWebView2;
 
         var uiDir = Path.Combine(AppContext.BaseDirectory, "ui");
@@ -110,12 +140,39 @@ public partial class MainWindow : Window, IEngineOutput
         core.Settings.AreBrowserAcceleratorKeysEnabled = false;
         core.SetVirtualHostNameToFolderMapping("siftdb.local", uiDir, CoreWebView2HostResourceAccessKind.Allow);
         core.WebMessageReceived += OnWebMessage;
-        core.NavigationCompleted += (_, _) => SendEvent(JsonSerializer.Serialize(new
+        core.NavigationCompleted += (_, _) =>
         {
-            type = "init",
-            dark = IsDarkTheme(),
-        }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            SendEvent(JsonSerializer.Serialize(new
+            {
+                type = "init",
+                dark = IsDarkTheme(),
+                version = _updater.CurrentVersion,
+            }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            StartUpdateChecks();
+        };
         core.Navigate("https://siftdb.local/index.html");
+    }
+
+    // ---- updates (design section 9) ----------------------------------------------------------------------------------
+
+    private readonly Updater _updater = new();
+    private System.Windows.Threading.DispatcherTimer? _updateTimer;
+
+    /// <summary>The user chose to restart into a downloaded update; the updater starts once the window is certainly closing.</summary>
+    private bool _updateOnClose;
+
+    /// <summary>A first check shortly after start (so it never slows startup), then every few hours for a window left open.</summary>
+    private void StartUpdateChecks()
+    {
+        if (!_updater.IsInstalled || _updateTimer is not null) return;
+        _updateTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+        _updateTimer.Tick += async (_, _) =>
+        {
+            _updateTimer.Interval = TimeSpan.FromHours(4);
+            if (await _updater.CheckAndDownloadAsync() is { } version)
+                SendEvent(JsonSerializer.Serialize(new { type = "updateReady", version }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        };
+        _updateTimer.Start();
     }
 
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -138,6 +195,10 @@ public partial class MainWindow : Window, IEngineOutput
                 return;
             case "flushed": // the page's last autosave is written: close now
                 if (_closeConfirmed) FinishClose();
+                return;
+            case "applyUpdate": // restart into the downloaded update, through the usual close (warning, last autosave)
+                _updateOnClose = true;
+                Close();
                 return;
         }
         _ = _engine.HandleCommandAsync(json);

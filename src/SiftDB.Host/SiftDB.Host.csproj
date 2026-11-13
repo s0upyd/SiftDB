@@ -6,6 +6,12 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <!-- Program.Main runs Velopack's install and update hooks before WPF starts (design section 9). -->
+    <StartupObject>SiftDB.Host.Program</StartupObject>
+    <AssemblyName>SiftDB</AssemblyName>
+    <Product>SiftDB</Product>
+    <!-- The version a local build reports. A release passes its own (-p:Version=..., from the git tag). -->
+    <Version>0.1.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,6 +23,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
+    <PackageReference Include="Velopack" Version="1.2.161" />
   </ItemGroup>
 
   <!--
@@ -32,9 +39,7 @@
     <UiSource Include="$(UiDir)src\**;$(UiDir)index.html;$(UiDir)package.json;$(UiDir)vite.config.ts;$(UiDir)tsconfig.json" />
   </ItemGroup>
 
-  <Target Name="BuildUi" BeforeTargets="AssignTargetPaths;BeforeBuild"
-          Inputs="@(UiSource)" Outputs="$(UiDir)dist\index.html"
-          Condition="'$(SkipUiBuild)' != 'true'">
+  <Target Name="BuildUi" BeforeTargets="AssignTargetPaths;BeforeBuild" Inputs="@(UiSource)" Outputs="$(UiDir)dist\index.html" Condition="'$(SkipUiBuild)' != 'true'">
     <Exec Command="npm install" WorkingDirectory="$(UiDir)" />
     <Exec Command="npm run build" WorkingDirectory="$(UiDir)" />
   </Target>

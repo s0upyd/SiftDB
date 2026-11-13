@@ -1,0 +1,58 @@
+# Builds the installer and update packages and publishes them as a GitHub Release (design section 9).
+# Push a tag to release:  v0.2.0 is a stable release;  v0.2.0-beta.1 (any prerelease suffix) goes to the beta channel.
+# Installed copies find new releases here by themselves (src/SiftDB.Host/Updater.cs).
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # create the release and upload its files
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/ui/package-lock.json
+
+      - name: Version and channel from the tag
+        id: version
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          $channel = if ($version.Contains('-')) { 'beta' } else { 'win' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "channel=$channel" >> $env:GITHUB_OUTPUT
+
+      - name: Build and pack
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./build/release.ps1 -Version ${{ steps.version.outputs.version }} -Channel ${{ steps.version.outputs.channel }} -DownloadPrevious
+
+      - name: Publish the GitHub Release
+        shell: pwsh
+        run: |
+          $args_ = @('vpk', 'upload', 'github', '--repoUrl', 'https://github.com/${{ github.repository }}',
+                     '--token', '${{ secrets.GITHUB_TOKEN }}', '-o', 'artifacts/releases',
+                     '--channel', '${{ steps.version.outputs.channel }}',
+                     '--tag', '${{ github.ref_name }}', '--releaseName', 'SiftDB ${{ steps.version.outputs.version }}',
+                     '--publish')
+          if ('${{ steps.version.outputs.channel }}' -ne 'win') { $args_ += '--pre' }
+          dotnet @args_
+          if ($LASTEXITCODE -ne 0) { throw "vpk upload failed" }

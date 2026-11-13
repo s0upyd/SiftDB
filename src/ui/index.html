@@ -40,6 +40,8 @@
     .bar .grow { flex: 1; }
     select { color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
     #connPick { min-width: 220px; max-width: 420px; }
+    /* A downloaded update, waiting for a restart: the one accent-filled button, so it is noticed but never in the way. */
+    button.update { color: #fff; background: var(--accent); border-color: var(--accent); font-weight: 600; }
     /* Read-only shows the same way everywhere: a lock and words, never colour alone. */
     /* Read-only: a flat amber padlock on the tab; green chips on the sheet and the tree root. One colour each, no shading. */
     .lockicon { display: block; flex: none; }
@@ -281,6 +283,7 @@
     <button id="openFile" title="Open a .sql file in a sheet (Ctrl+O)">Open…</button>
     <button id="saveFile" title="Save the visible sheet (Ctrl+S). Ctrl+Shift+S saves it under a new name.">Save</button>
     <button id="newSheet" title="Open a new SQL sheet in a new tab (Ctrl+T). Each sheet has its own session.">+ New sheet</button>
+    <button id="update" class="update" hidden>Restart to update</button>
     <button id="settings" title="Settings (Ctrl+,)">Settings…</button>
   </div>
   <div id="main">
