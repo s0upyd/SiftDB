@@ -11,7 +11,7 @@
     <AssemblyName>SiftDB</AssemblyName>
     <Product>SiftDB</Product>
     <!-- The version a local build reports. A release passes its own (-p:Version=..., from the git tag). -->
-    <Version>0.1.0</Version>
+    <Version>0.1.2</Version>
   </PropertyGroup>
 
   <ItemGroup>
