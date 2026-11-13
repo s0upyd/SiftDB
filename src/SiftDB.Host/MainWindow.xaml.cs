@@ -88,17 +88,30 @@ public partial class MainWindow : Window, IEngineOutput
         string? StringOf(string name) =>
             request.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
         const string filter = "SQL files (*.sql)|*.sql|All files (*.*)|*.*";
+        // Exporting a result: the file type list is the format choice ("format" preselects one; the answer says which).
+        string[] exportFormats = ["csv", "json"];
+        const string exportFilter = "CSV, comma-separated (*.csv)|*.csv|JSON (*.json)|*.json";
         var current = StringOf("currentPath");
+        var export = StringOf("purpose") == "export";
+        var exportIndex = Math.Max(0, Array.IndexOf(exportFormats, StringOf("format") ?? "csv"));
         FileDialog dialog = request.GetProperty("type").GetString() == "openFileDialog"
             ? new OpenFileDialog { Filter = filter, Title = "Open a SQL file" }
-            : new SaveFileDialog
-            {
-                Filter = filter, Title = "Save the sheet", DefaultExt = ".sql", AddExtension = true, OverwritePrompt = true,
-                FileName = StringOf("suggestedName") ?? "Sheet.sql",
-            };
+            : export
+                ? new SaveFileDialog
+                {
+                    Filter = exportFilter, FilterIndex = exportIndex + 1, Title = "Export the result",
+                    DefaultExt = "." + exportFormats[exportIndex], AddExtension = true, OverwritePrompt = true,
+                    FileName = StringOf("suggestedName") ?? "result",
+                }
+                : new SaveFileDialog
+                {
+                    Filter = filter, Title = "Save the sheet", DefaultExt = ".sql", AddExtension = true, OverwritePrompt = true,
+                    FileName = StringOf("suggestedName") ?? "Sheet.sql",
+                };
         if (current is not null && Path.GetDirectoryName(current) is { } dir && Directory.Exists(dir)) dialog.InitialDirectory = dir;
         var path = dialog.ShowDialog(this) == true ? dialog.FileName : null;
-        SendEvent(JsonSerializer.Serialize(new { type = "fileDialog", replyTo, path }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        var format = export && path is not null ? exportFormats[Math.Clamp(dialog.FilterIndex - 1, 0, exportFormats.Length - 1)] : null;
+        SendEvent(JsonSerializer.Serialize(new { type = "fileDialog", replyTo, path, format }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
     }
 
     /// <summary>

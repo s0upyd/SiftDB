@@ -1,7 +1,13 @@
 import { BatchMeta, Bridge, BridgeEvent, Column } from './bridge';
-import { Grid, GridTheme, darkTheme, lightTheme } from './grid';
+import { toast } from './copy';
+import { ExportFormat, exportText, suggestedName } from './export';
+import { CellRange, Grid, GridTheme, darkTheme, lightTheme } from './grid';
 import { spinner } from './icons';
 import { ResultStore, decodeBatch } from './store';
+
+/** The format and file of the last export in this run: the next export starts from them. */
+let lastFormat: ExportFormat = 'csv';
+let lastExportPath: string | null = null;
 
 /** Batches requested ahead of the ones received, so the engine never waits on the page. */
 const MAX_OUTSTANDING = 3;
@@ -84,6 +90,10 @@ export class ResultView {
   private readonly headlineEl = document.createElement('span');
   private readonly extraEl = document.createElement('span');
   private readonly toggleEl = document.createElement('button');
+  private readonly exportEl = document.createElement('button');
+  /** The export being written, if any. Its button then reads "Cancel export" with how far it has got. */
+  private exporting: { cancelled: boolean } | null = null;
+  private sql = '';
   private readonly detailsEl = document.createElement('pre');
   private readonly gridEl = document.createElement('div');
   private store = new ResultStore();
@@ -117,7 +127,12 @@ export class ResultView {
     this.toggleEl.textContent = 'Details';
     this.toggleEl.title = 'Show the timings: first batch, first paint, engine split, drawing';
     this.toggleEl.onclick = () => { detailsOpen = !detailsOpen; this.refreshStats(); };
-    main.append(this.iconEl, text, this.toggleEl);
+    this.exportEl.className = 'statusToggle';
+    this.exportEl.onclick = () => {
+      if (this.exporting) this.exporting.cancelled = true;
+      else void this.export(null);
+    };
+    main.append(this.iconEl, text, this.exportEl, this.toggleEl);
     this.detailsEl.className = 'details';
     this.statusEl.append(main, this.detailsEl);
 
@@ -125,6 +140,8 @@ export class ResultView {
     this.grid = new Grid(this.gridEl);
     this.setTheme(dark);
     this.grid.onViewChange = () => this.pump();
+    this.grid.onExport = (range) => void this.export(range);
+    this.grid.canExport = () => this.canExport;
     this.grid.onFrame = () => {
       if (this.m.firstPaint < 0 && this.m.firstBatch >= 0 && this.store.loadedRows > 0) {
         this.m.firstPaint = performance.now() - this.m.t0;
@@ -165,6 +182,8 @@ export class ResultView {
   async run(connectionId: number, sql: string) {
     if (this.queryId) this.ctx.unregisterQuery(this.queryId); // events for the statement it replaces no longer matter
     this.queryId = 0;
+    if (this.exporting) this.exporting.cancelled = true; // its rows are about to be replaced
+    this.sql = sql;
     this.label = sqlLabel(sql);
     this.panel.title = sql;
     const t0 = performance.now();
@@ -305,6 +324,11 @@ export class ResultView {
     if (this.headlineEl.textContent !== headline) this.headlineEl.textContent = headline;
     if (this.extraEl.textContent !== extra) this.extraEl.textContent = extra;
 
+    this.exportEl.hidden = !this.exporting && !this.canExport;
+    if (!this.exporting) {
+      this.exportEl.textContent = 'Export…';
+      this.exportEl.title = 'Export the result to a CSV or JSON file';
+    }
     this.toggleEl.setAttribute('aria-expanded', String(detailsOpen));
     this.toggleEl.textContent = detailsOpen ? 'Hide details' : 'Details';
     this.detailsEl.hidden = !detailsOpen;
@@ -322,6 +346,61 @@ export class ResultView {
       `draw avg ${d.avg.toFixed(2)} ms, max ${d.max.toFixed(1)} ms`;
   }
 
+  /** A finished result with columns can be exported (a cancelled one too: what arrived is what it shows). One at a time. */
+  get canExport(): boolean {
+    return !this.exporting && this.columnCount > 0 && (this.state === 'complete' || this.state === 'cancelled');
+  }
+
+  /**
+   * Exports the whole result, or a rectangle of it, to a file chosen in the Save dialog, whose file type list picks CSV or
+   * JSON. The page formats the rows and the engine writes them a piece at a time (export.ts, EngineHost.Export.cs), so a
+   * large result neither freezes the page nor sits in memory twice. The file appears only when it is complete.
+   */
+  async export(range: CellRange | null) {
+    if (!this.canExport) return;
+    const bridge = this.ctx.bridge;
+    const src = this.grid.exportSource(range ?? undefined);
+    const d = await bridge.request({
+      type: 'saveFileDialog', purpose: 'export', format: lastFormat, currentPath: lastExportPath,
+      suggestedName: `${suggestedName(this.sql)}.${lastFormat}`,
+    });
+    if (!d.path || !this.canExport) return;
+    const path = d.path as string;
+    // A typed extension wins over the file type list, so "out.json" is JSON whichever type was showing.
+    const format: ExportFormat = /\.json$/i.test(path) ? 'json' : /\.csv$/i.test(path) ? 'csv' : d.format === 'json' ? 'json' : 'csv';
+    lastFormat = format;
+    lastExportPath = path;
+
+    const job = { cancelled: false };
+    this.exporting = job;
+    this.exportEl.textContent = 'Cancel export';
+    this.exportEl.title = 'Stop the export. No file is written.';
+    this.refreshStats();
+    try {
+      // Excel reads a CSV as UTF-8 only when it starts with the byte-order mark; JSON is plain UTF-8 by its standard.
+      const begin = await bridge.request({ type: 'exportBegin', path, byteOrderMark: format === 'csv' });
+      if (begin.type === 'error') { toast(this.gridEl, `Export failed: ${begin.message}`, 'warn'); return; }
+      const exportId = begin.exportId as number;
+      let row = src.r0;
+      const counted = { ...src, cell: (r: number, c: number) => { row = r; return src.cell(r, c); } };
+      for (const piece of exportText(format, counted)) {
+        if (job.cancelled) break;
+        const w = await bridge.request({ type: 'exportWrite', exportId, text: piece });
+        // A failed write has already ended the export in the engine, and thrown the partial file away.
+        if (w.type === 'error') { toast(this.gridEl, `Export failed: ${w.message}`, 'warn'); return; }
+        const pct = Math.floor(((row - src.r0 + 1) / Math.max(1, src.rows)) * 100);
+        this.exportEl.textContent = `Cancel export · ${pct}%`;
+      }
+      const end = await bridge.request({ type: 'exportEnd', exportId, cancel: job.cancelled });
+      if (end.type === 'error') toast(this.gridEl, `Export failed: ${end.message}`, 'warn');
+      else if (job.cancelled) toast(this.gridEl, 'Export cancelled. No file was written.');
+      else toast(this.gridEl, `Exported ${plural(src.rows, 'row')} to ${end.fileName}`);
+    } finally {
+      if (this.exporting === job) this.exporting = null;
+      this.refreshStats();
+    }
+  }
+
   /** A later attempt on the sheet did not run: say this result is from before it. Nothing to say for an empty tab or a running one. */
   markStale() {
     if (this.state === 'idle' || this.state === 'running' || this.stale) return;
@@ -330,6 +409,7 @@ export class ResultView {
   }
 
   dispose() {
+    if (this.exporting) this.exporting.cancelled = true;
     this.cancel();
     if (this.queryId) this.ctx.unregisterQuery(this.queryId);
     this.queryId = 0;

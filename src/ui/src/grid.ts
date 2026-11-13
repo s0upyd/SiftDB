@@ -1,5 +1,6 @@
 import { Column, Kind } from './bridge';
 import { announce, toTsv, toast, writeClipboard } from './copy';
+import { ExportFormat, ExportSource, exportAll } from './export';
 import { showMenu } from './menu';
 import { ResultStore, cellText } from './store';
 import { CellStyler, rulesVersion, stylersFor } from './styles';
@@ -39,7 +40,7 @@ interface Cell { row: number; col: number }
  */
 interface Selection { anchor: Cell; focus: Cell; mode: 'cells' | 'rows' | 'cols' | 'all' }
 /** Inclusive bounds. */
-interface CellRange { r0: number; r1: number; c0: number; c1: number }
+export interface CellRange { r0: number; r1: number; c0: number; c1: number }
 type Area = 'cell' | 'header' | 'gutter' | 'corner';
 
 /**
@@ -105,6 +106,10 @@ export class Grid {
   onViewChange: () => void = () => {};
   /** Runs after each frame; used to time first paint. */
   onFrame: () => void = () => {};
+  /** The menu's Export items: the whole result (null) or a rectangle of it. The result view owns exporting. */
+  onExport: (range: CellRange | null) => void = () => {};
+  /** Whether Export can be offered now (the statement has finished). */
+  canExport: () => boolean = () => false;
 
   constructor(private wrap: HTMLElement) {
     wrap.style.position = 'relative';
@@ -433,7 +438,7 @@ export class Grid {
   private onKey(e: KeyboardEvent) {
     const ctrl = e.ctrlKey && !e.altKey, key = e.key.toLowerCase();
     const done = () => { e.preventDefault(); e.stopPropagation(); this.hideTip(); };
-    if (ctrl && key === 'c') { done(); void this.copy(e.shiftKey); return; }
+    if (ctrl && key === 'c') { done(); void this.copy(e.shiftKey ? 'tsvHeaders' : 'tsv'); return; }
     if (ctrl && !e.shiftKey && key === 'a') { done(); this.selectAll(); return; }
     if ((e.shiftKey && e.key === 'F10') || e.key === 'ContextMenu') { done(); this.openMenuAtFocus(); return; }
     if (e.key === 'Enter' && !e.ctrlKey && !e.altKey && !e.shiftKey) {
@@ -480,45 +485,77 @@ export class Grid {
 
   // ---- copy, the menu and the value viewer --------------------------------------------------------------------
 
-  /** Copies the selection as tab-separated text (Excel pastes it into cells), with the column names first if asked. */
-  async copy(withHeaders: boolean) {
+  /**
+   * Copies the selection. Tab-separated by default (Excel pastes it into cells), with the column names first if asked;
+   * or as CSV or JSON, the same text an export writes.
+   */
+  async copy(as: 'tsv' | 'tsvHeaders' | ExportFormat) {
     const r = this.range();
     if (!r) return;
     const loadedLast = Math.min(r.r1, this.store.loadedRows - 1);
     const rows = loadedLast - r.r0 + 1, cols = r.c1 - r.c0 + 1;
     if (rows <= 0) { toast(this.wrap, 'Nothing to copy yet: those rows have not arrived', 'warn'); return; }
     if (rows * cols > MAX_COPY_CELLS) {
-      toast(this.wrap, `Too much to copy at once (${(rows * cols).toLocaleString()} values). Select up to ${MAX_COPY_CELLS.toLocaleString()}.`, 'warn');
+      toast(this.wrap, `Too much to copy at once (${(rows * cols).toLocaleString()} values). Select up to ${MAX_COPY_CELLS.toLocaleString()}, or export.`, 'warn');
       return;
     }
-    const out: (string | null)[][] = [];
-    for (let row = r.r0; row <= loadedLast; row++) {
-      const b = this.store.batchFor(row)!;
-      const line: (string | null)[] = [];
-      for (let c = r.c0; c <= r.c1; c++) line.push(cellText(b, c, row - b.startRow));
-      out.push(line);
+    const src = this.exportSource({ ...r, r1: loadedLast });
+    let text: string;
+    if (as === 'csv' || as === 'json') {
+      text = exportAll(as, src);
+    } else {
+      const out: (string | null)[][] = [];
+      for (let row = r.r0; row <= loadedLast; row++) {
+        const line: (string | null)[] = [];
+        for (let c = r.c0; c <= r.c1; c++) line.push(src.cell(row, c));
+        out.push(line);
+      }
+      text = toTsv(out, as === 'tsvHeaders' ? this.columns.slice(r.c0, r.c1 + 1).map((c) => c.name) : undefined);
     }
-    const header = withHeaders ? this.columns.slice(r.c0, r.c1 + 1).map((c) => c.name) : undefined;
-    if (!(await writeClipboard(toTsv(out, header)))) {
+    if (!(await writeClipboard(text))) {
       toast(this.wrap, 'Could not copy: the clipboard is not available', 'warn');
       return;
     }
     const what = this.sizeText({ ...r, r1: loadedLast });
+    const how = as === 'tsvHeaders' ? ' with column names' : as === 'csv' ? ' as CSV' : as === 'json' ? ' as JSON' : '';
     const partial = loadedLast < r.r1 ? ' (the rows loaded so far)' : '';
-    toast(this.wrap, `Copied ${what}${withHeaders ? ' with column names' : ''}${partial}`);
+    toast(this.wrap, `Copied ${what}${how}${partial}`);
   }
+
+  /**
+   * The loaded rows of a rectangle (the whole result when none is given), for export. Read while it is written, so rows
+   * still arriving are not part of it: the range is fixed when it is made.
+   */
+  exportSource(r?: CellRange): ExportSource & { rows: number } {
+    const store = this.store, columns = this.columns;
+    const range = r ?? { r0: 0, r1: store.loadedRows - 1, c0: 0, c1: columns.length - 1 };
+    const r1 = Math.min(range.r1, store.loadedRows - 1);
+    return {
+      columns, r0: range.r0, r1, c0: range.c0, c1: range.c1, rows: Math.max(0, r1 - range.r0 + 1),
+      cell: (row, col) => { const b = store.batchFor(row)!; return cellText(b, col, row - b.startRow); },
+    };
+  }
+
+  /** The selected rectangle, for exporting just that. Null when nothing is selected. */
+  get selection(): CellRange | null { return this.range(); }
 
   private openMenu(x: number, y: number) {
     const focus = this.sel?.focus;
+    const r = this.range();
+    const several = !!r && (r.r1 > r.r0 || r.c1 > r.c0);
     showMenu(x, y, [
-      { label: 'Copy', shortcut: 'Ctrl+C', action: () => void this.copy(false) },
-      { label: 'Copy with column names', shortcut: 'Ctrl+Shift+C', action: () => void this.copy(true) },
-      { label: 'Select all', shortcut: 'Ctrl+A', action: () => this.selectAll() },
+      { label: 'Copy', shortcut: 'Ctrl+C', action: () => void this.copy('tsv') },
+      { label: 'Copy with column names', shortcut: 'Ctrl+Shift+C', action: () => void this.copy('tsvHeaders') },
+      { label: 'Copy as CSV', action: () => void this.copy('csv') },
+      { label: 'Copy as JSON', action: () => void this.copy('json') },
+      { label: 'Select all', shortcut: 'Ctrl+A', action: () => this.selectAll(), separatorBefore: true },
       {
         label: 'Show whole value', shortcut: 'Enter',
         disabled: !focus || focus.row >= this.store.loadedRows,
         action: () => { if (focus) void this.openValue(focus); },
       },
+      { label: 'Export result…', separatorBefore: true, disabled: !this.canExport(), action: () => this.onExport(null) },
+      { label: 'Export selection…', disabled: !several || !this.canExport(), action: () => this.onExport(this.range()) },
     ], 'Result actions');
   }
 

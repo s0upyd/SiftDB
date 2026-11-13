@@ -6,6 +6,8 @@ export interface MenuItem {
   /** Shown on the right, for reading only: the shortcut is handled by whoever owns it. */
   shortcut?: string;
   disabled?: boolean;
+  /** A line above this item, to group the ones before it. */
+  separatorBefore?: boolean;
   action: () => void;
 }
 
@@ -35,6 +37,7 @@ export function showMenu(clientX: number, clientY: number, items: MenuItem[], la
       b.append(k);
     }
     b.onclick = () => { close(); item.action(); };
+    if (item.separatorBefore) menu.append(Object.assign(document.createElement('div'), { className: 'sep', role: 'separator' }));
     menu.append(b);
     return b;
   });

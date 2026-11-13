@@ -90,6 +90,15 @@ public sealed partial class EngineHost : IAsyncDisposable
                 case "loadSession":
                     LoadSession(id);
                     break;
+                case "exportBegin":
+                    ExportBegin(id, root);
+                    break;
+                case "exportWrite":
+                    ExportWrite(id, root);
+                    break;
+                case "exportEnd":
+                    ExportEnd(id, root);
+                    break;
                 case "getSettings":
                     GetSettings(id);
                     break;
@@ -514,6 +523,7 @@ public sealed partial class EngineHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         foreach (var q in _queries.Values) q.Cancel();
+        AbandonExports();
         foreach (var c in _connections.Values) await c.Connection.DisposeAsync();
     }
 
