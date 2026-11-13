@@ -1,0 +1,7 @@
+{
+  "name": "siftdb-icon",
+  "private": true,
+  "type": "module",
+  "description": "Renders the app icon. Not part of the build: run by hand after changing the SVG.",
+  "dependencies": { "sharp": "0.34.4" }
+}

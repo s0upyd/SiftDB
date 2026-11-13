@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- SiftDB: a database whose base narrows into a funnel, sifting out a drop. Source for SiftDB.ico (build/icon). -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3d8ef7"/>
+      <stop offset="1" stop-color="#0b57c2"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#tile)"/>
+  <g transform="translate(0 -8)">
+  <!-- the cylinder, then its base curving in to a spout -->
+  <path d="M48 62 V128 C48 144 84 156 128 156 S208 144 208 128 V62 Z" fill="#fff"/>
+  <path d="M48 128 C48 144 84 156 128 156 S208 144 208 128 L144 186 V200 H112 V186 Z" fill="#fff"/>
+  <!-- bands -->
+  <path d="M48 96 C48 112 84 124 128 124 S208 112 208 96" fill="none" stroke="#0b57c2" stroke-width="9"/>
+  <path d="M48 128 C48 144 84 156 128 156 S208 144 208 128" fill="none" stroke="#0b57c2" stroke-width="9"/>
+  <!-- the top -->
+  <ellipse cx="128" cy="62" rx="80" ry="26" fill="#d6e6ff" stroke="#fff" stroke-width="8"/>
+  <!-- the drop -->
+  <path d="M128 208 C128 208 114 224 114 232 A14 14 0 0 0 142 232 C142 224 128 208 128 208 Z" fill="#fff"/>
+  </g>
+</svg>

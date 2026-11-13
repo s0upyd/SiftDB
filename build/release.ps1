@@ -60,7 +60,7 @@ try {
     # --framework webview2: Setup.exe installs the Edge WebView2 Runtime first when the machine lacks it.
     Invoke-Step 'Pack' {
         dotnet vpk pack --packId SiftDB --packVersion $Version --packDir $publish --mainExe SiftDB.exe `
-            --packTitle SiftDB --packAuthors 'SiftDB' --runtime win-x64 --channel $Channel --framework webview2 --outputDir $releases
+            --icon (Join-Path $root "src/SiftDB.Host/Assets/SiftDB.ico") --packTitle SiftDB --packAuthors 'SiftDB' --runtime win-x64 --channel $Channel --framework webview2 --outputDir $releases
     }
     Write-Host "Done: $releases"
 }

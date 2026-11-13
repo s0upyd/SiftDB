@@ -1,7 +1,7 @@
 import type { Bridge, DatabaseSchema } from './bridge';
 import { CompletionResponse, QueryMode, RunTarget, SheetAnalysis, SqlEditor } from './editor';
 import { ResultView, ResultsContext, plural } from './results';
-import { spinner } from './icons';
+import { applyIcons, spinner } from './icons';
 import { revealSelectedTab, scrollTabsWithWheel } from './tabs';
 
 export type TxState = 'none' | 'open' | 'changed' | 'failed';
@@ -48,9 +48,9 @@ export interface ConnectResult { ok: boolean; schema: DatabaseSchema | null; err
 
 const TEMPLATE = `
   <div class="sheetbar">
-    <button class="run" disabled title="Run the statement under the cursor (F5 or Ctrl+Enter)">Run</button>
-    <button class="cancel" disabled title="Cancel the running statement (Ctrl+.)">Cancel</button>
-    <button class="begin" disabled title="Begin a transaction. You can also just type BEGIN: the bar follows the server either way.">Begin</button>
+    <button class="run ib ic-go" data-icon="run" disabled aria-label="Run" title="Run the statement under the cursor (F5 or Ctrl+Enter)"></button>
+    <button class="cancel ib ic-stop" data-icon="stop" disabled aria-label="Cancel" title="Cancel the running statement (Ctrl+.)"></button>
+    <button class="begin ib ic-go" data-icon="begin" disabled aria-label="Begin transaction" title="Begin a transaction. You can also just type BEGIN: the bar follows the server either way."></button>
     <div class="modes" role="group" aria-label="How identifiers are quoted">
       <button class="modeAssisted" aria-pressed="true" title="Assisted: write loosely. The quotes the database needs are added for you and shown greyed, and what runs is exactly what you see.">Assisted</button>
       <button class="modeStrict" aria-pressed="false" title="Strict: the text you write is the text that runs. Quoting problems are squiggles with quick fixes (Alt+Enter), and a statement with any is not run.">Strict</button>
@@ -63,9 +63,9 @@ const TEMPLATE = `
     <strong class="txLabel"></strong>
     <span class="txDetail"></span>
     <span class="grow"></span>
-    <button class="txEnd" title="End the transaction (commit). Nothing has changed in it.">End</button>
-    <button class="txCommit" title="Commit the changes (Ctrl+Shift+Enter)">Commit</button>
-    <button class="txRollback" title="Roll back (Ctrl+Shift+R)">Rollback</button>
+    <button class="txEnd ib ic-go" data-icon="tick" aria-label="End transaction" title="End the transaction (commit). Nothing has changed in it."></button>
+    <button class="txCommit ib ic-commit" data-icon="tick" aria-label="Commit" title="Commit the changes (Ctrl+Shift+Enter)"></button>
+    <button class="txRollback ib ic-stop" data-icon="cross" aria-label="Roll back" title="Roll back (Ctrl+Shift+R)"></button>
   </div>
   <div class="editor"></div>
   <div class="splitter" role="separator" aria-orientation="horizontal" aria-label="Resize editor and results" tabindex="0" title="Drag to resize (or use the up and down arrow keys)"></div>
@@ -134,6 +134,7 @@ export class Sheet {
   constructor(private ctx: SheetContext, parent: HTMLElement, readonly untitled: string, initialText: string, cursorLine = 1) {
     this.root.className = 'sheet';
     this.root.innerHTML = TEMPLATE;
+    applyIcons(this.root);
     parent.append(this.root);
     const $ = <T extends HTMLElement = HTMLElement>(selector: string) => this.root.querySelector(selector) as T;
     this.el = {

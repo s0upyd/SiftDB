@@ -41,6 +41,14 @@
     select { color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
     #connPick { min-width: 220px; max-width: 420px; }
     /* A downloaded update, waiting for a restart: the one accent-filled button, so it is noticed but never in the way. */
+    /* Toolbar icon buttons: square, the icon in one colour that says what the action does (applyIcons in icons.ts). */
+    button.ib { padding: 4px 6px; display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
+    .ticon { display: block; flex: none; }
+    .ic-go { color: var(--tx-open); }        /* run, begin, end */
+    .ic-commit { color: var(--tx-changed); } /* commit: amber, like changes pending */
+    .ic-stop { color: var(--tx-failed); }    /* cancel, roll back */
+    .ic-accent { color: var(--accent); }     /* connect */
+    button.update { display: inline-flex; align-items: center; gap: 6px; }
     button.update { color: #fff; background: var(--accent); border-color: var(--accent); font-weight: 600; }
     /* Read-only shows the same way everywhere: a lock and words, never colour alone. */
     /* Read-only: a flat amber padlock on the tab; green chips on the sheet and the tree root. One colour each, no shading. */
@@ -275,16 +283,16 @@
   <div class="bar">
     <select id="connPick" aria-label="Connection for this sheet"></select>
     <input id="conn" type="text" hidden placeholder="Host=localhost;Username=postgres;Password=…;Database=postgres" spellcheck="false" aria-label="Connection string">
-    <button id="connect" title="Connect the visible sheet. Other sheets keep their own connections.">Connect</button>
-    <button id="editConn" title="Edit the selected saved connection">Edit…</button>
-    <button id="saveAs" hidden title="Save this connection string as a named connection">Save as…</button>
-    <button id="newConn" title="Save a new connection">New…</button>
+    <button id="connect" class="ib ic-accent" data-icon="connect" aria-label="Connect" title="Connect the visible sheet. Other sheets keep their own connections."></button>
+    <button id="editConn" class="ib" data-icon="edit" aria-label="Edit connection" title="Edit the selected saved connection"></button>
+    <button id="saveAs" class="ib" data-icon="saveConnection" hidden aria-label="Save connection as" title="Save this connection string as a named connection"></button>
+    <button id="newConn" class="ib" data-icon="newConnection" aria-label="New connection" title="New saved connection"></button>
     <span class="grow"></span>
-    <button id="openFile" title="Open a .sql file in a sheet (Ctrl+O)">Open…</button>
-    <button id="saveFile" title="Save the visible sheet (Ctrl+S). Ctrl+Shift+S saves it under a new name.">Save</button>
-    <button id="newSheet" title="Open a new SQL sheet in a new tab (Ctrl+T). Each sheet has its own session.">+ New sheet</button>
-    <button id="update" class="update" hidden>Restart to update</button>
-    <button id="settings" title="Settings (Ctrl+,)">Settings…</button>
+    <button id="openFile" class="ib" data-icon="open" aria-label="Open file" title="Open a .sql file in a sheet (Ctrl+O)"></button>
+    <button id="saveFile" class="ib" data-icon="save" aria-label="Save" title="Save the visible sheet (Ctrl+S). Ctrl+Shift+S saves it under a new name."></button>
+    <button id="newSheet" class="ib" data-icon="newSheet" aria-label="New sheet" title="Open a new SQL sheet in a new tab (Ctrl+T). Each sheet has its own session."></button>
+    <button id="update" class="update" data-icon="download" hidden><span class="label">Restart to update</span></button>
+    <button id="settings" class="ib" data-icon="settings" aria-label="Settings" title="Settings (Ctrl+,)"></button>
   </div>
   <div id="main">
     <aside id="side" aria-label="Schema browser">

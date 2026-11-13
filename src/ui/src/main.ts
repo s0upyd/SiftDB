@@ -1,7 +1,7 @@
 import { BatchMeta, Bridge, BridgeEvent, DatabaseSchema, connectBridge } from './bridge';
 import { ConnectionCatalog, EditResult, askPassword, editConnection } from './connections';
 import { askSaveChanges } from './dialogs';
-import { lockIcon, spinner } from './icons';
+import { applyIcons, lockIcon, spinner } from './icons';
 import { ResultView } from './results';
 import { Settings, editSettings } from './settings';
 import { FileState, Sheet, SheetContext, Target, TxState, targetKey } from './sheet';
@@ -83,7 +83,7 @@ function onEvent(e: BridgeEvent) {
     case 'updateReady': {
       // Downloaded in the background by the host. Restarting goes through the usual close (warning, last autosave).
       const button = $('update');
-      button.textContent = `Restart to update to ${e.version}`;
+      button.querySelector('.label')!.textContent = `Restart to update to ${e.version}`;
       button.title = `SiftDB ${e.version} is downloaded. Restart now to use it: your sheets come back as they were.\n`
         + 'Or keep working: it is installed the next time SiftDB starts.';
       button.hidden = false;
@@ -573,6 +573,7 @@ $('saveFile').onclick = () => { if (active) void saveSheet(active); };
 async function openSettings() {
   if (await editSettings(settings)) sheets.forEach((s) => s.restyle());
 }
+applyIcons(document);
 $('settings').onclick = () => void openSettings();
 $('update').onclick = () => bridge.send({ type: 'applyUpdate' });
 

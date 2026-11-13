@@ -11,8 +11,14 @@
     <AssemblyName>SiftDB</AssemblyName>
     <Product>SiftDB</Product>
     <!-- The version a local build reports. A release passes its own (-p:Version=..., from the git tag). -->
-    <Version>0.1.2</Version>
+    <Version>0.1.3</Version>
+    <!-- The exe, shortcut and taskbar icon. Drawn in Assets/SiftDB.svg; regenerate with build/icon. -->
+    <ApplicationIcon>Assets/SiftDB.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets/SiftDB.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\SiftDB.Engine\SiftDB.Engine.csproj" />
