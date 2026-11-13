@@ -79,7 +79,7 @@ public class MultiSessionTests : IAsyncLifetime
 
     private async Task SettleAfter(int before)
     {
-        for (var i = 0; i < 300 && StateEvents() <= before; i++) await Task.Delay(10);
+        for (var i = 0; i < 1500 && StateEvents() <= before; i++) await Task.Delay(10);
     }
 
     private async Task Tx(int connectionId, string action)

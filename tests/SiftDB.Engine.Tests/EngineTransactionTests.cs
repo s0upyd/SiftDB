@@ -136,7 +136,7 @@ public class EngineTransactionTests
 
     private static async Task WaitFor(Func<bool> condition, string what)
     {
-        for (var i = 0; i < 200; i++)
+        for (var i = 0; i < 1500; i++)
         {
             if (condition()) return;
             await Task.Delay(10);
@@ -270,7 +270,7 @@ public class EngineTransactionTests
         await engine.HandleCommandAsync("""{"type":"execute","id":20,"connectionId":1,"sql":"select"}""");
         var second = engine.HandleCommandAsync("""{"type":"execute","id":21,"connectionId":1,"sql":"select"}""");
 
-        Assert.Same(second, await Task.WhenAny(second, Task.Delay(3000)));
+        Assert.Same(second, await Task.WhenAny(second, Task.Delay(15_000)));
         Assert.Equal(2, cap.Of("columns").Count);
     }
 

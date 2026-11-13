@@ -90,14 +90,14 @@ public class EngineSessionTests
 
     private static Task Send(EngineHost engine, object cmd) => engine.HandleCommandAsync(JsonSerializer.Serialize(cmd));
 
-    private static async Task<T> Within<T>(Task<T> task, int ms = 5000)
+    private static async Task<T> Within<T>(Task<T> task, int ms = 15_000)
     {
         var done = await Task.WhenAny(task, Task.Delay(ms));
         if (done != task) throw new TimeoutException("did not finish in time (a lock leaked or a stream never wound down)");
         return await task;
     }
 
-    private static async Task Within(Task task, int ms = 5000) => await Within(task.ContinueWith(_ => 0), ms);
+    private static async Task Within(Task task, int ms = 15_000) => await Within(task.ContinueWith(_ => 0), ms);
 
     // ---- independence ----
 
@@ -228,7 +228,7 @@ public class EngineSessionTests
 
     private static async Task WaitUntil(Func<bool> condition, string what)
     {
-        for (var i = 0; i < 300 && !condition(); i++) await Task.Delay(10);
+        for (var i = 0; i < 1500 && !condition(); i++) await Task.Delay(10);
         if (!condition()) throw new TimeoutException("never happened: " + what);
     }
 

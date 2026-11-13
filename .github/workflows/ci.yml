@@ -1,0 +1,52 @@
+# Tests on every push and pull request, and before every release (release.yml calls this workflow).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # Engine and provider tests, against a real Postgres. Linux, because service containers only run on Linux runners;
+  # the test projects are plain net10.0 (the one DPAPI test skips itself off Windows).
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      SIFTDB_SPIKE_CONN: Host=localhost;Username=postgres;Password=postgres;Database=postgres
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Test
+        run: |
+          dotnet test tests/SiftDB.Engine.Tests
+          dotnet test tests/SiftDB.Providers.Postgres.Tests
+
+  # The WPF host and the UI bundle (TypeScript type check included) build only on Windows.
+  build-host:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/ui/package-lock.json
+      - name: Build
+        run: dotnet build src/SiftDB.Host -c Release

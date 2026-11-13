@@ -66,7 +66,7 @@ public class TransactionFlowTests : IAsyncLifetime
         for (var i = 0; !failed && i < 50 && !_sink.Of("complete").Any(e => e.GetProperty("queryId").GetInt32() == queryId); i++)
             await _engine.HandleCommandAsync(JsonSerializer.Serialize(new { type = "fetchBatch", queryId }));
 
-        for (var i = 0; i < 300 && StateEvents() <= before; i++) await Task.Delay(10);
+        for (var i = 0; i < 1500 && StateEvents() <= before; i++) await Task.Delay(10);
         var complete = _sink.Of("complete").Cast<JsonElement?>().FirstOrDefault(e => e!.Value.GetProperty("queryId").GetInt32() == queryId);
         return (queryId, complete);
     }

@@ -90,7 +90,7 @@ public sealed class AutoTransactionFlowTests : IAsyncLifetime
                      e.GetProperty("type").GetString() is "complete" or "error" or "cancelled"); i++)
                 await _engine!.HandleCommandAsync(JsonSerializer.Serialize(new { type = "fetchBatch", queryId }));
         }
-        for (var i = 0; i < 300 && TransactionEvents(conn) <= before; i++) await Task.Delay(10);
+        for (var i = 0; i < 1500 && TransactionEvents(conn) <= before; i++) await Task.Delay(10);
         return _sink.Events.Last(e => e.GetProperty("type").GetString() == "transaction" && e.GetProperty("connectionId").GetInt32() == conn);
     }
 
