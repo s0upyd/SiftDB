@@ -59,7 +59,19 @@ const TOOLBAR_ICONS: Record<string, string> = {
   // A gear: eight teeth and a hole.
   settings: '<path stroke-width="1.3" d="M12.75 6.14L14.77 6.65L14.77 9.35L12.75 9.86L12.67 10.04L13.74 11.83L11.83 13.74L10.04 12.67L9.86 12.75L9.35 14.77L6.65 14.77L6.14 12.75L5.96 12.67L4.17 13.74L2.26 11.83L3.33 10.04L3.25 9.86L1.23 9.35L1.23 6.65L3.25 6.14L3.33 5.96L2.26 4.17L4.17 2.26L5.96 3.33L6.14 3.25L6.65 1.23L9.35 1.23L9.86 3.25L10.04 3.33L11.83 2.26L13.74 4.17L12.67 5.96Z"/><circle cx="8" cy="8" r="2.2"/>',
   download: '<path d="M8 2v8.5M4.5 7l3.5 3.5L11.5 7M2.5 13.5h11"/>',
+  // Export: a small table with an arrow leaving it.
+  export: '<path d="M1.8 6h8.4v8.2H1.8z M1.8 10.1h8.4 M6 6v8.2"/><path stroke-width="1.6" d="M9 7l5.2-5.2 M10.4 1.8h3.8v3.8"/>',
+  chevronDown: '<path stroke-width="1.8" d="M3.8 6l4.2 4.2L12.2 6"/>',
+  chevronUp: '<path stroke-width="1.8" d="M3.8 10.2L8 6l4.2 4.2"/>',
 };
+
+/** Changes an element's icon: for a button whose icon says its state (Details open or closed, an export running). */
+export function setIcon(el: HTMLElement, name: string): void {
+  if (el.dataset.icon === name && el.querySelector(':scope > svg.ticon')) return;
+  el.querySelector(':scope > svg.ticon')?.remove();
+  el.dataset.icon = name;
+  applyIcons(el.parentElement ?? el);
+}
 
 /** Puts each `[data-icon]` element's icon in front of its contents (an icon-only button has none, just its aria-label). */
 export function applyIcons(root: ParentNode): void {

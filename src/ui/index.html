@@ -251,7 +251,9 @@
     .statusText { flex: 1; min-width: 0; line-height: 20px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
     .headline { font-weight: 600; }
     .extra { margin-left: 10px; color: var(--dim); }
-    .statusToggle { flex: none; padding: 1px 9px; font-size: 12px; }
+    /* The status bar's icon buttons (Export, Details): toolbar icons, a little tighter to fit the one-line bar. */
+    button.statusbtn { flex: none; padding: 2px 5px; gap: 4px; line-height: 1; font-size: 12px; font-variant-numeric: tabular-nums; }
+    button.statusbtn > span:empty { display: none; }
     .details { margin: 0; padding: 5px 10px 7px 35px; border-top: 1px solid var(--line); color: var(--dim);
                font: 12px Consolas, monospace; white-space: pre-wrap; }
     .status[data-state="running"] { border-left-color: var(--accent); }

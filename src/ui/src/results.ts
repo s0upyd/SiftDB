@@ -2,7 +2,7 @@ import { BatchMeta, Bridge, BridgeEvent, Column } from './bridge';
 import { toast } from './copy';
 import { ExportFormat, exportText, suggestedName } from './export';
 import { CellRange, Grid, GridTheme, darkTheme, lightTheme } from './grid';
-import { spinner } from './icons';
+import { setIcon, spinner } from './icons';
 import { ResultStore, decodeBatch } from './store';
 
 /** The format and file of the last export in this run: the next export starts from them. */
@@ -91,6 +91,8 @@ export class ResultView {
   private readonly extraEl = document.createElement('span');
   private readonly toggleEl = document.createElement('button');
   private readonly exportEl = document.createElement('button');
+  /** How far an export has got, beside its (then red, stop) icon. */
+  private readonly exportPctEl = document.createElement('span');
   /** The export being written, if any. Its button then reads "Cancel export" with how far it has got. */
   private exporting: { cancelled: boolean } | null = null;
   private sql = '';
@@ -123,11 +125,12 @@ export class ResultView {
     this.staleEl.title = 'This result is from an earlier run. The last attempt on this sheet did not run (see the message above).';
     this.staleEl.hidden = true;
     text.append(this.staleEl, this.headlineEl, this.extraEl);
-    this.toggleEl.className = 'statusToggle';
-    this.toggleEl.textContent = 'Details';
-    this.toggleEl.title = 'Show the timings: first batch, first paint, engine split, drawing';
+    // Icon buttons, like the toolbar's: Export is green (it makes something), Details a chevron that points where the
+    // panel will go. Both keep their words in the tooltip and the accessible name.
+    this.toggleEl.className = 'ib statusbtn';
     this.toggleEl.onclick = () => { detailsOpen = !detailsOpen; this.refreshStats(); };
-    this.exportEl.className = 'statusToggle';
+    this.exportEl.className = 'ib statusbtn ic-go';
+    this.exportEl.append(this.exportPctEl);
     this.exportEl.onclick = () => {
       if (this.exporting) this.exporting.cancelled = true;
       else void this.export(null);
@@ -326,11 +329,16 @@ export class ResultView {
 
     this.exportEl.hidden = !this.exporting && !this.canExport;
     if (!this.exporting) {
-      this.exportEl.textContent = 'Export…';
+      setIcon(this.exportEl, 'export');
+      this.exportEl.classList.replace('ic-stop', 'ic-go');
+      this.exportPctEl.textContent = '';
       this.exportEl.title = 'Export the result to a CSV or JSON file';
+      this.exportEl.setAttribute('aria-label', 'Export…');
     }
     this.toggleEl.setAttribute('aria-expanded', String(detailsOpen));
-    this.toggleEl.textContent = detailsOpen ? 'Hide details' : 'Details';
+    setIcon(this.toggleEl, detailsOpen ? 'chevronUp' : 'chevronDown');
+    this.toggleEl.title = detailsOpen ? 'Hide the timings' : 'Show the timings: first batch, first paint, engine split, drawing';
+    this.toggleEl.setAttribute('aria-label', 'Details');
     this.detailsEl.hidden = !detailsOpen;
     if (!detailsOpen || this.panel.hidden) return;
 
@@ -373,8 +381,11 @@ export class ResultView {
 
     const job = { cancelled: false };
     this.exporting = job;
-    this.exportEl.textContent = 'Cancel export';
-    this.exportEl.title = 'Stop the export. No file is written.';
+    setIcon(this.exportEl, 'stop');
+    this.exportEl.classList.replace('ic-go', 'ic-stop');
+    this.exportPctEl.textContent = '0%';
+    this.exportEl.title = 'Cancel the export. No file is written.';
+    this.exportEl.setAttribute('aria-label', 'Cancel export');
     this.refreshStats();
     try {
       // Excel reads a CSV as UTF-8 only when it starts with the byte-order mark; JSON is plain UTF-8 by its standard.
@@ -389,7 +400,7 @@ export class ResultView {
         // A failed write has already ended the export in the engine, and thrown the partial file away.
         if (w.type === 'error') { toast(this.gridEl, `Export failed: ${w.message}`, 'warn'); return; }
         const pct = Math.floor(((row - src.r0 + 1) / Math.max(1, src.rows)) * 100);
-        this.exportEl.textContent = `Cancel export · ${pct}%`;
+        this.exportPctEl.textContent = `${pct}%`;
       }
       const end = await bridge.request({ type: 'exportEnd', exportId, cancel: job.cancelled });
       if (end.type === 'error') toast(this.gridEl, `Export failed: ${end.message}`, 'warn');
