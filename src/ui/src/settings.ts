@@ -12,6 +12,8 @@ import { StyleRule, setRules } from './styles';
 export interface UserSettings {
   /** The mode new sheets open in (design section 3). */
   newSheetMode: QueryMode;
+  /** How large the whole window is drawn, in percent (the host applies it as the WebView's zoom). */
+  zoom: number;
   /** Result styling (design section 10): one ordered list, presets included. The first rule that matches styles the cell. */
   resultRules: StyleRule[];
   /** By provider id, then setting key: the chosen value. */
@@ -31,13 +33,15 @@ export interface ProviderSettingInfo {
 export interface ProviderSettingsInfo { id: string; displayName: string; settings: ProviderSettingInfo[] }
 
 /** Until the engine answers. Its defaults hold the presets; the page never invents them. */
-const DEFAULTS: UserSettings = { newSheetMode: 'assisted', resultRules: [], providerSettings: {} };
+const DEFAULTS: UserSettings = { newSheetMode: 'assisted', zoom: 100, resultRules: [], providerSettings: {} };
 
 /** The settings as the engine last reported them. Until loaded, or when they cannot be read, the defaults apply. */
 export class Settings {
   values: UserSettings = { ...DEFAULTS };
   /** The providers that have settings of their own, as the engine describes them. */
   providers: ProviderSettingsInfo[] = [];
+  /** The zoom sizes offered, in percent, as the engine lists them. */
+  zoomChoices: number[] = [100];
   /** Why the settings file could not be read (it is left alone, and the defaults apply). */
   error: string | null = null;
 
@@ -58,11 +62,17 @@ export class Settings {
     return null;
   }
 
-  private take(s: Partial<UserSettings> | undefined, providers: (ProviderSettingsInfo & { values?: Record<string, string> })[] | undefined) {
+  private take(s: (Partial<UserSettings> & { zoomChoices?: number[] }) | undefined,
+               providers: (ProviderSettingsInfo & { values?: Record<string, string> })[] | undefined) {
     const list = Array.isArray(providers) ? providers : [];
     this.providers = list;
+    if (Array.isArray(s?.zoomChoices) && s.zoomChoices.length) this.zoomChoices = s.zoomChoices;
+    const zoom = typeof s?.zoom === 'number' && this.zoomChoices.includes(s.zoom) ? s.zoom : 100;
+    // The host draws the first frame at the saved zoom already; this keeps it in step after a save.
+    if (zoom !== this.values.zoom) this.bridge.send({ type: 'setZoom', percent: zoom });
     this.values = {
       newSheetMode: s?.newSheetMode === 'strict' ? 'strict' : 'assisted',
+      zoom,
       resultRules: Array.isArray(s?.resultRules) ? s.resultRules : [],
       // The engine sends each provider's values with defaults filled in.
       providerSettings: Object.fromEntries(list.map((p) => [p.id, { ...(p.values ?? {}) }])),
@@ -91,6 +101,31 @@ function radio(name: string, value: string, label: string, help: string, checked
   const input = el('input', { type: 'radio', name, value, checked });
   const wrap = el('label', { className: 'fcheck' }, input, el('span', {}, label), el('span', { className: 'fhelp', textContent: help }));
   return { input, wrap };
+}
+
+/** How large everything is drawn: one zoom for the whole window, so text, icons, spacing, grid and editor grow together. */
+function appearanceCategory(settings: Settings): Category {
+  return {
+    id: 'appearance',
+    label: 'Appearance',
+    build(values) {
+      const select = el('select', { id: `zoom${++seq}` });
+      for (const percent of settings.zoomChoices)
+        select.append(el('option', { value: String(percent), textContent: percent === 100 ? '100% (default)' : `${percent}%`,
+          selected: percent === values.zoom }));
+      const page = el('div', { className: 'fgroup' },
+        el('fieldset', {},
+          el('legend', { textContent: 'Text size' }),
+          el('div', { className: 'frow' }, el('label', { htmlFor: select.id, textContent: 'Zoom' }), select),
+          el('p', { className: 'fhelp', textContent:
+            'Makes everything larger: text, icons and spacing grow together, so nothing is cut off. Useful on high-resolution screens.' })));
+      return {
+        page,
+        apply: (into) => { into.zoom = Number(select.value); },
+        focus: () => select.focus(),
+      };
+    },
+  };
 }
 
 const sqlCategory: Category = {
@@ -158,10 +193,11 @@ function providerCategory(p: ProviderSettingsInfo): Category {
 }
 
 /** In the order they are listed: the app's own, then one per database that has settings of its own. */
-const categories = (settings: Settings): Category[] => [sqlCategory, resultsCategory, ...settings.providers.map(providerCategory)];
+const categories = (settings: Settings): Category[] =>
+  [appearanceCategory(settings), sqlCategory, resultsCategory, ...settings.providers.map(providerCategory)];
 
 /** The category last looked at, for this run of the app: reopening the editor goes back to it. */
-let lastCategory = sqlCategory.id;
+let lastCategory = 'appearance';
 
 // ---- the editor -------------------------------------------------------------------------------------------------
 

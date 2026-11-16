@@ -41,6 +41,24 @@ public sealed class SettingsStoreTests : IDisposable
     }
 
     [Fact]
+    public void The_zoom_defaults_to_100_and_a_saved_one_survives_a_restart()
+    {
+        Assert.Equal(100, NewStore().Get().Zoom);
+        NewStore().Save(UserSettings.Default with { Zoom = 150 });
+        Assert.Equal(150, NewStore().Get().Zoom);
+    }
+
+    [Theory]
+    [InlineData("""{ "version": 1, "zoom": 133 }""")]
+    [InlineData("""{ "version": 1, "zoom": -5 }""")]
+    public void A_zoom_that_is_not_a_choice_reads_and_saves_as_100(string content)
+    {
+        File.WriteAllText(FilePath, content);
+        Assert.Equal(100, NewStore().Get().Zoom);
+        Assert.Equal(100, NewStore().Save(UserSettings.Default with { Zoom = 999 }).Zoom);
+    }
+
+    [Fact]
     public void Settings_a_newer_version_added_are_kept_on_rewrite()
     {
         File.WriteAllText(FilePath, """{ "version": 1, "newSheetMode": "assisted", "resultStyling": { "nullTint": true } }""");
@@ -114,6 +132,26 @@ public sealed class EngineSettingsTests : IAsyncDisposable
         var r = await Send(again, new { type = "getSettings" });
         Assert.Equal("strict", r.GetProperty("settings").GetProperty("newSheetMode").GetString());
         Assert.Equal(JsonValueKind.Null, r.GetProperty("error").ValueKind);
+    }
+
+    [Fact]
+    public async Task The_zoom_and_its_choices_are_sent_and_a_saved_zoom_is_read_back()
+    {
+        await using (var engine = NewEngine())
+        {
+            var first = (await Send(engine, new { type = "getSettings" })).GetProperty("settings");
+            Assert.Equal(100, first.GetProperty("zoom").GetInt32());
+            Assert.Contains(125, first.GetProperty("zoomChoices").EnumerateArray().Select(c => c.GetInt32()));
+
+            var saved = await Send(engine, new { type = "saveSettings", settings = new { zoom = 125 } });
+            Assert.Equal(125, saved.GetProperty("settings").GetProperty("zoom").GetInt32());
+            // A save that leaves the zoom out keeps it.
+            saved = await Send(engine, new { type = "saveSettings", settings = new { newSheetMode = "strict" } });
+            Assert.Equal(125, saved.GetProperty("settings").GetProperty("zoom").GetInt32());
+        }
+        await using var again = NewEngine();
+        var r = await Send(again, new { type = "getSettings" });
+        Assert.Equal(125, r.GetProperty("settings").GetProperty("zoom").GetInt32());
     }
 
     [Fact]

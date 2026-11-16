@@ -20,6 +20,12 @@ public sealed record UserSettings(
 {
     public static readonly UserSettings Default = new("assisted", StyleRules.Default, new Dictionary<string, IReadOnlyDictionary<string, string>>());
 
+    /// <summary>The sizes the whole window can be drawn at, in percent (design section 10). 100 is the default.</summary>
+    public static readonly IReadOnlyList<int> ZoomChoices = [100, 110, 125, 150, 175, 200];
+
+    /// <summary>How large everything is drawn, in percent: text, icons and spacing grow together. One of <see cref="ZoomChoices"/>.</summary>
+    public int Zoom { get; init; } = 100;
+
     /// <summary>
     /// Only values this version knows are kept. <paramref name="strict"/>: a user rule that is not valid throws (saving)
     /// rather than being dropped (reading a file).
@@ -28,6 +34,7 @@ public sealed record UserSettings(
     {
         NewSheetMode = NewSheetMode is "strict" ? "strict" : "assisted",
         ResultRules = StyleRules.Normalise(ResultRules, strict),
+        Zoom = ZoomChoices.Contains(Zoom) ? Zoom : 100,
     };
 }
 
@@ -77,6 +84,7 @@ public sealed class SettingsStore(string path)
             {
                 Version = FormatVersion,
                 NewSheetMode = normalised.NewSheetMode,
+                Zoom = normalised.Zoom,
                 ResultRules = normalised.ResultRules.Select(StoredRule.From).ToList(),
                 ProviderSettings = normalised.ProviderSettings.Count == 0 ? null
                     : normalised.ProviderSettings.ToDictionary(p => p.Key, p => new Dictionary<string, string>(p.Value)),
@@ -102,7 +110,8 @@ public sealed class SettingsStore(string path)
             var rules = file.ResultRules?.Where(r => r is not null).Select(r => r.ToRule()) ?? StyleRules.Default;
             var providers = (file.ProviderSettings ?? []).Where(p => p.Value is not null)
                 .ToDictionary(p => p.Key, p => (IReadOnlyDictionary<string, string>)p.Value);
-            return _settings = new UserSettings(file.NewSheetMode ?? UserSettings.Default.NewSheetMode, rules.ToList(), providers).Normalised();
+            return _settings = new UserSettings(file.NewSheetMode ?? UserSettings.Default.NewSheetMode, rules.ToList(), providers)
+                { Zoom = file.Zoom ?? 100 }.Normalised();
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
@@ -116,6 +125,7 @@ public sealed class SettingsStore(string path)
     {
         public int Version { get; set; }
         public string? NewSheetMode { get; set; }
+        public int? Zoom { get; set; }
         public List<StoredRule>? ResultRules { get; set; }
         public Dictionary<string, Dictionary<string, string>>? ProviderSettings { get; set; }
 

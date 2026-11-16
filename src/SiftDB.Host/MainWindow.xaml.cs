@@ -18,6 +18,9 @@ namespace SiftDB.Host;
 public partial class MainWindow : Window, IEngineOutput
 {
     private readonly EngineHost _engine;
+
+    /// <summary>The engine's settings; the host reads only the zoom, to draw the page at its size from the first frame.</summary>
+    private readonly SettingsStore _settings;
     private readonly Dictionary<int, CoreWebView2SharedBuffer> _inFlight = new();
     private int _nextBufferId;
 
@@ -30,8 +33,8 @@ public partial class MainWindow : Window, IEngineOutput
         // Saved connections and their DPAPI-encrypted passwords live in %APPDATA%\SiftDB, in separate files.
         var dir = ConnectionStore.DefaultDirectory;
         var store = new ConnectionStore(Path.Combine(dir, "connections.json"), new DpapiSecretStore(Path.Combine(dir, "secrets.json")));
-        _engine = new EngineHost([new PostgresProvider()], this, store, new SessionStore(SessionStore.DefaultDirectory),
-            new SettingsStore(SettingsStore.DefaultPath));
+        _settings = new SettingsStore(SettingsStore.DefaultPath);
+        _engine = new EngineHost([new PostgresProvider()], this, store, new SessionStore(SessionStore.DefaultDirectory), _settings);
         SourceInitialized += (_, _) => ApplyTitleBarTheme(IsDarkTheme());
         Loaded += async (_, _) => await InitWebAsync();
         Closing += OnClosing;
@@ -151,6 +154,9 @@ public partial class MainWindow : Window, IEngineOutput
         }
         // The page owns its shortcuts (F5 runs a statement, Ctrl+Shift+R rolls back); the browser's must not reload it.
         core.Settings.AreBrowserAcceleratorKeysEnabled = false;
+        // The zoom setting (design section 10) scales everything: text, icons, spacing, the canvas grid and the editor.
+        // Set before the page loads so it never appears at 100% and then jumps; the page sends setZoom after a save.
+        Web.ZoomFactor = _settings.Get().Zoom / 100.0;
         core.SetVirtualHostNameToFolderMapping("siftdb.local", uiDir, CoreWebView2HostResourceAccessKind.Allow);
         core.WebMessageReceived += OnWebMessage;
         core.NavigationCompleted += (_, _) =>
@@ -205,6 +211,10 @@ public partial class MainWindow : Window, IEngineOutput
             case "openFileDialog":
             case "saveFileDialog":
                 FileDialog(doc.RootElement);
+                return;
+            case "setZoom": // the zoom setting, in percent; out-of-range values are clamped rather than trusted
+                if (doc.RootElement.GetProperty("percent").TryGetInt32(out var percent))
+                    Web.ZoomFactor = Math.Clamp(percent, 50, 300) / 100.0;
                 return;
             case "flushed": // the page's last autosave is written: close now
                 if (_closeConfirmed) FinishClose();
