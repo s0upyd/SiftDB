@@ -62,7 +62,7 @@ public sealed class PostgresProvider : IDatabaseProvider
                 throw new ConnectionAuthenticationException(ex.Message, ex);
             throw;
         }
-        return new PostgresConnection(conn, cs, _settings, (PostgresSqlParser)Parser);
+        return new PostgresConnection(conn, cs, _settings, (PostgresSqlParser)Parser, Identifiers);
     }
 
     private sealed class PostgresConnection : IProviderConnection
@@ -71,10 +71,13 @@ public sealed class PostgresProvider : IDatabaseProvider
         private readonly string connectionString;
         private readonly PostgresTransactionMonitor _monitor;
 
-        public PostgresConnection(NpgsqlConnection conn, string connectionString, PostgresSettings settings, PostgresSqlParser parser)
+        private readonly IIdentifierPolicy _policy;
+
+        public PostgresConnection(NpgsqlConnection conn, string connectionString, PostgresSettings settings, PostgresSqlParser parser, IIdentifierPolicy policy)
         {
             this.conn = conn;
             this.connectionString = connectionString;
+            _policy = policy;
             _monitor = new PostgresTransactionMonitor(conn, settings);
             DryRun = new PostgresDryRun(conn, parser, _monitor);
         }
@@ -174,6 +177,29 @@ public sealed class PostgresProvider : IDatabaseProvider
                 types[i] = r.GetDataTypeName(i);
             }
             return new LookedUpRow(names, values, types, committedOnly);
+        }
+
+        // The schema explorer (design section 14, F13): each on a connection of its own, like the fast schema load, so the
+        // session (possibly streaming, possibly in a transaction) is never touched.
+        public async Task<RelationDetail?> DescribeRelationAsync(string schema, string relation, CancellationToken ct)
+        {
+            await using var meta = new NpgsqlConnection(connectionString);
+            await meta.OpenAsync(ct);
+            return await PostgresDetail.RelationAsync(meta, schema, relation, ct);
+        }
+
+        public async Task<SchemaObjects?> DescribeSchemaObjectsAsync(string schema, CancellationToken ct)
+        {
+            await using var meta = new NpgsqlConnection(connectionString);
+            await meta.OpenAsync(ct);
+            return await PostgresDetail.ObjectsAsync(meta, schema, ct);
+        }
+
+        public async Task<string?> ScriptAsync(ObjectRef obj, bool create, CancellationToken ct)
+        {
+            await using var meta = new NpgsqlConnection(connectionString);
+            await meta.OpenAsync(ct);
+            return await PostgresDetail.ScriptAsync(meta, _policy, obj, create, ct);
         }
 
         private static string Where(RowKey key) => string.Join(" and ", key.Columns.Select((c, i) => $"{Quote(c)} = @p{i}"));

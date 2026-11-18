@@ -308,14 +308,14 @@ export class Sheet {
     const s = await this.ctx.bridge.request({ type: 'introspect', connectionId: this.connectionId, send: wantSchema });
     this.setMessage('');
     this.editor.refresh();
-    return { ok: true, schema: s.type === 'schema' ? (s.schema as DatabaseSchema) : null };
+    return { ok: true, schema: schemaOf(s) };
   }
 
   /** Reloads this session's schema cache; returns the schema when the sidebar wants a copy. */
   async refreshSchema(wantSchema: boolean): Promise<DatabaseSchema | null> {
     if (!this.connected) return null;
     const s = await this.ctx.bridge.request({ type: 'introspect', connectionId: this.connectionId, send: wantSchema });
-    return s.type === 'schema' ? (s.schema as DatabaseSchema) : null;
+    return schemaOf(s);
   }
 
   /** Ends the session. The engine rolls back anything uncommitted; results already shown stay on screen. */
@@ -355,6 +355,12 @@ export class Sheet {
   }
 
   focusEditor() { this.editor.focus(); }
+
+  /** "Script as" from the schema tree (design section 14, F13): into the sheet at the cursor, never run. */
+  insertScript(sql: string) {
+    this.editor.insertBlock(sql);
+    this.setMessage('Scripted into the sheet. Nothing was run.');
+  }
 
   /** Switches how this sheet treats identifier problems, and shows which is active. A blocked-run message is cleared: it described the old mode. */
   setMode(mode: QueryMode) {
@@ -728,4 +734,12 @@ export class Sheet {
       : this.tx.state !== 'none' ? 'A transaction is already open.'
       : 'Begin a transaction. You can also just type BEGIN: the bar follows the server either way.';
   }
+}
+
+/** The schema from an engine "schema" event, with the names that must be quoted to write them (F13). */
+function schemaOf(e: { type: string; schema?: unknown; quoted?: unknown }): DatabaseSchema | null {
+  if (e.type !== 'schema') return null;
+  const schema = e.schema as DatabaseSchema;
+  schema.quoted = (e.quoted as Record<string, string> | undefined) ?? {};
+  return schema;
 }

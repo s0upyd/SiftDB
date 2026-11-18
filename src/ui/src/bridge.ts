@@ -19,7 +19,8 @@ export interface RelationInfo {
   primaryKey: string[]; foreignKeys: ForeignKeyInfo[]; indexes: IndexInfo[];
 }
 export interface SchemaInfo { name: string; relations: RelationInfo[] }
-export interface DatabaseSchema { schemas: SchemaInfo[] }
+/** `quoted`: the names that must be written differently from how they are stored (quoted), as the engine says (F13). */
+export interface DatabaseSchema { schemas: SchemaInfo[]; quoted?: Record<string, string> }
 
 export interface BatchMeta {
   queryId: number;

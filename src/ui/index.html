@@ -149,6 +149,20 @@
     .twisty { width: 12px; flex: none; color: var(--dim); }
     .dim { color: var(--dim); }
     .badge { font-size: 10px; line-height: 14px; padding: 0 4px; border: 1px solid var(--line); border-radius: 3px; color: var(--dim); }
+    /* The schema explorer (design section 14, F13). A row's detail is the dimmed tail: cut, not wrapped, when narrow. */
+    #tree .row > .dim { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    #tree .row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+    /* A foreign key or "referenced by" entry: a click goes to that table. */
+    #tree .row.jump { cursor: pointer; }
+    #tree .tlink { color: var(--accent); }
+    #tree .row.jump:hover .tlink { text-decoration: underline; }
+    /* Where a jump landed. */
+    #tree .row.jumped { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+    #tree .row[draggable="true"] { cursor: grab; }
+    #tree .row.jump[draggable="true"] { cursor: pointer; }
+    /* The filter's "columns too": pressed shows it is on. */
+    #treeCols { padding: 3px 6px; font-size: 11px; }
+    #treeCols[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 
     /* The right-hand area: a strip of sheet tabs, and the visible sheet filling the rest. */
     #work { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -363,6 +377,7 @@
     <aside id="side" aria-label="Schema browser">
       <header>
         <input id="treeFilter" type="text" placeholder="Filter tables…" spellcheck="false" aria-label="Filter tables" disabled>
+        <button id="treeCols" aria-pressed="false" disabled title="Match column names too: tables with a matching column show, opened on those columns" aria-label="Match column names too">Cols</button>
         <button id="refresh" title="Reload schema" aria-label="Reload schema" disabled>⟳</button>
       </header>
       <div id="treeSummary">Not connected.</div>

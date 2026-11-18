@@ -24,7 +24,7 @@ public class EngineTests
         public bool CannotRunInTransaction(string sql) => false;
         public GenericType GenericTypeOf(string dataTypeName) => GenericType.Text;
         public ISqlParser Parser { get; } = new SemicolonParser();
-        public IIdentifierPolicy Identifiers => throw new NotSupportedException();
+        public IIdentifierPolicy Identifiers { get; } = new AsStored(); // the schema event lists names that need quoting
 
         public Task<IProviderConnection> OpenAsync(string cs, ConnectionOptions options, CancellationToken ct) =>
             Task.FromResult<IProviderConnection>(new Conn(rows));
@@ -233,7 +233,7 @@ public class EngineTests
         public bool CannotRunInTransaction(string sql) => false;
         public GenericType GenericTypeOf(string dataTypeName) => GenericType.Text;
         public ISqlParser Parser => throw new NotSupportedException();
-        public IIdentifierPolicy Identifiers => throw new NotSupportedException();
+        public IIdentifierPolicy Identifiers { get; } = new AsStored(); // the schema event lists names that need quoting
 
         public Task<IProviderConnection> OpenAsync(string c, ConnectionOptions options, CancellationToken ct) => throw new NotSupportedException();
     }
@@ -248,4 +248,11 @@ internal sealed class NullMonitor : ITransactionMonitor
     public Task RollbackAsync(CancellationToken ct) => Task.CompletedTask;
     public Task<TransactionSnapshot> GetStateAsync(CancellationToken ct) =>
         Task.FromResult(new TransactionSnapshot(TransactionState.None, null));
+}
+
+/// <summary>For the fake providers: every name is written as it is stored, so none needs quoting.</summary>
+internal sealed class AsStored : IIdentifierPolicy
+{
+    public string Quote(string identifier) => identifier;
+    public string Fold(string unquotedIdentifier) => unquotedIdentifier;
 }

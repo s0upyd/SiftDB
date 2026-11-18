@@ -376,6 +376,7 @@ function rebuildTree() {
   tree.setRoots(roots, connectNote);
   const any = roots.some((r) => r.schema);
   treeFilter.disabled = !any;
+  $<HTMLButtonElement>('treeCols').disabled = !any;
   refreshBtn.disabled = !active?.target;
   tree.setFilter(treeFilter.value);
 }
@@ -428,22 +429,47 @@ Continue?`)) return;
   sheet.focusEditor();
 }
 
-/** Reloads the visible sheet's connection: every session on it refreshes its cache, and the tree takes the new schema. */
-async function refreshSchema() {
-  const key = active?.target ? targetKey(active.target) : null;
+/**
+ * Reloads a connection (the visible sheet's, or the tree root `rootId`): every session on it refreshes its cache, and the
+ * tree takes the new schema (and drops the details it had loaded from the old one).
+ */
+async function refreshSchema(rootId?: string) {
+  const key = rootId ? [...entries].find(([, e]) => e.id === rootId)?.[0] : active?.target ? targetKey(active.target) : null;
   const entry = key ? entries.get(key) : undefined;
-  if (!active || !key || !entry) return;
-  refreshBtn.disabled = true;
+  if (!key || !entry) return;
   const same = sheets.filter((s) => s.target && targetKey(s.target) === key);
-  const all = await Promise.all(same.map((s) => s.refreshSchema(s === active)));
-  const mine = all[same.indexOf(active)];
+  if (!same.length) return;
+  refreshBtn.disabled = true;
+  const asker = same.includes(active!) ? active! : same[0];
+  const all = await Promise.all(same.map((s) => s.refreshSchema(s === asker)));
+  const mine = all[same.indexOf(asker)];
   if (mine) entry.schema = mine;
   rebuildTree();
 }
 
+// The schema explorer (design section 14, F13) asks for details on one of a root's sessions, the visible sheet's if it
+// is on that root, and puts scripts into the visible sheet.
+tree.ctx = {
+  request: async (rootId, cmd) => {
+    const key = [...entries].find(([, e]) => e.id === rootId)?.[0];
+    const onIt = sheets.filter((s) => s.connected && s.target && targetKey(s.target) === key);
+    const sheet = onIt.includes(active!) ? active! : onIt[0];
+    return sheet ? bridge.request({ ...cmd, connectionId: sheet.connectionId }) : null;
+  },
+  insertScript: (sql) => { active?.insertScript(sql); },
+  refresh: (rootId) => void refreshSchema(rootId),
+};
+
 connectBtn.onclick = () => void connectActive();
 refreshBtn.onclick = () => void refreshSchema();
 treeFilter.addEventListener('input', () => tree.setFilter(treeFilter.value));
+// The filter's "columns too": tables with a matching column show, opened on those columns.
+const treeCols = $<HTMLButtonElement>('treeCols');
+treeCols.onclick = () => {
+  const on = treeCols.getAttribute('aria-pressed') !== 'true';
+  treeCols.setAttribute('aria-pressed', String(on));
+  tree.setMatchColumns(on);
+};
 $('newSheet').onclick = () => addSheet();
 $('newTab').onclick = () => addSheet();
 

@@ -24,7 +24,7 @@ public class EngineSessionTests
         public bool CannotRunInTransaction(string sql) => false;
         public GenericType GenericTypeOf(string dataTypeName) => GenericType.Text;
         public ISqlParser Parser => throw new NotSupportedException();
-        public IIdentifierPolicy Identifiers => throw new NotSupportedException();
+        public IIdentifierPolicy Identifiers { get; } = new AsStored(); // the schema event lists names that need quoting
 
         public Task<IProviderConnection> OpenAsync(string cs, ConnectionOptions options, CancellationToken ct)
         {

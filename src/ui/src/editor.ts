@@ -364,6 +364,29 @@ export class SqlEditor {
   }
 
   /**
+   * Inserts a block of SQL at the cursor, on lines of its own (a blank line before and after it when it lands among
+   * other text, so it is a statement of its own, §6), as one undoable edit, and selects it.
+   */
+  insertBlock(sql: string) {
+    const pos = this.editor.getPosition() ?? { lineNumber: 1, column: 1 };
+    const line = this.model.getLineContent(pos.lineNumber);
+    const blankHere = line.trim() === '';
+    const at = blankHere ? { lineNumber: pos.lineNumber, column: 1 } : { lineNumber: pos.lineNumber, column: line.length + 1 };
+    const before = blankHere ? '' : '\n\n';
+    const after = this.model.getLineCount() > at.lineNumber || !blankHere ? '\n' : '';
+    const body = sql.replace(/\s+$/, '');
+    const endAt = blankHere ? { lineNumber: pos.lineNumber, column: line.length + 1 } : at;
+    this.editor.pushUndoStop();
+    this.editor.executeEdits('siftdb.script', [{ range: new monaco.Range(at.lineNumber, at.column, endAt.lineNumber, endAt.column), text: before + body + after }]);
+    this.editor.pushUndoStop();
+    const start = this.model.getPositionAt(this.model.getOffsetAt(at) + before.length);
+    const end = this.model.getPositionAt(this.model.getOffsetAt(start) + body.length);
+    this.editor.setSelection(new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column));
+    this.editor.revealRangeInCenterIfOutsideViewport(new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column));
+    this.editor.focus();
+  }
+
+  /**
    * Adds a statement at the end of the sheet, after a blank line (which ends the one before it, §6), as its own undoable
    * edit, and puts the cursor on it.
    */

@@ -9,9 +9,9 @@ public static class ProviderContract
     /// v3 added GenericTypeOf; v4 added provider settings, the statement guard (ITransactionMonitor.BeforeStatementAsync) and
     /// Dialect; v5 added ChangesEveryRow and IProviderConnection.DescribeTableAsync (the missing-WHERE warning); v6 added
     /// IProviderConnection.DryRun; v7 added SameMeaning (Format SQL); v8 added ColumnOrigins, PeekRowAsync and CountRowsAsync
-    /// (following foreign keys).
+    /// (following foreign keys); v9 added DescribeRelationAsync, DescribeSchemaObjectsAsync and ScriptAsync (the schema explorer).
     /// </summary>
-    public const int CurrentVersion = 8;
+    public const int CurrentVersion = 9;
 }
 
 public interface IDatabaseProvider
@@ -138,4 +138,19 @@ public interface IProviderConnection : IAsyncDisposable
     /// not offered.
     /// </summary>
     Task<long?> CountRowsAsync(RowKey key, long cap, TimeSpan timeout, CancellationToken ct) => Task.FromResult<long?>(null);
+
+    /// <summary>
+    /// One relation's details for the schema explorer (design section 14, F13), read on a connection of its own. Null
+    /// when the relation is not there, or when not offered (and then the tree shows what the fast load has).
+    /// </summary>
+    Task<RelationDetail?> DescribeRelationAsync(string schema, string relation, CancellationToken ct) => Task.FromResult<RelationDetail?>(null);
+
+    /// <summary>A schema's functions, sequences and types, read on a connection of their own; null when not offered.</summary>
+    Task<SchemaObjects?> DescribeSchemaObjectsAsync(string schema, CancellationToken ct) => Task.FromResult<SchemaObjects?>(null);
+
+    /// <summary>
+    /// The statement that creates (<paramref name="create"/>) or drops an object, as the database would write it, for
+    /// "Script as" (it is put into the sheet, never run). Null when the provider cannot script that object.
+    /// </summary>
+    Task<string?> ScriptAsync(ObjectRef obj, bool create, CancellationToken ct) => Task.FromResult<string?>(null);
 }

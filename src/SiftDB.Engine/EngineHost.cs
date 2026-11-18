@@ -113,6 +113,16 @@ public sealed partial class EngineHost : IAsyncDisposable
                         root.GetProperty("sql").GetString()!,
                         allRowsChecked: root.TryGetProperty("allRowsChecked", out var allRows) && allRows.ValueKind == JsonValueKind.True);
                     break;
+                case "relationDetail":
+                    await RelationDetailAsync(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("schema").GetString()!,
+                        root.GetProperty("name").GetString()!);
+                    break;
+                case "schemaObjects":
+                    await SchemaObjectsAsync(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("schema").GetString()!);
+                    break;
+                case "scriptObject":
+                    await ScriptObjectAsync(id, root.GetProperty("connectionId").GetInt32(), root);
+                    break;
                 case "peekRow":
                     await PeekRowAsync(id, root.GetProperty("connectionId").GetInt32(), root);
                     break;
@@ -264,7 +274,8 @@ public sealed partial class EngineHost : IAsyncDisposable
         if (!_connections.TryGetValue(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
         var schema = await state.Connection.IntrospectAsync(CancellationToken.None);
         state.Schema = schema; // completions are answered from this cache, never by querying the database
-        if (send) Event(new { type = "schema", replyTo = id, connectionId, schema });
+        // With the names that must be written quoted, so the tree can drag and copy names exactly as SQL needs them (F13).
+        if (send) Event(new { type = "schema", replyTo = id, connectionId, schema, quoted = Quoted(state.Provider.Identifiers, NamesIn(schema)) });
         else Event(new { type = "ok", replyTo = id });
     }
 
