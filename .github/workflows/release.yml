@@ -86,19 +86,25 @@ jobs:
             Cliff --current --strip all -o artifacts/notes.md
             Cliff -o CHANGELOG.md
           } else {
-            # Nothing user-visible since the last release: stop, and say so. The context goes through a file, not the
-            # console: npx and git-cliff print their own messages there, which is not JSON.
-            Cliff --unreleased --context -o artifacts/context.json
-            $context = Get-Content artifacts/context.json -Raw | ConvertFrom-Json
-            if (-not $context -or @($context)[0].commits.Count -eq 0) {
-              "::notice::Nothing to release: no user-visible commits since the last release."
+            # What this release covers, as a plain git range (not git-cliff's own idea of "unreleased", which starts at
+            # the newest tag of any kind): a stable release, everything since the last stable one; a beta, everything
+            # since the last release of either kind.
+            $tags = git tag --list 'v*' | Where-Object { $_ -match '^v\d+\.\d+\.\d+(-.+)?$' }
+            $stable = $tags | Where-Object { $_ -notmatch '-' } | Sort-Object { [version]$_.TrimStart('v') } | Select-Object -Last 1
+            $previous = if ($stableRun) { $stable } else { git describe --tags --abbrev=0 --match 'v*' 2>$null }
+            $range = if ($previous) { "$previous..HEAD" } else { 'HEAD' }
+            Write-Host "Covering $range"
+
+            # Nothing user-visible in it (only the types cliff.toml leaves out): stop, and say so.
+            $hidden = '^(chore|ci|build|test|docs|refactor|style)(\(|:|!)|^Merge '
+            $visible = @(git log $range --format=%s | Where-Object { $_ -notmatch $hidden })
+            if ($visible.Count -eq 0) {
+              "::notice::Nothing to release: no user-visible commits in $range."
               "release=false" >> $env:GITHUB_OUTPUT
               exit 0
             }
 
-            # The version: from the last stable release, by the commits since the last release (or as chosen).
-            $stable = git tag --list 'v*' | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
-              Sort-Object { [version]$_.TrimStart('v') } | Select-Object -Last 1
+            # The version: from the last stable release, by the commits since it (or as chosen).
             $base = if ($stable) { [version]$stable.TrimStart('v') } else { [version]'0.0.0' }
             $since = if ($stable) { "$stable..HEAD" } else { 'HEAD' }
             $subjects = git log $since --format=%s
@@ -118,7 +124,13 @@ jobs:
             $tag = "v$next"
             Write-Host "Releasing $tag ($bump)"
 
-            Cliff --unreleased --tag $tag --strip all -o artifacts/notes.md
+            Cliff $range --tag $tag --strip all -o artifacts/notes.md
+            # There are user-visible commits, so notes without an entry mean git-cliff read the range differently: stop
+            # here, before anything is committed, tagged or pushed.
+            if (-not (Select-String -Path artifacts/notes.md -Pattern '^- ' -Quiet)) {
+              Get-Content artifacts/notes.md
+              throw "The release notes for $range came out empty, though it has $($visible.Count) user-visible commits."
+            }
             Cliff --tag $tag -o CHANGELOG.md
 
             # CHANGELOG.md is kept in the repository as the record; the tag points at the commit that has it.
