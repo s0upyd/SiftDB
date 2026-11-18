@@ -106,20 +106,20 @@ public class ReleaseNotesTests
         Assert.Equal(WhatsNewShow.None, ReleaseNotes.Decide(current, lastSeen, mode, Releases).Show);
 
     [Fact]
-    public void The_command_records_the_version_so_it_never_shows_twice()
+    public async Task The_command_records_the_version_so_it_never_shows_twice()
     {
         var path = Path.Combine(Path.GetTempPath(), $"siftdb-settings-{Guid.NewGuid():N}.json");
         try
         {
             var store = new SettingsStore(path);
             var events = new List<string>();
-            var engine = new EngineHost([], new Output(events), settings: store);
-            engine.HandleCommandAsync("""{"type":"whatsNew","id":1,"version":"0.3.1"}""").GetAwaiter().GetResult();
+            await using var engine = new EngineHost([], new Output(events), settings: store);
+            await engine.HandleCommandAsync("""{"type":"whatsNew","id":1,"version":"0.3.1"}""");
             var reply = JsonDocument.Parse(events.Last()).RootElement;
             Assert.Equal("none", reply.GetProperty("show").GetString());     // a fresh install
             Assert.Equal("0.3.1", store.Get().LastSeenVersion);
 
-            engine.HandleCommandAsync("""{"type":"whatsNew","id":2,"version":"0.3.0"}""").GetAwaiter().GetResult();
+            await engine.HandleCommandAsync("""{"type":"whatsNew","id":2,"version":"0.3.0"}""");
             Assert.Equal("0.3.1", store.Get().LastSeenVersion);                 // an older build never moves it back
         }
         finally { File.Delete(path); }

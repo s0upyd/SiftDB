@@ -71,8 +71,10 @@ jobs:
             Cliff --current --strip all -o artifacts/notes.md
             Cliff -o CHANGELOG.md
           } else {
-            # Nothing user-visible since the last release: stop, and say so.
-            $context = Cliff --unreleased --context | Out-String | ConvertFrom-Json
+            # Nothing user-visible since the last release: stop, and say so. The context goes through a file, not the
+            # console: npx and git-cliff print their own messages there, which is not JSON.
+            Cliff --unreleased --context -o artifacts/context.json
+            $context = Get-Content artifacts/context.json -Raw | ConvertFrom-Json
             if (-not $context -or @($context)[0].commits.Count -eq 0) {
               "::notice::Nothing to release: no user-visible commits since the last release."
               "release=false" >> $env:GITHUB_OUTPUT
