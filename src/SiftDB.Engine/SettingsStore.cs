@@ -26,6 +26,9 @@ public sealed record UserSettings(
     /// <summary>How large everything is drawn, in percent: text, icons and spacing grow together. One of <see cref="ZoomChoices"/>.</summary>
     public int Zoom { get; init; } = 100;
 
+    /// <summary>Ask before running an UPDATE or DELETE with no WHERE, or a TRUNCATE (design section 14, F1). On by default.</summary>
+    public bool WarnAllRows { get; init; } = true;
+
     /// <summary>
     /// Only values this version knows are kept. <paramref name="strict"/>: a user rule that is not valid throws (saving)
     /// rather than being dropped (reading a file).
@@ -85,6 +88,7 @@ public sealed class SettingsStore(string path)
                 Version = FormatVersion,
                 NewSheetMode = normalised.NewSheetMode,
                 Zoom = normalised.Zoom,
+                WarnAllRows = normalised.WarnAllRows,
                 ResultRules = normalised.ResultRules.Select(StoredRule.From).ToList(),
                 ProviderSettings = normalised.ProviderSettings.Count == 0 ? null
                     : normalised.ProviderSettings.ToDictionary(p => p.Key, p => new Dictionary<string, string>(p.Value)),
@@ -111,7 +115,7 @@ public sealed class SettingsStore(string path)
             var providers = (file.ProviderSettings ?? []).Where(p => p.Value is not null)
                 .ToDictionary(p => p.Key, p => (IReadOnlyDictionary<string, string>)p.Value);
             return _settings = new UserSettings(file.NewSheetMode ?? UserSettings.Default.NewSheetMode, rules.ToList(), providers)
-                { Zoom = file.Zoom ?? 100 }.Normalised();
+                { Zoom = file.Zoom ?? 100, WarnAllRows = file.WarnAllRows ?? true }.Normalised();
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
@@ -126,6 +130,7 @@ public sealed class SettingsStore(string path)
         public int Version { get; set; }
         public string? NewSheetMode { get; set; }
         public int? Zoom { get; set; }
+        public bool? WarnAllRows { get; set; }
         public List<StoredRule>? ResultRules { get; set; }
         public Dictionary<string, Dictionary<string, string>>? ProviderSettings { get; set; }
 

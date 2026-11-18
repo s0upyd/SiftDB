@@ -110,7 +110,11 @@ public sealed partial class EngineHost : IAsyncDisposable
                     break;
                 case "execute":
                     await ExecuteAsync(id, root.GetProperty("connectionId").GetInt32(),
-                        root.GetProperty("sql").GetString()!);
+                        root.GetProperty("sql").GetString()!,
+                        allRowsChecked: root.TryGetProperty("allRowsChecked", out var allRows) && allRows.ValueKind == JsonValueKind.True);
+                    break;
+                case "checkRun":
+                    await CheckRunAsync(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("sql").GetString()!);
                     break;
                 case "analyzeSheet":
                     AnalyzeSheet(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("text").GetString()!,
@@ -273,11 +277,22 @@ public sealed partial class EngineHost : IAsyncDisposable
     /// released by the query session once the reader is closed and the transaction state has been read), so nothing else
     /// can use the connection while rows are streaming from it.
     /// </summary>
-    private async Task ExecuteAsync(int id, int connectionId, string sql)
+    /// <param name="allRowsChecked">The caller asked "checkRun" first and either got no warning or the user confirmed it
+    /// (design section 14, F1). Without it the engine checks here, and refuses a statement that needs confirming, before
+    /// anything running is interrupted.</param>
+    private async Task ExecuteAsync(int id, int connectionId, string sql, bool allRowsChecked)
     {
         if (!_connections.TryGetValue(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
         // The editor already blocks these (analyzeSheet); this catches a statement that arrives any other way.
         if (state.ReadOnly && state.Provider.CheckReadOnly(sql) is { } readOnlyReason) { Error(id, readOnlyReason); return; }
+        if (!allRowsChecked && WholeTableChanges(state, sql) is { Count: > 0 } changes)
+        {
+            var idle = state.SessionLock.Wait(0);
+            string? warning;
+            try { warning = await AllRowsWarningAsync(state, changes, canAsk: idle); }
+            finally { if (idle) state.SessionLock.Release(); }
+            if (warning is not null) { Error(id, $"Not run: {warning} Confirm it before it runs."); return; }
+        }
         CancelCurrent(state); // a new statement replaces the running one; this lets it wind down and free the session
         await state.SessionLock.WaitAsync();
         var handedOver = false;

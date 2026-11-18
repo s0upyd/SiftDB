@@ -7,9 +7,9 @@ public static class ProviderContract
     /// <summary>
     /// Current version of the provider contract. v2 added connection fields, read-only sessions and CannotRunInTransaction;
     /// v3 added GenericTypeOf; v4 added provider settings, the statement guard (ITransactionMonitor.BeforeStatementAsync) and
-    /// Dialect.
+    /// Dialect; v5 added ChangesEveryRow and IProviderConnection.DescribeTableAsync (the missing-WHERE warning).
     /// </summary>
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
 }
 
 public interface IDatabaseProvider
@@ -55,6 +55,13 @@ public interface IDatabaseProvider
     bool CannotRunInTransaction(string sql);
 
     /// <summary>
+    /// The tables <paramref name="sql"/> (one or more statements) changes every row of: an UPDATE or DELETE with no WHERE,
+    /// or a TRUNCATE. Read from the statement's structure, not its text. SQL that does not parse gives none (the server
+    /// reports it). None by default, so a provider without it simply gets no warning.
+    /// </summary>
+    IReadOnlyList<WholeTableChange> ChangesEveryRow(string sql) => [];
+
+    /// <summary>
     /// The generic type (design section 10) of a result column, from the name the reader reports for it
     /// (<see cref="DbDataReader.GetDataTypeName"/>). Anything without a closer match is <see cref="GenericType.Text"/>.
     /// </summary>
@@ -89,4 +96,12 @@ public interface IProviderConnection : IAsyncDisposable
     /// query, SET values), so providers do it on a separate connection.
     /// </summary>
     Task<DatabaseSchema> IntrospectAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Whether a table is temporary and about how many rows it has, asked on this session (so its own temp tables, and
+    /// tables created in its open transaction, are seen). <paramref name="schema"/> null means the name is resolved as the
+    /// session would resolve it. Null when the table is not found or the session cannot answer (an aborted transaction).
+    /// Must not fail, and must not disturb the session's transaction. Called only while the session is idle.
+    /// </summary>
+    Task<TableFacts?> DescribeTableAsync(string? schema, string table, CancellationToken ct) => Task.FromResult<TableFacts?>(null);
 }

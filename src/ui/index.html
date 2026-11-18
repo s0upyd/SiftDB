@@ -206,6 +206,14 @@
     .txDetail { color: var(--dim); }
     .txbar .grow { flex: 1; }
 
+    /* The missing-WHERE warning (design section 14, F1): red, above the editor, until Run anyway or Cancel. */
+    .confirmbar { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-bottom: 1px solid var(--line);
+                  border-left: 5px solid var(--tx-failed); background: var(--tx-failed-bg); color: var(--fg); }
+    .confirmIcon { color: var(--tx-failed); font-size: 15px; width: 1.2em; text-align: center; flex: none; }
+    .confirmText { min-width: 0; overflow-wrap: anywhere; line-height: 20px; }
+    .confirmbar .grow { flex: 1; }
+    .confirmbar button { flex: none; }
+
     .editor { height: 190px; min-height: 80px; overflow: hidden; flex: none; }
     /* Drag to give the editor or the results more room. The line is 1px; the hit area is wider. */
     .splitter { flex: none; height: 5px; margin: -2px 0; position: relative; z-index: 2; cursor: row-resize; touch-action: none; }

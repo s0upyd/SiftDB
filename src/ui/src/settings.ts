@@ -14,6 +14,8 @@ export interface UserSettings {
   newSheetMode: QueryMode;
   /** How large the whole window is drawn, in percent (the host applies it as the WebView's zoom). */
   zoom: number;
+  /** Ask before an UPDATE or DELETE with no WHERE, or a TRUNCATE, runs (design section 14, F1). */
+  warnAllRows: boolean;
   /** Result styling (design section 10): one ordered list, presets included. The first rule that matches styles the cell. */
   resultRules: StyleRule[];
   /** By provider id, then setting key: the chosen value. */
@@ -33,7 +35,7 @@ export interface ProviderSettingInfo {
 export interface ProviderSettingsInfo { id: string; displayName: string; settings: ProviderSettingInfo[] }
 
 /** Until the engine answers. Its defaults hold the presets; the page never invents them. */
-const DEFAULTS: UserSettings = { newSheetMode: 'assisted', zoom: 100, resultRules: [], providerSettings: {} };
+const DEFAULTS: UserSettings = { newSheetMode: 'assisted', zoom: 100, warnAllRows: true, resultRules: [], providerSettings: {} };
 
 /** The settings as the engine last reported them. Until loaded, or when they cannot be read, the defaults apply. */
 export class Settings {
@@ -73,6 +75,7 @@ export class Settings {
     this.values = {
       newSheetMode: s?.newSheetMode === 'strict' ? 'strict' : 'assisted',
       zoom,
+      warnAllRows: s?.warnAllRows !== false,
       resultRules: Array.isArray(s?.resultRules) ? s.resultRules : [],
       // The engine sends each provider's values with defaults filled in.
       providerSettings: Object.fromEntries(list.map((p) => [p.id, { ...(p.values ?? {}) }])),
@@ -139,14 +142,21 @@ const sqlCategory: Category = {
     const strict = radio(group, 'strict', 'Strict',
       'The text you write is the text that runs. Quoting problems are squiggles with quick fixes, and block the run.',
       values.newSheetMode === 'strict');
+    const warn = el('input', { type: 'checkbox', checked: values.warnAllRows });
     const page = el('div', { className: 'fgroup' },
       el('fieldset', {},
         el('legend', { textContent: 'New sheets open in' }),
         assisted.wrap, strict.wrap,
-        el('p', { className: 'fhelp', textContent: 'Each sheet can still be switched on its toolbar. Open sheets, and files that say which mode they use, keep theirs.' })));
+        el('p', { className: 'fhelp', textContent: 'Each sheet can still be switched on its toolbar. Open sheets, and files that say which mode they use, keep theirs.' })),
+      el('fieldset', {},
+        el('legend', { textContent: 'Safety' }),
+        el('label', { className: 'fcheck' }, warn, el('span', { textContent: 'Warn before UPDATE or DELETE without WHERE' }),
+          el('span', { className: 'fhelp', textContent:
+            'Asks before running a statement that changes every row of a table (TRUNCATE too), and says about how many rows that is. ' +
+            'Not asked for temporary tables, or on read-only connections.' }))));
     return {
       page,
-      apply: (into) => { into.newSheetMode = strict.input.checked ? 'strict' : 'assisted'; },
+      apply: (into) => { into.newSheetMode = strict.input.checked ? 'strict' : 'assisted'; into.warnAllRows = warn.checked; },
       focus: () => (strict.input.checked ? strict.input : assisted.input).focus(),
     };
   },

@@ -25,6 +25,8 @@ public sealed partial class EngineHost
             NewSheetMode = OptionalString(s, "newSheetMode") ?? current.NewSheetMode,
             Zoom = s.TryGetProperty("zoom", out var zoom) && zoom.ValueKind == JsonValueKind.Number && zoom.TryGetInt32(out var z)
                 ? z : current.Zoom,
+            WarnAllRows = s.TryGetProperty("warnAllRows", out var warn) && warn.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? warn.GetBoolean() : current.WarnAllRows,
             ResultRules = s.TryGetProperty("resultRules", out var rules) && rules.ValueKind == JsonValueKind.Array
                 ? rules.EnumerateArray().Select(ReadRule).ToList()
                 : current.ResultRules,
@@ -96,6 +98,7 @@ public sealed partial class EngineHost
         newSheetMode = s.NewSheetMode,
         zoom = s.Zoom,
         zoomChoices = UserSettings.ZoomChoices,
+        warnAllRows = s.WarnAllRows,
         resultRules = s.ResultRules.Select(r => new
         {
             id = r.Id, preset = r.IsPreset, name = r.Name, enabled = r.Enabled, columns = r.Columns, types = r.Types,

@@ -67,6 +67,13 @@ const TEMPLATE = `
     <button class="txCommit ib ic-commit" data-icon="tick" aria-label="Commit" title="Commit the changes (Ctrl+Shift+Enter)"></button>
     <button class="txRollback ib ic-stop" data-icon="cross" aria-label="Roll back" title="Roll back (Ctrl+Shift+R)"></button>
   </div>
+  <div class="confirmbar" hidden>
+    <span class="confirmIcon" aria-hidden="true">⚠</span>
+    <span class="confirmText" role="alert"></span>
+    <span class="grow"></span>
+    <button class="confirmRun danger" title="Run it as it is">Run anyway</button>
+    <button class="confirmCancel" title="Don't run it (Esc)">Cancel</button>
+  </div>
   <div class="editor"></div>
   <div class="splitter" role="separator" aria-orientation="horizontal" aria-label="Resize editor and results" tabindex="0" title="Drag to resize (or use the up and down arrow keys)"></div>
   <div class="msg" hidden role="status"><span class="msgIcon" aria-hidden="true"></span><span class="msgText"></span></div>
@@ -115,6 +122,7 @@ export class Sheet {
     roChip: HTMLElement; autoChip: HTMLElement;
     txBar: HTMLElement; txIcon: HTMLElement; txLabel: HTMLElement; txDetail: HTMLElement;
     txEnd: HTMLButtonElement; txCommit: HTMLButtonElement; txRollback: HTMLButtonElement;
+    confirmBar: HTMLElement; confirmText: HTMLElement; confirmRun: HTMLButtonElement; confirmCancel: HTMLButtonElement;
     editor: HTMLElement; splitter: HTMLElement; msg: HTMLElement; msgIcon: HTMLElement; msgText: HTMLElement; tabs: HTMLElement; results: HTMLElement; empty: HTMLElement;
   };
   private readonly resultsCtx: ResultsContext;
@@ -142,6 +150,7 @@ export class Sheet {
       roChip: $('.rochip'), autoChip: $('.autochip'),
       txBar: $('.txbar'), txIcon: $('.txIcon'), txLabel: $('.txLabel'), txDetail: $('.txDetail'),
       txEnd: $('.txEnd'), txCommit: $('.txCommit'), txRollback: $('.txRollback'),
+      confirmBar: $('.confirmbar'), confirmText: $('.confirmText'), confirmRun: $('.confirmRun'), confirmCancel: $('.confirmCancel'),
       editor: $('.editor'), splitter: $('.splitter'), msg: $('.msg'), msgIcon: $('.msgIcon'), msgText: $('.msgText'), tabs: $('.resulttabs'), results: $('.results'), empty: $('.empty'),
     };
     scrollTabsWithWheel(this.el.tabs);
@@ -186,6 +195,9 @@ export class Sheet {
     this.initSplitter();
     this.el.modeAssisted.onclick = () => this.setMode('assisted');
     this.el.modeStrict.onclick = () => this.setMode('strict');
+    this.el.confirmRun.onclick = () => this.answerConfirm(true);
+    this.el.confirmCancel.onclick = () => this.answerConfirm(false);
+    this.el.confirmBar.onkeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); this.answerConfirm(false); } };
 
     this.setMessage('Not connected. Pick a connection above and press Connect.', 'warning');
     this.updateButtons();
@@ -285,6 +297,7 @@ export class Sheet {
   async disconnect() {
     if (!this.connected) return;
     const id = this.connectionId;
+    this.hideConfirm();
     this.ctx.unregisterConnection(id); // stop routing events to a session that is going away
     this.connectionId = 0;
     this.target = null;
@@ -367,6 +380,7 @@ export class Sheet {
   acceptCorrectionsForSave(): Promise<boolean> { return this.editor.acceptCorrectionsForSave(); }
 
   private textChanged() {
+    if (this.pendingConfirm !== null) this.hideConfirm(); // the question was about text that has changed
     const dirty = this.dirty;
     if (dirty !== this.wasDirty) {
       this.wasDirty = dirty;
@@ -420,7 +434,45 @@ export class Sheet {
     }
   }
 
+  /**
+   * Every run asks the engine first whether it needs confirming (an UPDATE or DELETE with no WHERE, or a TRUNCATE:
+   * design section 14, F1). If so, the red bar above the editor asks, and nothing runs until "Run anyway".
+   */
   private async runSql(sql: string) {
+    this.hideConfirm();
+    const check = await this.ctx.bridge.request({ type: 'checkRun', connectionId: this.connectionId, sql });
+    if (check.type === 'error') { this.setMessage(`not run: ${check.message}`, 'error'); return; }
+    if (check.allRows) { this.askConfirm(check.allRows as string, sql); return; }
+    await this.startRun(sql);
+  }
+
+  /** The SQL waiting for an answer on the red bar, or null while the bar is hidden. */
+  private pendingConfirm: string | null = null;
+
+  private askConfirm(warning: string, sql: string) {
+    this.pendingConfirm = sql;
+    this.setMessage('');
+    this.activeResult?.markStale(); // nothing ran: the result on screen is from before
+    this.el.confirmText.textContent = warning;
+    this.el.confirmBar.hidden = false;
+    this.el.confirmCancel.focus(); // the safe answer is the one Enter gives
+  }
+
+  private hideConfirm() {
+    this.pendingConfirm = null;
+    this.el.confirmBar.hidden = true;
+  }
+
+  private answerConfirm(run: boolean) {
+    const sql = this.pendingConfirm;
+    this.hideConfirm();
+    this.editor.focus();
+    if (sql === null) return;
+    if (run && this.connected) void this.startRun(sql);
+    else this.setMessage('Not run.');
+  }
+
+  private async startRun(sql: string) {
     this.setMessage('');
     const view = this.viewForRun();
     this.running = view;

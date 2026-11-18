@@ -204,7 +204,8 @@ export class ResultView {
     this.refreshStats();
 
     this.connectionId = connectionId;
-    const r = await this.ctx.bridge.request({ type: 'execute', connectionId, sql });
+    // The sheet asked "checkRun" before this, and the user confirmed any missing-WHERE warning (design section 14, F1).
+    const r = await this.ctx.bridge.request({ type: 'execute', connectionId, sql, allRowsChecked: true });
     if (r.type === 'cancelled') { // cancelled before the database returned anything
       this.done = true;
       this.setState('cancelled');
