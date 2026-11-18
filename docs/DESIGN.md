@@ -232,6 +232,8 @@ User settings are built (see §11, *User settings*). Every later feature adds it
 
 The read-only lock that used to be here became the read-only connection setting (§8).
 
+The features agreed for building next, with their status, are in §14 (*Planned features*).
+
 ### Result styling
 Make results easier to read by colouring values, the way users are used to seeing their data.
 - **One kind of rule.** A rule is *where it applies* + a *condition* + a *style*. Built-in presets are ordinary rules that ship with the app; nothing about them is special except that they cannot be deleted.
@@ -283,8 +285,8 @@ Make results easier to read by colouring values, the way users are used to seein
 - Undoing a failed statement (§7) and provider settings (§10): provider contract **v4** adds `IDatabaseProvider.Settings` (`ProviderSetting` / `SettingChoice` descriptors) and `ApplySettings(values)`, and `ITransactionMonitor.BeforeStatementAsync(sql)` / `AfterStatementAsync(failed)`; all have default implementations (no settings, nothing guarded), since a database that does not abort transactions on errors needs none of it. The engine calls the guard around a statement's **whole life**, up to its last row (an error can come mid-stream), on every failure path (an error before the first row, a cancel before it, a failure while streaming), and reports `statementUndone` in the transaction event. The Postgres monitor decides from the protocol status: it sets `savepoint siftdb_statement` only when `InTransactionBlock` and the text holds no `TransactionStmt` (from the parse tree; unparsable text is guarded), and afterwards rolls back to it only if the status is `InFailedTransactionBlock` (so a cancelled SELECT that streamed fine has nothing "undone"), else releases it. Settings live in `settings.json` as `providerSettings: { postgres: { onError: "undoStatement" } }`; the engine fills in defaults and drops values that are no longer a choice before applying them (at startup and after each save, so open sessions follow from their next statement), refuses a non-choice on save, and keeps the values of providers that are not loaded. Not yet: piggybacking the release on the "changed?" probe to save a round trip.
 - User settings (§10): the engine owns `SettingsStore` (`%APPDATA%\SiftDB\settings.json`, format 1), on the same rules as the connection store: written atomically, settings a newer version added are kept on rewrite, and an unreadable or newer file is reported and never overwritten (the defaults apply meanwhile, and the editor says why and cannot save). Values are always valid: anything missing or unrecognised reads as the default. Commands: `getSettings` and `saveSettings` (the whole set), both answered with `settings`. The UI's **Settings…** button (Ctrl+,) opens a modal editor with **categories on the left** (a vertical tab list; arrow keys move within it) and the chosen category's page on the right. Each category is self-contained in `settings.ts` (it draws its page from the current values and writes its part of the set on Save), so a feature adds its settings by adding a category; switching category keeps unsaved edits, Save saves every category, and the editor reopens on the category last viewed in this run. The first category is **SQL**; **Results** (styling) is expected next. The first setting is **New sheets open in** Assisted or Strict (radio buttons, both always shown, each with its explanation); it applies to sheets opened afterwards, and to opened files whose header names no mode, never to sheets already open. Not yet: the bind-variable "type when it cannot be inferred" setting (§4).
 - Text size: the **Appearance** category (listed first) has **Zoom**, 100% (the default) to 200% (`zoom` in `settings.json`, in percent; the engine sends the choices as `zoomChoices`, and anything else reads as 100). It is **one zoom for the whole window**, WebView2's `ZoomFactor`, not a font-size variable: text, icons, spacing, the canvas grid (it draws at `devicePixelRatio`, which the zoom raises) and Monaco all grow together, and nothing sized in px gets cut off. The host reads the stored zoom before the page loads, so the first frame is already the right size; after a save the page sends `setZoom` (a host message, clamped to 50 to 300%) and it applies at once. Ctrl+mouse wheel still zooms for the moment and is not saved. Not yet: Ctrl+= / Ctrl+- / Ctrl+0 shortcuts that change the setting.
-- Result styling (§10): provider contract **v3** adds `GenericTypeOf(dataTypeName)` and the `GenericType` enum in Abstractions; the engine sends each result column's generic type (`type`) in the `columns` event, from `DbDataReader.GetDataTypeName` (checked against a real server: `int8` → integer, `numeric(10,2)` → decimal, `bit(1)` → boolean, `timestamp` and `timestamptz` → dateTime, arrays and `uuid` → text). The engine owns the rule model (`StyleRules`): it validates user rules on save (a bad rule is refused with the reason, nothing written) and drops bad ones when reading a file; preset entries store only id and on/off. Settings carry the list as `resultRules`. The UI matches rules to columns once per result (`styles.ts`: a per-column styler, null when no rule applies, so an unstyled column costs nothing to draw) and again when the rules change, so a save restyles open results at once. The **Results** settings page lists every rule with an example cell in its colours; new rules go to the top. The rule form shows a live example and warns below 4.5:1 contrast (WCAG AA); the four presets all pass it. Colours are picked with the native colour input (so `#rrggbb`; `#rgb` is accepted from the file). Dates and times are shown in ISO form (`2026-11-12`, `2026-11-12 14:05:09.5`, a trailing `Z` for a UTC timestamp) rather than the invariant culture's US style, chosen by the column's type (`date` shows no time) so a column never mixes formats; date ranges compare these. Not yet: by-table rules (`orders.status`), which need each result column's source table: Npgsql offers it only through `GetColumnSchema()`, which costs a catalog query per result, so it needs a look at reading it from the row description instead.
-- Delivery (§9): **`build/release.ps1`** makes a release: `dotnet publish` of the host, self-contained for win-x64 (not single-file, since Velopack's deltas work per file), then `vpk pack` (Velopack 1.2.161; the CLI is pinned in `dotnet-tools.json`) into `artifacts/releases`: `SiftDB-win-Setup.exe`, full and delta `.nupkg`s, `releases.<channel>.json` and a portable zip. The pack id is `SiftDB`, so it installs per user into `%LOCALAPPDATA%\SiftDB` with no admin prompt. The exe is `SiftDB.exe` (the host's assembly name). `--framework webview2` makes Setup install the WebView2 Runtime when it is missing; the host also checks at startup (a copy run without installing) and offers Microsoft's download page instead of crashing. **Versions come from git tags:** `.github/workflows/release.yml` runs on a `v*` tag, so `v0.2.0` is a stable release on the default channel (`win`) and any prerelease suffix (`v0.2.0-beta.1`) goes to the `beta` channel as a GitHub prerelease. It downloads the previous release first so deltas are built, then `vpk upload github` publishes. A local build reports the csproj's `<Version>`. Velopack runs first in `Program.Main` (it handles the installer's hooks and applies an update that was downloaded but not restarted into). **Updates** (`Updater`): only an installed copy checks, 10 s after the page loads and then every 4 hours, against GitHub Releases without a token (prereleases included; the channel the copy was installed from decides which feed it reads, so stable never sees beta). A newer release downloads quietly, then an accent-coloured **Restart to update to X** button appears in the toolbar. Clicking it goes through the usual close (the uncommitted-changes warning, the last autosave), and the updater applies the update and restarts SiftDB; declining the warning cancels the update too. Ignoring the button is fine: the update is applied the next time SiftDB starts. Failures (offline, rate-limited) are silent and retried at the next check. WebView2's data folder (the page's localStorage) is `%LOCALAPPDATA%\SiftDB\WebView2`, not the default next to the exe, which every update replaces. **CI** (`.github/workflows/ci.yml`, on every push to main and pull request, and called by the release workflow so a release waits for it): the engine and provider tests on Linux against a `postgres:18` service container (`SIFTDB_SPIKE_CONN` points at it, so no database test skips), and a Windows build of the host and UI. Test waits that only matter when something hangs allow 15 s, so a slow runner does not fail them. **The app icon** is a database whose base narrows into a funnel, sifting out a drop, white on a blue tile: drawn in `src/SiftDB.Host/Assets/SiftDB.svg` and rendered to `SiftDB.ico` (16 to 256 px) by `build/icon` (run by hand after changing the SVG); it is the exe's, the window's and Setup's icon. Not yet: code signing, a setting to turn update checks off, release notes.
+- Result styling (§10): provider contract **v3** adds `GenericTypeOf(dataTypeName)` and the `GenericType` enum in Abstractions; the engine sends each result column's generic type (`type`) in the `columns` event, from `DbDataReader.GetDataTypeName` (checked against a real server: `int8` → integer, `numeric(10,2)` → decimal, `bit(1)` → boolean, `timestamp` and `timestamptz` → dateTime, arrays and `uuid` → text). The engine owns the rule model (`StyleRules`): it validates user rules on save (a bad rule is refused with the reason, nothing written) and drops bad ones when reading a file; preset entries store only id and on/off. Settings carry the list as `resultRules`. The UI matches rules to columns once per result (`styles.ts`: a per-column styler, null when no rule applies, so an unstyled column costs nothing to draw) and again when the rules change, so a save restyles open results at once. The **Results** settings page lists every rule with an example cell in its colours; new rules go to the top. The rule form shows a live example and warns below 4.5:1 contrast (WCAG AA); the four presets all pass it. Colours are picked with the native colour input (so `#rrggbb`; `#rgb` is accepted from the file). Dates and times are shown in ISO form (`2026-11-12`, `2026-11-12 14:05:09.5`, a trailing `Z` for a UTC timestamp) rather than the invariant culture's US style, chosen by the column's type (`date` shows no time) so a column never mixes formats; date ranges compare these. Not yet: by-table rules (`orders.status`), which need each result column's source table: Npgsql offers it only through `GetColumnSchema()`, which costs a catalog query per result, so it needs a look at reading it from the row description instead. Follow foreign keys (F4, §14) needs the same origin (`ColumnOrigin`).
+- Delivery (§9): **`build/release.ps1`** makes a release: `dotnet publish` of the host, self-contained for win-x64 (not single-file, since Velopack's deltas work per file), then `vpk pack` (Velopack 1.2.161; the CLI is pinned in `dotnet-tools.json`) into `artifacts/releases`: `SiftDB-win-Setup.exe`, full and delta `.nupkg`s, `releases.<channel>.json` and a portable zip. The pack id is `SiftDB`, so it installs per user into `%LOCALAPPDATA%\SiftDB` with no admin prompt. The exe is `SiftDB.exe` (the host's assembly name). `--framework webview2` makes Setup install the WebView2 Runtime when it is missing; the host also checks at startup (a copy run without installing) and offers Microsoft's download page instead of crashing. **Versions come from git tags:** `.github/workflows/release.yml` runs on a `v*` tag, so `v0.2.0` is a stable release on the default channel (`win`) and any prerelease suffix (`v0.2.0-beta.1`) goes to the `beta` channel as a GitHub prerelease. It downloads the previous release first so deltas are built, then `vpk upload github` publishes. A local build reports the csproj's `<Version>`. Velopack runs first in `Program.Main` (it handles the installer's hooks and applies an update that was downloaded but not restarted into). **Updates** (`Updater`): only an installed copy checks, 10 s after the page loads and then every 4 hours, against GitHub Releases without a token (prereleases included; the channel the copy was installed from decides which feed it reads, so stable never sees beta). A newer release downloads quietly, then an accent-coloured **Restart to update to X** button appears in the toolbar. Clicking it goes through the usual close (the uncommitted-changes warning, the last autosave), and the updater applies the update and restarts SiftDB; declining the warning cancels the update too. Ignoring the button is fine: the update is applied the next time SiftDB starts. Failures (offline, rate-limited) are silent and retried at the next check. WebView2's data folder (the page's localStorage) is `%LOCALAPPDATA%\SiftDB\WebView2`, not the default next to the exe, which every update replaces. **CI** (`.github/workflows/ci.yml`, on every push to main and pull request, and called by the release workflow so a release waits for it): the engine and provider tests on Linux against a `postgres:18` service container (`SIFTDB_SPIKE_CONN` points at it, so no database test skips), and a Windows build of the host and UI. Test waits that only matter when something hangs allow 15 s, so a slow runner does not fail them. **The app icon** is a database whose base narrows into a funnel, sifting out a drop, white on a blue tile: drawn in `src/SiftDB.Host/Assets/SiftDB.svg` and rendered to `SiftDB.ico` (16 to 256 px) by `build/icon` (run by hand after changing the SVG); it is the exe's, the window's and Setup's icon. Not yet: code signing, a setting to turn update checks off, release notes (planned as F17, §14).
 - Toolbar icons: the toolbar buttons are icons, not words, each 16 px in **one colour that says what it does**: green to go (Run ▶, Begin ⊕, End ✓), amber to Commit ✓ (the colour of changes pending), red to stop (Cancel ■, Rollback ✕), the accent for Connect, and the text colour for the rest (edit, new and save connection, open, save, new sheet, settings). They use the transaction bar's colours, so they follow light and dark. Each has a tooltip with its shortcut and an `aria-label`. The icons live in `icons.ts` (`applyIcons` fills each `[data-icon]` element). Assisted | Strict stays as words: it is a mode, and the words are the meaning. The result status bar's buttons are icons too: **Export** a green table with an arrow leaving it (while an export runs it turns into a red stop with the percentage beside it, and cancels), and **Details** a chevron pointing down when the timings are hidden and up when they show (`aria-expanded` says which).
 - Grid editing: none for now. The grid is read-only. Revisit later (it would interact with transactions and the lock).
 - Export formats: CSV and JSON are enough for now. Import is not decided.
@@ -293,7 +295,7 @@ Make results easier to read by colouring values, the way users are used to seein
 - Audience: anyone (a public product, not just personal use). This raises the bar on installer, signing, docs and the plugin contract.
 
 **Not discussed yet**
-- Schema browser scope: object tree, DDL view, search, ER diagrams
+- Schema browser scope: the object tree, definitions, *Script as* and column-name search are now planned as F13 (§14); ER diagrams are still open (the query mini-map, F5, covers one statement only)
 - Query history: how it's searched, whether it's per connection
 - Licensing (plugin SDK, open source or closed): not a concern for now, and monetisation isn't a goal at this stage
 
@@ -350,3 +352,511 @@ The spike succeeds if the first rows appear in under 1s, scrolling stays smooth,
 Reading: first rows and scrolling pass comfortably. The bridge and UI add about 8 ms to the engine's own time, and the engine was blocked on the UI for only 2 ms, so the fetch loop does not stall the reader. The first measurement (5.1 s) was a Debug build; always benchmark in Release (`dotnet run -c Release`). Encoding text columns (one string per cell) is the largest remaining engine cost and the first thing to optimise if needed. For comparison, `psql` fetches the same rows in about 0.97 s. Engine-only numbers can be reproduced without the UI via the `StreamingBenchmark` test (set `SIFTDB_SPIKE_CONN`). Memory scales linearly with rows (heap is about the size of the data), so it is only bounded once the spill-to-disk cap from §11 exists.
 
 **Known spike limitations:** no selection or copy; the scroll height is plain DOM, so it tops out around 33M px (about 1.5M rows at 22px); an oversized single row isn't specially handled; no spill-to-disk.
+
+---
+
+## 14. Planned features
+
+Agreed 2026-11-17, merged here 2026-11-18. Seventeen features, in suggested build order. Each follows the existing rules: the **engine** decides and the UI only draws, **providers** supply anything specific to one database (new optional capabilities in the provider contract), and anything not implemented degrades quietly. References like "feature 9" or "(12)" mean the features below; `§` numbers mean the sections of this document.
+
+**Tracking:** the Status column is the list of what is left to build. When a feature (or part of one) is built, set its status here, and record what was built and decided in §11 the way earlier features are, with a "Not yet:" list for the rest.
+
+| # | Feature | Builds on | Status |
+|---|---|---|---|
+| F1 | Missing WHERE alarm | Parser (`ISqlParser`), sheet analysis | Not started |
+| F2 | Dry run for UPDATE / DELETE | Savepoint guard (§7), transaction monitor | Not started |
+| F3 | Who's blocking me | Session per sheet, background-run spinner | Not started |
+| F4 | Follow foreign keys | Schema cache, result columns, grid | Not started |
+| F5 | Query mini-map | `ScopeAnalyzer`, `StatementSplitter`, sheet analysis | Not started |
+| F6 | Visual EXPLAIN | Parser, dry run (for EXPLAIN ANALYZE of writes) | Not started |
+| F7 | Format SQL | Parser (scanner tokens, parse trees) | Not started |
+| F8 | Record view (one or two rows, vertical) | Results grid, result styling, follow keys | Not started |
+| F9 | Backslash commands (`\d`, `\dt`, …) | Schema model, statement splitter, record view | Not started |
+| F10 | Expand `*` | Identifier resolver, `ScopeAnalyzer`, formatter settings | Not started |
+| F11 | Paste a list as `IN (…)` | Resolver (column types), editor paste handling | Not started |
+| F12 | App-wide command palette | Monaco's existing F1 palette, every feature's commands | Not started |
+| F13 | Richer schema explorer (keys, constraints, indexes, triggers…) | `SchemaModel`, `PostgresIntrospector`, schema tree (`tree.ts`) | Not started |
+| F14 | Saved queries as palette commands | Command palette (F12), `SheetFile` header, bind variables (§4) | Not started |
+| F15 | Link templates (open a URL with values from a result) | Command registry (F12), result styling's column matching, host | Not started |
+| F16 | Extension packs, code-free (**low priority**) | F14 and F15, settings store | Not started |
+| F17 | Release notes and a What's New tab | Velopack, GitHub Actions release (§9), settings store, tabs, command registry | Not started |
+
+Features F7–F12 are small and independent, so they can be slotted in at any point, e.g. as quick wins between the bigger ones.
+
+### F1. Missing WHERE alarm
+
+**What:** `DELETE FROM orders` or `UPDATE orders SET status = 'x'` without a `WHERE` gets a clear warning **before it runs**: "This affects every row in `orders` (about 1.2M rows)."
+
+- **Detected from the parse tree**, not text: an `UpdateStmt` / `DeleteStmt` with no `whereClause`. Also covers `TRUNCATE`. (`DELETE ... USING` with no WHERE counts too.)
+- **Row estimate** from the provider (Postgres: `pg_class.reltuples` for the table, which needs no scan). Shown as "about N rows". If the estimate isn't available, say "every row".
+- **Confirmation** in a red banner above the editor: *Run anyway* / *Cancel*. The keyboard default is Cancel. Applies in both Strict and Assisted modes.
+- Not shown on read-only connections (the server refuses anyway) or for temp tables.
+- **Setting:** "Warn before UPDATE/DELETE without WHERE" (on by default), under the SQL category.
+- **Ties in with dry run:** the banner offers **Dry run** as a third button.
+- Provider-neutral: the provider's parser reports `AffectsAllRows(table)`. The engine owns the decision and the message.
+
+### F2. Dry run for UPDATE / DELETE
+
+**What:** run a data-changing statement for real, show exactly what it would do, then roll it back. "This will change 42 rows", with before and after values.
+
+- **Mechanism:**
+  - Transaction already open: `SAVEPOINT siftdb_dryrun` → run → capture → `ROLLBACK TO SAVEPOINT`.
+  - No transaction open: `BEGIN` → run → capture → `ROLLBACK`. The session ends up exactly as it was.
+- **Capturing results:**
+  - The affected rows come from `RETURNING *`, added by the engine if the statement doesn't have it already. For DELETE these are the deleted rows; for UPDATE they're the new values.
+  - **Before values** (UPDATE): select the target rows by primary key, or by `ctid` when there's no key, inside the same savepoint *before* running, then match them to the returned rows.
+  - Shown in a result tab marked **Dry run** (striped header): changed cells highlighted, old value on hover or in a "before | after" toggle, and a row count at the top.
+- **Commands:** `Ctrl+Shift+F5` = dry run the current statement. Also a button on the missing-WHERE banner, and a ▶ margin menu item.
+- **Then:** *Run for real* reruns it normally, without reusing the dry-run result.
+- **Honest caveats, shown once in the dry-run tab's info tooltip:**
+  - Triggers fire, then are rolled back with everything else.
+  - Sequences (`nextval`) are **not** rolled back, so IDs get used up.
+  - Anything outside the database (dblink, foreign tables, `COPY ... TO PROGRAM`) is not undone.
+  - `NOTIFY` is transactional, so nothing is sent.
+  - Locks are taken while it runs.
+- **Refused for:** statements that can't run in a transaction (`CannotRunInTransaction` already exists), DDL in the first version, read-only connections, and anything that controls transactions.
+- **Cap:** show at most the first 10,000 affected rows, but report the full count.
+- **Provider contract:** an optional `IDryRunSupport` (wrap, add `RETURNING`, fetch before values). SQL Server would use `OUTPUT deleted.*, inserted.*` inside a transaction that's always rolled back.
+
+### F3. Who's blocking me
+
+**What:** when a statement is stuck waiting on a lock, show **who** holds it, **what** they're running and **for how long**, with an option to cancel them.
+
+- **Detection:** while a statement has been running for more than **2 s**, the engine checks every 2 s on a separate, short-lived **admin connection** (never the sheet's own session, which is busy):
+  ```sql
+  select pid, usename, application_name, client_addr, state,
+         now() - xact_start  as in_transaction_for,
+         now() - query_start as running_for,
+         wait_event_type, left(query, 500) as query
+  from pg_stat_activity
+  where pid = any(pg_blocking_pids(@our_pid));
+  ```
+  `@our_pid` is the sheet connection's backend PID (Npgsql `ProcessID`, recorded when the session opens).
+- **UI:** an amber strip under the running statement: "Waiting for a lock held by **dave@10.0.0.4** (pid 4711), in a transaction for 12 min: `update orders set …`". It expands for the full query and the chain if there are several blockers (`pg_blocking_pids` returns all of them).
+- **Actions:**
+  - *Cancel my statement* (always available)
+  - *Cancel their query* (`pg_cancel_backend`)
+  - *End their session* (`pg_terminate_backend`)
+
+  The last two always ask for confirmation, and are only shown if the role can do it (the same role, or membership of `pg_signal_backend`). If it's refused, show the server's message.
+- **Also when idle:** if a sheet's own open transaction is **blocking someone else**, show a note on that sheet's transaction bar ("Your transaction is blocking 2 sessions"). Check it on the same polling loop while the transaction is open, on a slower schedule (every 10 s).
+- **Background tabs:** a sheet stuck on a lock shows an amber lock icon instead of the spinner.
+- **Provider contract:** an optional `ILockInspector` (`GetBlockersAsync(sessionId)`, `GetBlockedByMeAsync(sessionId)`, `CancelOtherAsync(pid, terminate)`). SQL Server: `sys.dm_exec_requests.blocking_session_id`, `KILL`.
+
+### F4. Follow foreign keys
+
+**What:** values in foreign key columns become links. Hover to see the referenced row, Ctrl+click to open it, and from any row ask "what references this?"
+
+- **Knowing where a result column came from:** Postgres reports each result column's source table OID and column number. Npgsql exposes these through `GetColumnSchema()` (`BaseSchemaName` / `BaseTableName` / `BaseColumnName`). The engine sends this origin with the `columns` event. Computed columns have no origin and get no link. (This also unlocks per-table styling rules later; see Result styling.) **Open point:** §11 (*Result styling*) found that `GetColumnSchema()` costs a catalog query per result, so check reading the origin from the row description (table OID and column number) before relying on it.
+- **Matching keys:** the schema cache already has foreign keys. A result column links when it's the *whole* of a single-column FK, or when all columns of a composite FK are in the result.
+- **Hover peek:** after about 400 ms, a card shows the referenced row: its first ~8 columns, the table name, and "open". The lookup is `select * from <table> where <pk> = $1 limit 1`.
+  - Run it on the **sheet's own session** when that's idle, so you see your own uncommitted rows. When the session is busy, use a short read-only side connection and mark the card "(committed data)".
+  - Results are cached per value for the life of the result.
+- **Ctrl+click / Enter:** opens the referenced row in a new result tab, as a real query in a new statement at the end of the sheet (`select * from "Customer" where "Id" = 42;`). Nothing hidden: it's in the editor and in history.
+- **Reverse ("Referenced by…"):** right-click a row in a table with a primary key to list each table and FK that points at it, with counts (`select count(*) … limit` capped at 1,000, a 2 s timeout per FK, and "1,000+" when capped). Clicking one opens those rows the same way.
+- **Look:** FK cells get a subtle underline on hover only, so the grid isn't covered in links. NULLs never link.
+- Provider-neutral: uses the existing schema model, plus a new `ColumnOrigin` on result columns.
+
+### F5. Query mini-map
+
+**What:** a small live diagram of the **current statement**: one box per table or alias, lines for joins, drawn as you type.
+
+- **Source:** the engine's existing analysis (`ScopeAnalyzer` for tables and aliases in scope, the parse tree for join conditions). Join edges come from `JOIN … ON a.x = b.y` and from `WHERE` equalities between two tables. Each edge is labelled with its columns.
+- **Useful extras:**
+  - **Cartesian product warning:** a table with no join edge to the rest shows in red, "No join condition: every row × every row".
+  - **Suggested joins:** where the schema has an FK between two tables in scope that the query doesn't use, show a dashed edge. Clicking it inserts the `ON` clause. This is the FK ghost-text idea from §5, made visible.
+  - CTEs and subqueries are drawn as grouped boxes, and the `UPDATE`/`DELETE` target table gets a highlighted border.
+- **Live but tolerant:** it updates on the same 120 ms analysis pause as the statement highlight. While the SQL is half-typed and unparsable, keep the last good map, greyed out.
+- **Interaction:** click a box to select that table reference in the editor. Hover an edge to highlight its join condition.
+- **Placement:** a small collapsible panel at the top right of the editor (toggle with `Ctrl+Shift+M`), remembered per user. It's hidden for statements with only one table.
+- **Layout:** a simple layered left-to-right layout in the UI (canvas or SVG). There's no layout library and no need for perfection with small graphs (up to ~15 tables).
+
+### F6. Visual EXPLAIN
+
+**What:** the query plan as a **flame (icicle) graph**. Click the slow part and the matching SQL lights up in the editor.
+
+- **Commands:** `Ctrl+E` = EXPLAIN (estimates only, safe, nothing runs). `Ctrl+Shift+E` = EXPLAIN ANALYZE (actually runs).
+- **Postgres:** `EXPLAIN (FORMAT JSON, VERBOSE, BUFFERS[, ANALYZE, TIMING])`. The provider turns the JSON into a provider-neutral `PlanNode` tree (operation, relation, alias, estimated and actual rows, costs, times, loops, buffers, filter text).
+- **EXPLAIN ANALYZE of a write** actually performs it, so it always goes through the **dry-run wrapper** (savepoint, then roll back), with the same caveats. Read-only queries run normally.
+- **Drawing:** an icicle graph on a canvas.
+  - Width = total time (ANALYZE) or total cost (estimates).
+  - Colour = **self** time or cost, so the hot node stands out.
+  - Each node shows its operation and table, e.g. "Seq Scan on orders o".
+  - A side panel shows full node details.
+- **Highlights that teach:**
+  - **Bad estimates:** estimated vs actual rows off by more than 10×, marked with ⚠ ("planner expected 12 rows, got 48,000: stale statistics? try ANALYZE orders").
+  - **Seq scans on big tables** with a filter.
+  - **Sorts or hashes spilling to disk.**
+  - **Nested loops with many loops.**
+- **Linking plan to SQL:** Postgres plans don't contain text positions, so match **by relation and alias** (`Relation Name` + `Alias`) to the table references the parser has already located. Filter and index-condition text is matched best-effort to the WHERE/ON expressions. Clicking a node selects its table reference in the editor, and hovering a table in the editor highlights its nodes. Nodes that can't be matched simply don't link.
+- **Result tab:** a plan opens as a result tab of type *Plan*, which can be pinned. Pin two plans to compare them (side by side, with the total time difference), which is great for before and after adding an index.
+- Also offer **Copy plan as text** (the normal `EXPLAIN` text format) for pasting elsewhere.
+- **Provider contract:** an optional `IPlanProvider` (`ExplainAsync(sql, analyze)` → `PlanNode`). SQL Server would use the XML showplan.
+
+### F7. Format SQL
+
+**What:** tidy the current statement, the selection or the whole sheet into a consistent layout, and **never change what the SQL means**.
+
+- **Commands:** `Shift+Alt+F` formats the selection, or the statement the cursor is in. *Format sheet* is in the command menu. Each format is a single edit, so one `Ctrl+Z` undoes it.
+- **How it formats:** a token-based layout over the provider's scanner tokens (which include comments), not libpg_query's deparse. Deparse rebuilds SQL from the tree and **drops comments**, which is unacceptable in a user's sheet.
+  - **Rules:** a new line before major clauses (`SELECT`, `FROM`, `JOIN`, `WHERE`, `GROUP BY`, `ORDER BY`, `RETURNING`…), one select-list item per line when the list is long, indented subqueries and CTEs, aligned `ON` and `AND`, and spaces around operators.
+  - **Left alone:** comments keep their place, and strings, quoted identifiers and `$$` function bodies are untouched.
+- **Safety check:** after formatting, parse the original and the result and **compare the parse trees, ignoring positions**. If they differ in any way, don't apply the format and say "Couldn't format this safely". This is how the format can be guaranteed never to change behaviour.
+- **Unparsable SQL** (half-typed): refuse with "Fix the syntax error first", rather than guessing.
+- **Assisted mode:** formatting changes the real text. The greyed corrections are recomputed afterwards as usual, so they stay correct.
+- **Settings** (SQL category): keyword case (UPPER / lower / as typed, default as typed), indent size (default 4), commas at the end or start of lines (default end), and line width for wrapping long lists (default 100).
+- **Provider-neutral:** the provider supplies tokens and the "same parse tree" check (`ISqlParser.SameMeaning(a, b)`). The layout rules are shared, with small dialect hooks.
+- **Later:** format on save (off by default).
+
+### F8. Record view (one or two rows, vertical)
+
+**What:** show one or two result rows **vertically**, as column name → value, so a 60-column row can be read top to bottom. With two rows, it becomes a **comparison**.
+
+- **Opening it:**
+  - Select one or two rows and press `Space`, or use the *Record view* button on the result toolbar.
+  - A result with exactly **one row** opens in record view automatically. There's a setting for this (on by default), with a toggle back to the grid.
+- **One row:**
+  - Two columns: *name* (with its generic type greyed) and *value*.
+  - `PgUp` / `PgDn` (or ◀ ▶) steps to the previous or next row of the result without leaving the view.
+- **Two rows (compare):**
+  - Three columns: *name*, *row A*, *row B*, with the row numbers in the headers.
+  - **Differences are highlighted**, both cells marked with a change bar in the margin, and there's a count at the top: "7 of 62 columns differ".
+  - An **Only differences** toggle hides the matching columns.
+  - **Comparison rules:** values are compared by their actual values, not as displayed text (`1.0` = `1` for Decimal columns). NULL is different from an empty string, and two NULLs are equal.
+  - **Swap A/B**, and step either row on its own.
+- **Both modes:**
+  - A **filter box** narrows by column name (type `addr` to see just the address columns).
+  - Long values wrap, with up to 6 lines visible before an expand arrow. JSON values are pretty-printed when expanded.
+  - **Result styling rules apply** to values as in the grid. In compare mode, the difference marker is the change bar in the margin, so it never clashes with styling colours.
+  - **Follow foreign keys** (feature 4) works on values here too.
+  - **Copy:** a record as `name: value` lines, or the comparison as a three-column table.
+- **Later:** compare a row with a row from a **different result**, by pinning row A and picking row B elsewhere. For example, the same customer on dev and live, or before and after an UPDATE.
+
+### F9. Backslash commands (`\d`, `\dt`, …)
+
+**What:** psql's describe commands work in any sheet: type `\d orders` and press F5. They work on **every provider**, not just Postgres, because the answers come from the provider-neutral schema model.
+
+- **Recognising them:** a line that starts with `\` is a **command line**. It is a statement of its own, ending at the end of the line, and it's **never sent to the server**. The `StatementSplitter` treats it like any other statement, so the highlight, the ▶ and F5 all work. A `\` line isn't valid SQL on any supported database, so it can't clash.
+- **First set:**
+
+  | Command | Shows |
+  |---|---|
+  | `\d name` | Describe a table, view or sequence |
+  | `\d+ name` | The same, plus size, storage and comments (provider extras) |
+  | `\d` | All relations |
+  | `\dt`, `\dv`, `\ds`, `\di` | Tables, views, sequences, indexes |
+  | `\df` | Functions |
+  | `\dn` | Schemas |
+  | `\x` | Toggle record view (feature 8) for this sheet's results, psql's "expanded" mode |
+
+- **Patterns, as in psql:** `\dt shop.*`, `\d *order*`, `\df get_*`. Matching ignores case unless the name is quoted (`\d "OrderItems"`), so there's no quoting pain here either.
+- **Output for `\d name`:** one result tab of type *Describe*, with sections: Columns (name, type, nullable, default), Primary key, Indexes, Foreign keys, Referenced by, Check constraints, Triggers. The list commands give an ordinary result table.
+- **Data source:** `\d name` fetches that table's metadata **fresh** (and updates the cache). List commands use the cache, with a *refresh* link.
+- **Editor support, for people who don't know the commands or can't remember them:**
+  - **Typing `\`** at the start of a line opens a completion list of every command, each with a plain-English description, e.g. `\dt` *List tables*, `\d` *Describe a table, view or sequence*. Typing narrows the list. The descriptions are searchable, so typing `\func` finds `\df`.
+  - **After the command,** complete the argument: schema and table names (or function names for `\df`) from the cache, with patterns like `shop.*` suggested.
+  - **Hover a command** for a help card: what it does, the arguments it takes, examples, and what the same command does in psql.
+  - **Argument hint** while typing, like a function signature: `\d [pattern]   e.g. orders, shop.*, *order*`.
+  - **`\?`** (psql's own help command) shows all supported commands and examples as a result tab.
+  - **Command lines are highlighted** in their own colour, so they're clearly not SQL.
+  - **Unknown commands** get a squiggle as you type, with "did you mean?" (`\dtt` → `\dt`), plus "not supported in SiftDB" for real psql commands that aren't implemented (`\copy`, `\i`).
+  - **Learn by doing:** right-clicking a table in the schema tree offers *Describe (`\d orders`)*, which inserts and runs the command, so people pick up the syntax.
+- **Every command is also a command palette item** (needs the palette itself):
+  - One palette entry per command, named in plain English with its backslash form alongside: *Describe table… `\d`*, *List tables `\dt`*, *List functions `\df`*, *Toggle record view `\x`*, *Show backslash commands `\?`*. They can be found by either name ("describe", "\d").
+  - Entries that need an argument open a **picker** straight away: a fuzzy list of tables (or functions, or schemas) from the cache, with a pattern allowed (`shop.*`).
+  - **Running from the palette doesn't touch the sheet's text.** It runs on the current sheet's connection and opens a result tab labelled with the equivalent command (`\d shop.orders`), so the shortcut is learnt without cluttering the SQL. *Insert into sheet* (`Alt+Enter` in the palette) puts the command into the editor instead.
+  - The palette and the `\` commands share one command definition in the engine (name, description, argument kind, handler), so both always stay in sync.
+- **Unknown or unsupported** (`\i`, `\copy`, `\set`, `\timing`…): "SiftDB supports \d, \dt, \dv, \ds, \di, \df, \dn, \x", with no server round trip. `\set` may later map to bind variables (§4).
+- **Scripts:** in a whole-sheet run (`Shift+F5`), command lines run as their own steps, in order. Saved `.sql` files that contain them still work in psql.
+- **Provider contract:** none needed for the basics (it uses `SchemaModel`). An optional `IDescribeExtras` adds the `\d+` details.
+
+### F10. Expand `*`
+
+**What:** a quick fix on `select *` (or `o.*`) replaces it with the real column list, correctly quoted.
+
+- **Trigger:** a lightbulb on a `*` in a select list (`Alt+Enter`): *Expand to columns*. `count(*)` and other function arguments are never offered.
+- **Result:**
+  - Columns from the resolved table, **in table order**, quoted where needed by the dialect's `IIdentifierPolicy`.
+  - With several tables in scope, a bare `*` expands to every table's columns, **qualified with their alias** (`o."Id", c."Name"`). `o.*` expands only that table.
+  - If the same column name appears in more than one table, both are kept and qualified.
+- **Layout:** follows the formatter settings (feature 7). On one line if it fits the line width, otherwise one column per line, indented.
+- **Only offered when safe:** every table behind the `*` must be known from the schema. A CTE, derived table or function in the statement means no offer. (Expanding CTE columns can come later.)
+- **A single edit,** so one `Ctrl+Z` undoes it. In Assisted mode the inserted names are already correct, so no greyed corrections appear.
+
+### F11. Paste a list as `IN (…)`
+
+**What:** paste a column of values (from Excel, an email, a log) and SiftDB offers to turn it into valid SQL.
+
+- **Detection on paste:** the clipboard holds **two or more items** separated by lines, tabs or commas, and doesn't look like SQL (no SQL keywords, no `;`). Then a small popup appears at the cursor. Nothing changes until you choose:
+  - **IN list (200 values)**, e.g. `('A12', 'B7', …)`. When the cursor is already inside `in (`, only the values are inserted.
+  - **ARRAY**, e.g. `ARRAY[...]`, for `= ANY(...)`.
+  - **VALUES rows**, e.g. `(VALUES ('A12'), ('B7')) AS v(id)`, for joining against.
+  - **Plain text**, which is the normal paste. `Esc` does the same, and `Ctrl+Shift+V` always pastes plain text.
+- **Quoting decided by context:**
+  - If the list is going next to a column (`where "OrderId" in (` or `= any(`), the resolver supplies that column's generic type: Integer and Decimal values stay unquoted, everything else is quoted.
+  - With no column context, values are left unquoted only if **all** of them are numbers.
+  - Quotes inside values are escaped (`O'Brien` → `'O''Brien'`).
+- **Clean-up:** surrounding whitespace is trimmed, empty lines dropped, and optionally duplicates removed ("3 duplicates removed"). Long lists wrap at the formatter's line width.
+- **Several columns** (a range copied from Excel with tabs): offer **tuple IN** `(a, b) in ((1, 'x'), …)` or VALUES rows with several columns.
+- **Very long lists** (over ~1,000 values): suggest VALUES rows, or `= ANY(@ids)` once bind variables exist (§4), since huge IN lists slow down planning.
+- **`NULL`** in the list is kept as the text `'NULL'`, with a hint: "Did you mean NULL? IN never matches NULL; use IS NULL."
+
+### F12. App-wide command palette
+
+**What:** one searchable list of **every SiftDB action**, available from anywhere in the app (editor, grid, schema tree, settings), with each action's shortcut shown.
+
+**What exists today:** Monaco's own command palette is already bundled (`F1`, and *Command Palette* in the editor's right-click menu; see `monaco.ts`). It only lists **editor** actions: Monaco's built-ins plus the one SiftDB action registered with `addAction` (*Accept all identifier corrections*). It only works while the editor has focus, and it can't ask for an argument (such as picking a table).
+
+**Plan:** a SiftDB palette at app level that **includes** Monaco's editor actions, rather than a second, competing list.
+
+- **Open:** `Ctrl+Shift+P` from anywhere. `F1` and the editor's *Command Palette* menu item open the same palette, so there's only one.
+- **Contents,** grouped and searchable by name, by description and by shortcut text:
+  - **Sheets:** new, open, save, save as, close, next/previous, switch mode Assisted/Strict
+  - **Run:** run, run script (`Shift+F5`), cancel, dry run, EXPLAIN / EXPLAIN ANALYZE
+  - **Transactions:** begin, commit, rollback
+  - **Connections:** connect, disconnect, edit, new, switch the sheet's connection
+  - **Editor:** format, expand `*`, accept all corrections, plus all of Monaco's editor actions when a sheet is active
+  - **Results:** record view, copy as…, pin, close result tabs
+  - **Schema:** the backslash commands from feature 9, with pickers, and refresh schema
+  - **App:** settings, toggle mini-map, toggle theme, about
+- **Arguments:** an action that needs input opens a **second step** in the same palette (a fuzzy picker for tables, connections, sheets or files) instead of a dialog.
+- **Context-aware:** actions that can't run right now (*Commit* with no transaction, *Dry run* on a SELECT) are hidden, or shown greyed with the reason.
+- **Recently used** actions appear first when the box is empty.
+- **One command registry:** every action is defined once (id, label, description, group, shortcut, "can run now?" condition, optional argument kind, handler). Menus, shortcuts, the palette, and the backslash commands (feature 9) all read from it, so a new feature adds its command in one place and it appears everywhere, with the correct shortcut text. The registry lives in the UI. Commands that need the engine send a bridge command, and the engine keeps the backslash-command definitions so a future TUI gets them too.
+- **Look:** a centred overlay drawn in SiftDB's theme (not Monaco's quick-input widget, which is tied to the editor), operated entirely from the keyboard: arrows, Enter, `Esc`.
+
+### F13. Richer schema explorer
+
+**What:** the schema tree shows everything about a table's structure, not just its columns: keys, foreign keys in both directions, constraints, indexes, triggers, comments and sizes.
+
+**What exists today** (`tree.ts`, `SchemaModel`): connection → schema → relation (with a kind letter T/P/V/M/F) → columns, each showing its type, "not null", **PK** and **FK** badges (the FK tooltip shows the target), and the default in a tooltip. The model already holds the primary key, foreign keys and **indexes, but indexes aren't shown yet**. There are no check or unique constraints, triggers, comments, sizes or "referenced by". Schemas list only relations, with no functions, sequences or types.
+
+#### What the tree will show
+
+**A table expands into groups** (a group appears only when it has something in it, with a count):
+```
+▾ T  Order            ≈ 1.2M rows · 340 MB
+   ▸ Columns (12)
+   ▸ Keys (2)            PK  Order_pkey (Id) · UQ  Order_Number_key (Number)
+   ▸ Foreign keys (2)    CustomerId → Customer(Id)  on delete cascade
+   ▸ Referenced by (3)   OrderItems(OrderId) · Invoice(OrderId) · …
+   ▸ Indexes (4)         btree (CreatedAt) · gin (Tags) · partial (Status) where …
+   ▸ Checks (1)          Total >= 0
+   ▸ Triggers (1)        before update · set_updated_at()
+```
+- **Columns:** as now (name, type, not null, PK/FK badges), plus **identity / generated** markers, the **default** shown dimmed inline (shortened, full in the tooltip), and the column **comment** in the tooltip.
+- **Keys:** the primary key and unique constraints, each with its name and columns.
+- **Foreign keys:** outgoing, with the target table and columns, `ON DELETE` / `ON UPDATE` actions (shown only when not the default), and "deferrable" when set.
+- **Referenced by:** incoming foreign keys from other tables. These are **computed from the model already loaded** (every table's FKs), so they need no extra query.
+- **Indexes:** method (btree, gin, gist…), columns or expression, unique, partial (`where …`), and size. The one backing the PK is marked.
+- **Checks:** name and expression. **Exclusion** constraints are shown here too.
+- **Triggers:** timing and events (`before update`), the function it calls, and "disabled" when it's off.
+- **On the table row itself:** the estimated row count and total size (dimmed), and the table comment in the tooltip.
+- **Views and materialized views:** columns, plus a *Definition* entry that opens the view's SQL. **Partitioned tables** list their partitions.
+
+**Schemas gain groups beyond relations:** Tables, Views, Materialized views, **Functions** (with arguments and return type), **Sequences**, and **Types** (enums show their values, which is handy when writing `WHERE status = '…'`).
+
+#### Interaction
+- **Click a foreign key** (or a "referenced by" entry) to **jump to that table** in the tree, expanded and highlighted.
+- **Hover** anything for its full definition (`pg_get_constraintdef` / `pg_get_indexdef` / `pg_get_triggerdef` text).
+- **Drag** any node into the editor to insert its name, correctly quoted. A table brings its schema-qualified name, and a column `alias.column` when the editor's statement has that table.
+- **Right-click:**
+  - *Copy name*, *Copy definition*
+  - *Script as* CREATE / DROP / SELECT. The script is **inserted into the sheet, never run**.
+  - *Describe* (`\d`, feature 9)
+  - *Refresh*
+- **The filter box** gains an option to match **column names** too ("which tables have `invoice_ref`?"), showing the matching columns under their tables.
+- **Keyboard:** arrows, Enter to expand, and `*` to expand a whole table, as in the current tree.
+
+#### Loading
+- The schema load stays fast: the current queries load tables, columns, PK, FKs and indexes for the whole database. **Details** (checks, triggers, comments, sizes, partitions, view definitions) load **lazily per table** the first time it's expanded, then are cached and refreshed with the schema.
+- **Functions, sequences and types** load per schema when that group is expanded.
+- **Very large databases:** groups over 500 items show the first 500, with "filter to see more".
+
+#### Model and providers
+- `SchemaModel` additions (provider-neutral): `ConstraintInfo` (kind Unique / Check / Exclusion, name, columns, definition text), `TriggerInfo` (name, timing, events, function, enabled), richer `IndexInfo` (method, expression text, predicate, is-primary, size), FK actions and deferrability on `ForeignKeyInfo`, `Comment` on relations and columns, identity / generated on columns, and `EstimatedRows` / `TotalBytes` on relations. Plus `FunctionInfo`, `SequenceInfo` and `TypeInfo` (with enum values).
+- **Provider contract:** an optional `IntrospectDetailAsync(relation)` for the lazily loaded parts, and `IntrospectObjectsAsync(schema, kind)` for functions, sequences and types. Anything not implemented simply isn't shown.
+- **Postgres** reads `pg_constraint` (`pg_get_constraintdef`), `pg_index` (`pg_get_indexdef`), `pg_trigger` (`pg_get_triggerdef`, excluding internal triggers), `obj_description` / `col_description`, `pg_class.reltuples` and `pg_total_relation_size`, `pg_inherits` for partitions, `pg_proc`, `pg_sequence` and `pg_enum`.
+- **Shared with `\d`** (feature 9), Follow foreign keys (4) and the mini-map (5): they all read the same detail model, so the tree, `\d` output and hovers always agree.
+
+### F14. Saved queries as palette commands
+
+**What:** any saved query can become a **command palette item**. *"Find customer by email"* asks for the email, then runs.
+
+- **Where they live:** every `.sql` file in `%APPDATA%\SiftDB\commands\` (subfolders allowed) is a command. The engine watches the folder, so adding, editing or deleting a file updates the palette straight away. (A per-project folder that a team can share in git can come later.)
+- **The file is an ordinary sheet file.** Its details go in the **same header line** `SheetFile` already reads and writes:
+  ```sql
+  -- db: command="Find customer by email"; group=Support; key=Ctrl+Alt+1; description="Customer and their last 10 orders"
+  select * from "Customer" where "Email" = @email;
+  ```
+  - `command` (required): the name shown in the palette
+  - `group`: groups commands in the palette (default *My commands*)
+  - `description`: searchable, shown under the name
+  - `key`: an optional shortcut. A clash with a built-in shortcut or another command is reported, and the command keeps working from the palette.
+- **Parameters are `@variables`** (§4). Running the command adds a palette **picker step for each variable** (`email: _`), with the type inferred as in the §4 prompt, and the **last value used for that command** pre-filled.
+  - Until bind variables are built, the same steps work: values are passed as real parameters, never pasted into the SQL as text.
+- **Running:**
+  - It runs on the **current sheet's connection and session**. If no sheet is connected, the palette asks which connection to use.
+  - The result opens in a result tab labelled with the command's name.
+  - *Open in sheet* (`Alt+Enter` in the palette) opens the SQL in a new sheet instead, to look at it or adapt it.
+- **Writes are never hidden:** if the parser finds the command may change data (or it has several statements), it **isn't run directly**. It opens in a sheet with a note, and you run it there with the transaction bar and the missing-WHERE alarm (feature 1). Read-only connections still refuse writes as usual.
+- **Creating and editing:**
+  - *Save as command…* (palette, and the sheet's right-click menu) saves the current statement or selection to the commands folder, asking for a name and group.
+  - *Edit command…* opens a command's file as a normal sheet.
+  - *Delete command…* asks first.
+- **Errors:** a command file that can't be read, or has no `command` name, appears in the palette greyed out with the reason, rather than disappearing.
+
+### F15. Link templates (open a URL with values from a result)
+
+**What:** a generic, built-in way to open a web page using values from the results, e.g. `https://admin.example.com/orders/{OrderId}`. It ships in the main app. The work-specific part is only *configuration* (the URLs), which users add themselves or get from an extension pack (feature 16).
+
+- **A link template** has:
+  - a **name** (*Open in admin site*)
+  - a **URL** with `{column}` placeholders, possibly several (`…/customers/{CustomerId}/orders/{OrderId}`)
+  - **where it applies**: columns whose name matches a wildcard pattern, optionally only some generic types. This is the same matching as result styling rules, so it feels familiar.
+  - optionally, **which connections** it applies to
+- **Where it appears:**
+  - In the result grid and record view, right-click a cell or row → *Open in admin site*.
+  - It's also in the command palette whenever the current selection has the needed columns.
+  - Optionally, a small ↗ icon on matching cells when hovered (off by default).
+- **Values:** taken from the selected row and **URL-encoded**. If a needed column is missing or NULL, the item is shown greyed with the reason. With several rows selected: open one tab per row, up to 10, after asking.
+- **Safety:**
+  - Only `http` and `https` URLs. The **host checks the scheme again** before opening the default browser, so no `file:` or custom protocols get through.
+  - The first use of each template asks *"Open https://admin.example.com/…?"*, with "don't ask again for this link".
+- **Editing:** a **Links** category in Settings, built like the result styling editor: a list with a live example URL built from a sample row. Links are stored in user settings (`settings.json`), validated by the engine.
+- **Registered with the command registry** (12), so links get palette entries, shortcuts and "recently used" for free.
+
+### F16. Extension packs, code-free (low priority)
+
+**What:** a way to **distribute** commands, links and settings (for example a work team's) **separately from the main installer**, with updates, without any server or feed. It follows Home Assistant's HACS model: you add the **repository** once, and SiftDB watches it for new versions.
+
+**Code-free only.** A pack contains files SiftDB interprets, never code, so **no code signing is needed**. Code extensions (DLLs) are out of scope until there's a real need. They would require signing and pinning the publisher.
+
+#### What a pack can contain
+- `siftdb-extension.json`, the manifest (required):
+  ```json
+  {
+    "id": "acme.work-tools",
+    "name": "Work tools",
+    "version": "1.4.0",
+    "publisher": "Simon",
+    "description": "Support queries and admin-site links",
+    "siftdb": ">=1.2 <2",
+    "contents": { "commands": "commands/", "links": "links.json", "resultRules": "rules.json" }
+  }
+  ```
+- `commands/*.sql`: saved-query commands, exactly as in feature 14
+- `links.json`: link templates (feature 15)
+- `rules.json`: result styling rules, added to the user's list as a named group they can switch off or reorder
+- `README.md`: shown on the pack's page in Settings
+- **Nothing else:** any other file type, or a file outside the folders the manifest lists, gets the whole pack refused.
+
+#### What a pack can't do
+- Run code, or contain passwords or connection strings with credentials, or read stored secrets.
+- Switch off safety features (the missing-WHERE alarm, read-only connections, write confirmations).
+- Get round the existing rules: its commands that might change data open in a sheet rather than running, and its links are `http(s)` only, with the first-use confirmation.
+
+#### Adding a repository
+*Settings → Extensions → Add repository…* takes one of:
+- **A folder:** a network share, or a OneDrive/SharePoint folder synced to the PC. The newest `.siftdbext` file in it is the current version. No server needed, so this works in locked-down workplaces.
+- **A GitHub repo:** each **release** is a version (tag `v1.4.0`), with a `.siftdbext` file attached, or SiftDB downloads the repository's source at that tag, since a code-free pack needs no build.
+- **An Azure DevOps repo:** version tags, downloaded through the API.
+
+Private GitHub and Azure DevOps repos take a personal access token, stored with DPAPI like passwords. Requests use the Windows proxy and the Windows sign-in.
+
+SiftDB shows the pack's name, publisher, description and **everything it adds** (commands, links with their domains, rules), and installs only after confirmation. It **remembers the repository** each pack came from. *Install from file…* (or double-clicking a `.siftdbext` file) also works, with no updates unless a repository is added.
+
+#### Checks before every install and update
+1. The manifest is valid, and the id matches the installed pack.
+2. The version matches the tag (for repos) and is **newer** than the installed one. There are no silent downgrades; rollback is a separate, deliberate action.
+3. It's compatible: the `siftdb` range covers this app version. If not, "needs SiftDB 1.3 or later", and the current version is kept.
+4. Only allowed files are present. Every file parses: SQL headers, link URLs and rules are validated by the same code as hand-made ones.
+5. It's intact: a `checksums.txt` in the release, or next to the file, matches what was downloaded.
+6. It's unpacked into `%APPDATA%\SiftDB\extensions\<id>\<version>\` **next to** the current version, then switched over (code-free packs reload instantly). The previous version is kept for **Roll back**.
+
+#### Updates
+- Each pack's repository is checked at startup and once a day.
+- A newer valid version shows *"Work tools 1.4 is available: Update · What's new"* (release notes from the release, or the pack's `CHANGELOG.md`).
+- **Each update shows what it changes:** *"2 new commands, 1 command changed, 1 link changed: `admin.example.com` → `admin2.example.com`"*.
+- **A change to a link's domain always needs confirmation**, even with auto-update on, because packs aren't signed. That stops a tampered pack quietly redirecting people.
+- **Auto-update** is a setting per pack (default: ask). Packs can also be **pinned** to a version, disabled or removed.
+
+#### Where it shows
+- Commands and links from a pack appear in the palette and menus under the pack's name, so it's always clear where an item came from.
+- **Settings → Extensions:** installed packs (version, source, last checked, enable/disable, update, roll back, remove), plus *Add repository…* and *Install from file…*.
+
+### F17. Release notes and a What's New tab
+
+**What:** every release has a short summary of what changed, split into major and minor changes. After an update, when SiftDB restarts, a **What's New** tab opens with it.
+
+#### Notes are generated, not written by hand
+Nobody writes release notes. They're **generated from commit messages** during the release build, and `CHANGELOG.md` is produced as an output.
+
+**1. Commit messages follow a simple convention** (Conventional Commits). Since Claude Code makes most of the commits, the rule goes in `CLAUDE.md`, so it happens automatically:
+```
+feat: dry run for UPDATE and DELETE
+fix: pasting a list no longer drops the last value
+perf: faster schema load on large databases
+feat!: sheet files use a new header format        ← breaking change
+refactor: / test: / docs: / chore: / build: / ci:  ← not shown to users
+```
+The CLAUDE.md rule: *"The commit subject is one line, written for users: what they'll notice, not how it was done. Use `feat`, `fix`, `perf` for user-visible changes. Use `refactor`, `test`, `docs`, `chore`, `build`, `ci` for everything else. Add `!` for anything that breaks existing files or settings. Optionally add a footer `Try-it: <command id>`."*
+
+**2. The release workflow builds the notes** with **git-cliff** (a changelog generator with a ready-made GitHub Action), which reads every commit since the previous tag and groups them:
+
+| Commit type | Shown as |
+|---|---|
+| `feat` | **Highlights** (new features) |
+| `perf`, and `feat`/`fix` with scope `ui` | **Improvements** |
+| `fix` | **Fixes** |
+| anything with `!` | **Breaking changes** (at the top, in amber) |
+| `refactor`, `test`, `docs`, `chore`, `build`, `ci` | hidden |
+
+A `Try-it:` footer becomes a **Try it** link (`command:<id>`) on that entry.
+
+**3. The version number is worked out too:** `!` → major, any `feat` → minor, otherwise patch. The release is just "tag whatever's on main": the workflow calculates the version, creates the tag, builds, and publishes. (*release-please* is an alternative if a reviewable release pull request is wanted later.)
+
+**4. Optional, later: an AI polish step.** The workflow sends the grouped list to Claude to merge near-duplicates ("three fixes to paste" → one line) and smooth the wording into friendly sentences, without inventing anything. That needs an API key or a Claude Code token as a repository secret. The plain generated notes are good enough to start with, because the commit subjects are already written for users.
+
+#### Release workflow (GitHub Actions)
+On a release run, the workflow:
+1. Generates the notes and the version as above. **If there are no user-visible commits** since the last release, it stops with "nothing to release".
+2. Commits the updated `CHANGELOG.md` back to the repo, as a record.
+3. Uses the generated section **three ways**: as the GitHub Release description, as Velopack's release notes (`vpk pack` with the notes file), and **bundled inside the app** (all versions, as an embedded resource), so What's New works offline and shows exactly what was shipped.
+
+#### In the app
+- **Spotting an update:** settings record the **last version the user saw** (`lastSeenVersion`). At startup, if the running version is newer, SiftDB knows it was updated. This is reliable however the update happened. Velopack's after-update hook could be used as well, but isn't needed.
+- **What opens:**
+  - **A major or minor update:** the **What's New** tab opens on top of the restored sheets, showing **every version since the last one seen** (if several releases were skipped, they're all listed, newest first). Highlights come first and stand out; improvements and fixes are below, collapsed if they're long.
+  - **A patch only (just fixes):** no tab, only a small notice, *"Updated to 1.4.1, 3 fixes · What's new"*, so small updates don't interrupt anyone.
+  - **A fresh install:** no What's New. `lastSeenVersion` is just set to the current version.
+- **The tab** is a special, non-sheet tab: it has no session and isn't autosaved, and it closes like any other tab. The Markdown is rendered **safely** (no raw HTML). Links go through the host's `http(s)` check, and `command:` links run palette commands (**Try it**), so new features can be found in one click.
+- **Any time:** *What's new* in the command palette, and on the Help menu, reopens the tab showing every version.
+- **Setting** (App category): "Show What's New after updates": *major and minor updates* (default) / *all updates* / *never*.
+- After the tab has been shown, `lastSeenVersion` is updated, so it never appears twice for the same version.
+
+#### Extension packs
+Pack updates (feature 16) use the same layout: a pack's `CHANGELOG.md` is shown in the same tab style from *What's new* on its Extensions page.
+
+
+### Provider contract summary (all optional, with default "not supported" implementations)
+
+| Addition | Used by |
+|---|---|
+| `ISqlParser.AffectsAllRows` / statement target table | 1, 2, 5 |
+| `ISqlParser.SameMeaning(a, b)` (compare parse trees, ignoring positions) | 7 |
+| `IDescribeExtras` (sizes, storage, comments for `\d+`) | 9 |
+| `IntrospectDetailAsync` (constraints, triggers, comments, sizes, partitions), `IntrospectObjectsAsync` (functions, sequences, types) | 9, 13 |
+| `IDryRunSupport` | 2, 6 |
+| `ILockInspector` | 3 |
+| `ColumnOrigin` on result columns (from the driver's column schema) | 4 |
+| `IPlanProvider` + `PlanNode` model | 6 |
+
+### Decisions (2026-11-17)
+
+These may be refined once there's user feedback.
+
+- **Dry run of DDL:** later, not in the first version (DDL takes heavy locks, and previewing it is a less common need).
+- **Follow keys, hover peek:** use the sheet's own session when it's idle, so you see your own uncommitted rows. When it's busy, use a short read-only side connection and label the card "(committed data)".
+- **Mini-map:** on by default, but shown only for statements with two or more tables.
+- **Visual EXPLAIN, plan history:** later. Pinning two plans to compare them covers before and after for now.
