@@ -130,11 +130,20 @@ export class SchemaTree {
       }
       total += relCount;
       matched += relMatched;
-      if (f && schema && !relMatched) continue; // a filter hides connections with nothing that matches
+      // A filter never hides a connection: a root that vanished read as a dropped connection and an emptied tree.
+      // It stays, saying nothing matched.
+      if (f && schema && !relMatched) {
+        const none = document.createElement('div');
+        none.className = 'row dim';
+        none.style.paddingLeft = '30px';
+        none.textContent = 'No tables or views match the filter.';
+        rows.push(none);
+      }
 
       // The tooltip has the whole description: in a narrow sidebar the end of the row (host / database) is cut off.
       const tip = `${root.label}${root.detail ? ` · ${root.detail}` : ''}${root.readOnly ? ' · read-only' : ''}`;
-      const head = this.row(nKey, 0, nOpen, [this.text(root.label), this.dim(schema ? `${relCount}` : 'loading…')], tip);
+      const count = !schema ? 'loading…' : f ? `${relMatched} of ${relCount}` : `${relCount}`;
+      const head = this.row(nKey, 0, nOpen, [this.text(root.label), this.dim(count)], tip);
       head.classList.add('root');
       // The lock goes right after the name: the sidebar is often narrow, and it must not be the part that scrolls away.
       if (root.readOnly) {

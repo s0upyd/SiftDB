@@ -676,6 +676,15 @@ window.addEventListener('keydown', (e) => {
   if (!dialogOpen()) void active?.runFromEditor();
 });
 
+// The browser's own right-click menu has Refresh (and Back), which reload the page and drop every session: it showed
+// wherever SiftDB has no menu of its own, e.g. the schema tree. Text boxes keep it, since there it is the
+// cut / copy / paste menu, with no Refresh. The editor and the grid draw their own menus and already stop this one.
+window.addEventListener('contextmenu', (e) => {
+  const t = e.target as HTMLElement | null;
+  const editable = t?.closest('input, textarea, [contenteditable="true"]') && !t.closest('.monaco-editor');
+  if (!editable) e.preventDefault();
+});
+
 // ---- go ----------------------------------------------------------------------------------------------------------
 
 bridge = connectBridge(onEvent, onBatch);
