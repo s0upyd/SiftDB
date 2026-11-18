@@ -73,6 +73,8 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
 export class Grid {
   private ctx: CanvasRenderingContext2D;
   private spacer = document.createElement('div');
+  /** The colour last painted behind the canvas (see draw). */
+  private areaBg = '';
   private canvas = document.createElement('canvas');
   private columns: Column[] = [];
   /** Per column, the styling rules that apply to it (null: none), matched once per result and again when the rules change. */
@@ -668,10 +670,25 @@ export class Grid {
     requestAnimationFrame(() => { this.scheduled = false; this.draw(); this.onFrame(); });
   }
 
+  /**
+   * The visible area, in whole CSS pixels, never larger than it really is. The canvas sits inside the scroll area, so
+   * its size counts towards what can be scrolled. clientWidth / clientHeight round to the nearest pixel, and the real
+   * area is often fractional (a zoom above 100%, a splitter at an odd position): rounded up, the canvas stuck out by a
+   * fraction of a pixel and made a scrollbar appear, which shrank the area, which resized the canvas, which hid the
+   * scrollbar again, and so on every frame (the grid flickered whenever the rows or columns nearly fitted).
+   */
+  private viewSize(): { w: number; h: number } {
+    const el = this.wrap, box = el.getBoundingClientRect();
+    // offsetWidth - clientWidth is the borders plus any scrollbar: whole pixels, so the fraction is all in box.width.
+    const w = Math.min(el.clientWidth, Math.floor(box.width - (el.offsetWidth - el.clientWidth)));
+    const h = Math.min(el.clientHeight, Math.floor(box.height - (el.offsetHeight - el.clientHeight)));
+    return { w: Math.max(0, w), h: Math.max(0, h) };
+  }
+
   private draw() {
     const t0 = performance.now();
     const dpr = window.devicePixelRatio || 1;
-    const w = this.wrap.clientWidth, h = this.wrap.clientHeight;
+    const { w, h } = this.viewSize();
     if (this.canvas.width !== Math.round(w * dpr) || this.canvas.height !== Math.round(h * dpr)) {
       this.canvas.width = Math.round(w * dpr);
       this.canvas.height = Math.round(h * dpr);
@@ -689,6 +706,8 @@ export class Grid {
     this.spacer.style.height = HEADER_H + rows * ROW_H + 'px';
 
     const ctx = this.ctx, th = this.theme;
+    // The canvas can be up to a pixel short of the area (viewSize rounds down): the area underneath matches it.
+    if (this.areaBg !== th.bg) this.wrap.style.backgroundColor = this.areaBg = th.bg;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = th.bg;
     ctx.fillRect(0, 0, w, h);
