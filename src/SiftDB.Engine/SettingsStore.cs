@@ -29,6 +29,13 @@ public sealed record UserSettings(
     /// <summary>Ask before running an UPDATE or DELETE with no WHERE, or a TRUNCATE (design section 14, F1). On by default.</summary>
     public bool WarnAllRows { get; init; } = true;
 
+    /// <summary>How Format SQL lays statements out (design section 14, F7).</summary>
+    public FormatOptions Format { get; init; } = FormatOptions.Default;
+
+    /// <summary>The indent sizes offered, in spaces, and the line width's bounds.</summary>
+    public static readonly IReadOnlyList<int> IndentChoices = [2, 4, 8];
+    public const int MinLineWidth = 40, MaxLineWidth = 400;
+
     /// <summary>
     /// Only values this version knows are kept. <paramref name="strict"/>: a user rule that is not valid throws (saving)
     /// rather than being dropped (reading a file).
@@ -38,6 +45,13 @@ public sealed record UserSettings(
         NewSheetMode = NewSheetMode is "strict" ? "strict" : "assisted",
         ResultRules = StyleRules.Normalise(ResultRules, strict),
         Zoom = ZoomChoices.Contains(Zoom) ? Zoom : 100,
+        Format = (Format ?? FormatOptions.Default) with
+        {
+            KeywordCase = Enum.IsDefined(Format?.KeywordCase ?? KeywordCase.AsTyped) ? Format!.KeywordCase : KeywordCase.AsTyped,
+            Commas = Enum.IsDefined(Format?.Commas ?? CommaPlacement.End) ? Format!.Commas : CommaPlacement.End,
+            Indent = IndentChoices.Contains(Format?.Indent ?? 4) ? Format!.Indent : 4,
+            LineWidth = Math.Clamp(Format?.LineWidth ?? 100, MinLineWidth, MaxLineWidth),
+        },
     };
 }
 
@@ -89,6 +103,11 @@ public sealed class SettingsStore(string path)
                 NewSheetMode = normalised.NewSheetMode,
                 Zoom = normalised.Zoom,
                 WarnAllRows = normalised.WarnAllRows,
+                Format = new StoredFormat
+                {
+                    KeywordCase = normalised.Format.KeywordCase, Indent = normalised.Format.Indent,
+                    Commas = normalised.Format.Commas, LineWidth = normalised.Format.LineWidth,
+                },
                 ResultRules = normalised.ResultRules.Select(StoredRule.From).ToList(),
                 ProviderSettings = normalised.ProviderSettings.Count == 0 ? null
                     : normalised.ProviderSettings.ToDictionary(p => p.Key, p => new Dictionary<string, string>(p.Value)),
@@ -115,7 +134,12 @@ public sealed class SettingsStore(string path)
             var providers = (file.ProviderSettings ?? []).Where(p => p.Value is not null)
                 .ToDictionary(p => p.Key, p => (IReadOnlyDictionary<string, string>)p.Value);
             return _settings = new UserSettings(file.NewSheetMode ?? UserSettings.Default.NewSheetMode, rules.ToList(), providers)
-                { Zoom = file.Zoom ?? 100, WarnAllRows = file.WarnAllRows ?? true }.Normalised();
+                {
+                    Zoom = file.Zoom ?? 100, WarnAllRows = file.WarnAllRows ?? true,
+                    Format = new FormatOptions(
+                        file.Format?.KeywordCase ?? KeywordCase.AsTyped, file.Format?.Indent ?? 4,
+                        file.Format?.Commas ?? CommaPlacement.End, file.Format?.LineWidth ?? 100),
+                }.Normalised();
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
@@ -131,11 +155,21 @@ public sealed class SettingsStore(string path)
         public string? NewSheetMode { get; set; }
         public int? Zoom { get; set; }
         public bool? WarnAllRows { get; set; }
+        public StoredFormat? Format { get; set; }
         public List<StoredRule>? ResultRules { get; set; }
         public Dictionary<string, Dictionary<string, string>>? ProviderSettings { get; set; }
 
         /// <summary>Settings a later version added keep their values when this version rewrites the file.</summary>
         [JsonExtensionData] public Dictionary<string, JsonElement>? Other { get; set; }
+    }
+
+    /// <summary>Format SQL's settings. A value missing, or one this version does not know, reads as the default.</summary>
+    private sealed class StoredFormat
+    {
+        public KeywordCase? KeywordCase { get; set; }
+        public int? Indent { get; set; }
+        public CommaPlacement? Commas { get; set; }
+        public int? LineWidth { get; set; }
     }
 
     /// <summary>A preset is stored as its id and whether it is on; its definition comes from this version of the app.</summary>

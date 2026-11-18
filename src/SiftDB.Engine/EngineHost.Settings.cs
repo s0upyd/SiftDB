@@ -25,6 +25,7 @@ public sealed partial class EngineHost
             NewSheetMode = OptionalString(s, "newSheetMode") ?? current.NewSheetMode,
             Zoom = s.TryGetProperty("zoom", out var zoom) && zoom.ValueKind == JsonValueKind.Number && zoom.TryGetInt32(out var z)
                 ? z : current.Zoom,
+            Format = s.TryGetProperty("format", out var fmt) && fmt.ValueKind == JsonValueKind.Object ? ReadFormat(fmt, current.Format) : current.Format,
             WarnAllRows = s.TryGetProperty("warnAllRows", out var warn) && warn.ValueKind is JsonValueKind.True or JsonValueKind.False
                 ? warn.GetBoolean() : current.WarnAllRows,
             ResultRules = s.TryGetProperty("resultRules", out var rules) && rules.ValueKind == JsonValueKind.Array
@@ -99,12 +100,29 @@ public sealed partial class EngineHost
         zoom = s.Zoom,
         zoomChoices = UserSettings.ZoomChoices,
         warnAllRows = s.WarnAllRows,
+        format = new
+        {
+            keywordCase = JsonNamingPolicy.CamelCase.ConvertName(s.Format.KeywordCase.ToString()),
+            indent = s.Format.Indent,
+            commas = JsonNamingPolicy.CamelCase.ConvertName(s.Format.Commas.ToString()),
+            lineWidth = s.Format.LineWidth,
+        },
+        indentChoices = UserSettings.IndentChoices,
+        lineWidthMin = UserSettings.MinLineWidth,
+        lineWidthMax = UserSettings.MaxLineWidth,
         resultRules = s.ResultRules.Select(r => new
         {
             id = r.Id, preset = r.IsPreset, name = r.Name, enabled = r.Enabled, columns = r.Columns, types = r.Types,
             condition = r.Condition, values = r.Values, text = r.Text, background = r.Background, bold = r.Bold,
         }),
     };
+
+    /// <summary>Format SQL's settings from the editor; anything left out keeps its value, anything unknown reads as the default.</summary>
+    private static FormatOptions ReadFormat(JsonElement f, FormatOptions current) => new(
+        OptionalString(f, "keywordCase") is { } k ? (Enum.TryParse<KeywordCase>(k, ignoreCase: true, out var kc) ? kc : KeywordCase.AsTyped) : current.KeywordCase,
+        f.TryGetProperty("indent", out var i) && i.TryGetInt32(out var indent) ? indent : current.Indent,
+        OptionalString(f, "commas") is { } c ? (Enum.TryParse<CommaPlacement>(c, ignoreCase: true, out var cp) ? cp : CommaPlacement.End) : current.Commas,
+        f.TryGetProperty("lineWidth", out var w) && w.TryGetInt32(out var width) ? width : current.LineWidth);
 
     private static StyleRule ReadRule(JsonElement r)
     {

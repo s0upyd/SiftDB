@@ -65,6 +65,8 @@ export interface EditorCallbacks {
   cancel(): void;
   /** Ctrl+Shift+F5: dry-run the statement F5 would run (design section 14, F2). */
   dryRun(): void;
+  /** Format SQL (design section 14, F7): the statement under the cursor or the selection's, or the whole sheet. */
+  format(whole: boolean): void;
   /** The ▶ in the margin (a click runs; its right-click menu can dry-run). */
   runSql(target: RunTarget, dry?: boolean): void;
   /** Schema-aware suggestions. Answered by the engine, which owns the dialect and the schema cache. */
@@ -232,6 +234,27 @@ export class SqlEditor {
       run: () => cb.dryRun(),
     });
 
+    // Format SQL (design section 14, F7). Shift+Alt+F is Monaco's own Format Document, which does nothing here (there is no
+    // formatter registered with Monaco): it is taken off and given to SiftDB's, which the engine does.
+    monaco.editor.addKeybindingRule({ keybinding: KeyMod.Shift | KeyMod.Alt | KeyCode.KeyF, command: '-editor.action.formatDocument' });
+    this.editor.addAction({
+      id: 'siftdb.format',
+      label: 'Format SQL (the statement, or the selection)',
+      keybindings: [KeyMod.Shift | KeyMod.Alt | KeyCode.KeyF],
+      contextMenuGroupId: '1_modification',
+      contextMenuOrder: 0,
+      precondition: mine,
+      run: () => cb.format(false),
+    });
+    this.editor.addAction({
+      id: 'siftdb.formatSheet',
+      label: 'Format sheet (every statement)',
+      contextMenuGroupId: '1_modification',
+      contextMenuOrder: 1,
+      precondition: mine,
+      run: () => cb.format(true),
+    });
+
     this.editor.onMouseDown((e) => {
       if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position && e.event.leftButton) {
         void this.runStatementOnLine(e.target.position.lineNumber);
@@ -335,6 +358,25 @@ export class SqlEditor {
       return { range: new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column), text: c.text };
     });
     if (edits.length) this.editor.executeEdits('siftdb.acceptAll', edits);
+  }
+
+  /** The text and selection, with the version they belong to: an edit worked out for them applies only if nothing changed since. */
+  formatSnapshot() { return { ...this.snapshot(), version: this.model.getAlternativeVersionId() }; }
+
+  /**
+   * Replaces [start, start + length) with `text` as one edit, so one Undo takes it back. False when the text has changed
+   * since `version` (the edit was worked out for text that is no longer there). The cursor goes to the start of the edit.
+   */
+  applyFormatted(version: number, start: number, length: number, text: string): boolean {
+    if (this.model.getAlternativeVersionId() !== version) return false;
+    const a = this.model.getPositionAt(start);
+    const b = this.model.getPositionAt(start + length);
+    this.editor.pushUndoStop();
+    this.editor.executeEdits('siftdb.format', [{ range: new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column), text }]);
+    this.editor.pushUndoStop();
+    this.editor.setPosition(a);
+    this.editor.revealPositionInCenterIfOutsideViewport(a);
+    return true;
   }
 
   private snapshot() {

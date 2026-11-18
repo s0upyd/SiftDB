@@ -113,6 +113,11 @@ public sealed partial class EngineHost : IAsyncDisposable
                         root.GetProperty("sql").GetString()!,
                         allRowsChecked: root.TryGetProperty("allRowsChecked", out var allRows) && allRows.ValueKind == JsonValueKind.True);
                     break;
+                case "formatSql":
+                    FormatSql(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("text").GetString()!,
+                        root.GetProperty("selectionStart").GetInt32(), root.GetProperty("selectionEnd").GetInt32(),
+                        whole: root.TryGetProperty("whole", out var whole) && whole.ValueKind == JsonValueKind.True);
+                    break;
                 case "dryRun":
                     await DryRunAsync(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("sql").GetString()!);
                     break;

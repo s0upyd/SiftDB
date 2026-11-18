@@ -8,9 +8,9 @@ public static class ProviderContract
     /// Current version of the provider contract. v2 added connection fields, read-only sessions and CannotRunInTransaction;
     /// v3 added GenericTypeOf; v4 added provider settings, the statement guard (ITransactionMonitor.BeforeStatementAsync) and
     /// Dialect; v5 added ChangesEveryRow and IProviderConnection.DescribeTableAsync (the missing-WHERE warning); v6 added
-    /// IProviderConnection.DryRun.
+    /// IProviderConnection.DryRun; v7 added SameMeaning (Format SQL).
     /// </summary>
-    public const int CurrentVersion = 6;
+    public const int CurrentVersion = 7;
 }
 
 public interface IDatabaseProvider
@@ -61,6 +61,13 @@ public interface IDatabaseProvider
     /// reports it). None by default, so a provider without it simply gets no warning.
     /// </summary>
     IReadOnlyList<WholeTableChange> ChangesEveryRow(string sql) => [];
+
+    /// <summary>
+    /// Whether <paramref name="a"/> and <paramref name="b"/> mean exactly the same: the same parse tree, positions aside
+    /// (design section 14, F7). Format SQL applies a layout only when this is true. Null when the provider cannot tell,
+    /// and then nothing is formatted; SQL that does not parse is false.
+    /// </summary>
+    bool? SameMeaning(string a, string b) => null;
 
     /// <summary>
     /// The generic type (design section 10) of a result column, from the name the reader reports for it

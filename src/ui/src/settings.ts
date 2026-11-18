@@ -16,11 +16,22 @@ export interface UserSettings {
   zoom: number;
   /** Ask before an UPDATE or DELETE with no WHERE, or a TRUNCATE, runs (design section 14, F1). */
   warnAllRows: boolean;
+  /** How Format SQL lays statements out (design section 14, F7). */
+  format: FormatSettings;
   /** Result styling (design section 10): one ordered list, presets included. The first rule that matches styles the cell. */
   resultRules: StyleRule[];
   /** By provider id, then setting key: the chosen value. */
   providerSettings: Record<string, Record<string, string>>;
 }
+
+export interface FormatSettings {
+  keywordCase: 'asTyped' | 'upper' | 'lower';
+  indent: number;
+  commas: 'end' | 'start';
+  lineWidth: number;
+}
+
+const FORMAT_DEFAULTS: FormatSettings = { keywordCase: 'asTyped', indent: 4, commas: 'end', lineWidth: 100 };
 
 /** A setting a provider describes for itself (mirrors SiftDB.Abstractions ProviderSetting). */
 export interface ProviderSettingInfo {
@@ -35,7 +46,9 @@ export interface ProviderSettingInfo {
 export interface ProviderSettingsInfo { id: string; displayName: string; settings: ProviderSettingInfo[] }
 
 /** Until the engine answers. Its defaults hold the presets; the page never invents them. */
-const DEFAULTS: UserSettings = { newSheetMode: 'assisted', zoom: 100, warnAllRows: true, resultRules: [], providerSettings: {} };
+const DEFAULTS: UserSettings = {
+  newSheetMode: 'assisted', zoom: 100, warnAllRows: true, format: { ...FORMAT_DEFAULTS }, resultRules: [], providerSettings: {},
+};
 
 /** The settings as the engine last reported them. Until loaded, or when they cannot be read, the defaults apply. */
 export class Settings {
@@ -44,6 +57,9 @@ export class Settings {
   providers: ProviderSettingsInfo[] = [];
   /** The zoom sizes offered, in percent, as the engine lists them. */
   zoomChoices: number[] = [100];
+  /** Format SQL's indent sizes, in spaces, and the line width's bounds, as the engine gives them. */
+  indentChoices: number[] = [2, 4, 8];
+  lineWidthRange: [number, number] = [40, 400];
   /** Why the settings file could not be read (it is left alone, and the defaults apply). */
   error: string | null = null;
 
@@ -64,11 +80,13 @@ export class Settings {
     return null;
   }
 
-  private take(s: (Partial<UserSettings> & { zoomChoices?: number[] }) | undefined,
+  private take(s: (Partial<UserSettings> & { zoomChoices?: number[]; indentChoices?: number[]; lineWidthMin?: number; lineWidthMax?: number }) | undefined,
                providers: (ProviderSettingsInfo & { values?: Record<string, string> })[] | undefined) {
     const list = Array.isArray(providers) ? providers : [];
     this.providers = list;
     if (Array.isArray(s?.zoomChoices) && s.zoomChoices.length) this.zoomChoices = s.zoomChoices;
+    if (Array.isArray(s?.indentChoices) && s.indentChoices.length) this.indentChoices = s.indentChoices;
+    if (typeof s?.lineWidthMin === 'number' && typeof s?.lineWidthMax === 'number') this.lineWidthRange = [s.lineWidthMin, s.lineWidthMax];
     const zoom = typeof s?.zoom === 'number' && this.zoomChoices.includes(s.zoom) ? s.zoom : 100;
     // The host draws the first frame at the saved zoom already; this keeps it in step after a save.
     if (zoom !== this.values.zoom) this.bridge.send({ type: 'setZoom', percent: zoom });
@@ -76,6 +94,7 @@ export class Settings {
       newSheetMode: s?.newSheetMode === 'strict' ? 'strict' : 'assisted',
       zoom,
       warnAllRows: s?.warnAllRows !== false,
+      format: { ...FORMAT_DEFAULTS, ...(s?.format ?? {}) },
       resultRules: Array.isArray(s?.resultRules) ? s.resultRules : [],
       // The engine sends each provider's values with defaults filled in.
       providerSettings: Object.fromEntries(list.map((p) => [p.id, { ...(p.values ?? {}) }])),
@@ -131,36 +150,69 @@ function appearanceCategory(settings: Settings): Category {
   };
 }
 
-const sqlCategory: Category = {
-  id: 'sql',
-  label: 'SQL',
-  build(values) {
-    const group = `mode${++seq}`;
-    const assisted = radio(group, 'assisted', 'Assisted',
-      'Write loosely. The quotes the database needs are added for you and shown greyed; what runs is exactly what you see.',
-      values.newSheetMode === 'assisted');
-    const strict = radio(group, 'strict', 'Strict',
-      'The text you write is the text that runs. Quoting problems are squiggles with quick fixes, and block the run.',
-      values.newSheetMode === 'strict');
-    const warn = el('input', { type: 'checkbox', checked: values.warnAllRows });
-    const page = el('div', { className: 'fgroup' },
-      el('fieldset', {},
-        el('legend', { textContent: 'New sheets open in' }),
-        assisted.wrap, strict.wrap,
-        el('p', { className: 'fhelp', textContent: 'Each sheet can still be switched on its toolbar. Open sheets, and files that say which mode they use, keep theirs.' })),
-      el('fieldset', {},
-        el('legend', { textContent: 'Safety' }),
-        el('label', { className: 'fcheck' }, warn, el('span', { textContent: 'Warn before UPDATE or DELETE without WHERE' }),
-          el('span', { className: 'fhelp', textContent:
-            'Asks before running a statement that changes every row of a table (TRUNCATE too), and says about how many rows that is. ' +
-            'Not asked for temporary tables, or on read-only connections.' }))));
-    return {
-      page,
-      apply: (into) => { into.newSheetMode = strict.input.checked ? 'strict' : 'assisted'; into.warnAllRows = warn.checked; },
-      focus: () => (strict.input.checked ? strict.input : assisted.input).focus(),
-    };
-  },
-};
+function sqlCategory(settings: Settings): Category {
+  return {
+    id: 'sql',
+    label: 'SQL',
+    build(values) {
+      const group = `mode${++seq}`;
+      const assisted = radio(group, 'assisted', 'Assisted',
+        'Write loosely. The quotes the database needs are added for you and shown greyed; what runs is exactly what you see.',
+        values.newSheetMode === 'assisted');
+      const strict = radio(group, 'strict', 'Strict',
+        'The text you write is the text that runs. Quoting problems are squiggles with quick fixes, and block the run.',
+        values.newSheetMode === 'strict');
+      const warn = el('input', { type: 'checkbox', checked: values.warnAllRows });
+
+      // Format SQL (design section 14, F7): what it does is fixed (it never changes what runs); these say how it looks.
+      const fmt = values.format;
+      const select = (id: string, label: string, options: [string, string][], current: string) => {
+        const sel = el('select', { id: `${id}${++seq}` });
+        for (const [value, text] of options) sel.append(el('option', { value, textContent: text, selected: value === current }));
+        return { sel, row: el('div', { className: 'frow' }, el('label', { htmlFor: sel.id, textContent: label }), sel) };
+      };
+      const kwCase = select('kwcase', 'Keywords', [['asTyped', 'As typed (default)'], ['upper', 'UPPER CASE'], ['lower', 'lower case']], fmt.keywordCase);
+      const indent = select('indent', 'Indent', settings.indentChoices.map((n) => [String(n), `${n} spaces${n === 4 ? ' (default)' : ''}`]), String(fmt.indent));
+      const commas = select('commas', 'Commas in lists', [['end', 'At the end of the line (default)'], ['start', 'At the start of the line']], fmt.commas);
+      const [minW, maxW] = settings.lineWidthRange;
+      const width = el('input', { type: 'number', id: `width${++seq}`, min: String(minW), max: String(maxW), step: '10', value: String(fmt.lineWidth) });
+      const widthRow = el('div', { className: 'frow' }, el('label', { htmlFor: width.id, textContent: 'Line width' }), width);
+      const page = el('div', { className: 'fgroup' },
+        el('fieldset', {},
+          el('legend', { textContent: 'New sheets open in' }),
+          assisted.wrap, strict.wrap,
+          el('p', { className: 'fhelp', textContent: 'Each sheet can still be switched on its toolbar. Open sheets, and files that say which mode they use, keep theirs.' })),
+        el('fieldset', {},
+          el('legend', { textContent: 'Safety' }),
+          el('label', { className: 'fcheck' }, warn, el('span', { textContent: 'Warn before UPDATE or DELETE without WHERE' }),
+            el('span', { className: 'fhelp', textContent:
+              'Asks before running a statement that changes every row of a table (TRUNCATE too), and says about how many rows that is. ' +
+              'Not asked for temporary tables, or on read-only connections.' }))),
+        el('fieldset', {},
+          el('legend', { textContent: 'Format SQL (Shift+Alt+F)' }),
+          kwCase.row, indent.row, commas.row, widthRow,
+          el('p', { className: 'fhelp', textContent:
+            'Lays out SELECT, INSERT, UPDATE and DELETE statements: a line per clause, indented subqueries, one item per line when ' +
+            'a list is longer than the line width. Only spacing and the case of keywords change, never what runs: names, strings ' +
+            'and comments stay as they are, and a statement that cannot be shown to mean the same is left alone.' })));
+      return {
+        page,
+        apply: (into) => {
+          into.newSheetMode = strict.input.checked ? 'strict' : 'assisted';
+          into.warnAllRows = warn.checked;
+          const w = Math.round(Number(width.value));
+          into.format = {
+            keywordCase: kwCase.sel.value as FormatSettings['keywordCase'],
+            indent: Number(indent.sel.value),
+            commas: commas.sel.value as FormatSettings['commas'],
+            lineWidth: Number.isFinite(w) ? Math.min(maxW, Math.max(minW, w)) : values.format.lineWidth,
+          };
+        },
+        focus: () => (strict.input.checked ? strict.input : assisted.input).focus(),
+      };
+    },
+  };
+}
 
 /** Result styling (design section 10): the rules list. */
 const resultsCategory: Category = {
@@ -204,7 +256,7 @@ function providerCategory(p: ProviderSettingsInfo): Category {
 
 /** In the order they are listed: the app's own, then one per database that has settings of its own. */
 const categories = (settings: Settings): Category[] =>
-  [appearanceCategory(settings), sqlCategory, resultsCategory, ...settings.providers.map(providerCategory)];
+  [appearanceCategory(settings), sqlCategory(settings), resultsCategory, ...settings.providers.map(providerCategory)];
 
 /** The category last looked at, for this run of the app: reopening the editor goes back to it. */
 let lastCategory = 'appearance';

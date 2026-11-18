@@ -32,6 +32,8 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     public IReadOnlyList<WholeTableChange> ChangesEveryRow(string sql) => PostgresWholeTableRules.Find(sql);
 
+    public bool? SameMeaning(string a, string b) => PostgresSameMeaning.Same(a, b);
+
     public GenericType GenericTypeOf(string dataTypeName) => PostgresTypes.GenericTypeOf(dataTypeName);
 
     private readonly PostgresSettings _settings = new();

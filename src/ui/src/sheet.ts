@@ -182,6 +182,7 @@ export class Sheet {
     this.editor = new SqlEditor(this.el.editor, this.analyze, {
       run: () => void this.runFromEditor(),
       dryRun: () => void this.dryRunFromEditor(),
+      format: (whole) => void this.format(whole),
       cancel: () => this.cancel(),
       runSql: (t, dry) => this.handleTarget(t, dry),
       complete: this.complete,
@@ -436,6 +437,28 @@ export class Sheet {
 
   async runFromEditor() {
     this.handleTarget(await this.editor.statementToRun());
+  }
+
+  /**
+   * Format SQL (design section 14, F7): the engine lays out the statement under the cursor (or every statement the selection
+   * touches, or with `whole` the sheet) and answers with one edit, applied only if the text has not changed meanwhile. A
+   * statement it would not touch (one that does not parse, or one it could not lay out safely) is said in the message bar.
+   */
+  async format(whole: boolean) {
+    if (!this.connected) {
+      this.setMessage('Not connected. Connect first: the connection decides which SQL dialect the formatter reads.', 'warning');
+      return;
+    }
+    const snap = this.editor.formatSnapshot();
+    const r = await this.ctx.bridge.request({
+      type: 'formatSql', connectionId: this.connectionId, text: snap.text, selectionStart: snap.start, selectionEnd: snap.end, whole,
+    });
+    if (r.type === 'error') { this.setMessage(`Format failed: ${r.message}`, 'error'); return; }
+    if (typeof r.start === 'number' && !this.editor.applyFormatted(snap.version, r.start, r.length, r.text)) {
+      this.setMessage('The text changed while it was being formatted, so nothing was changed. Try again.', 'warning');
+      return;
+    }
+    this.setMessage(r.message ?? '', r.kind === 'warning' ? 'warning' : 'info');
   }
 
   /** Ctrl+Shift+F5: dry-run what F5 would run (design section 14, F2). */
