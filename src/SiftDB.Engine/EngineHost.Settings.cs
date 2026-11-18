@@ -132,7 +132,9 @@ public sealed partial class EngineHost
             return;
         }
         var current = CurrentSettings;
-        var decision = ReleaseNotes.Decide(version, current.LastSeenVersion, current.WhatsNew, ReleaseNotes.All);
+        // Something an earlier run left behind means this is not a fresh install, even with no version recorded yet.
+        var returning = (_settings?.ExistedAtStart ?? false) || (_store?.ExistedAtStart ?? false) || (_session?.ExistedAtStart ?? false);
+        var decision = ReleaseNotes.Decide(version, current.LastSeenVersion, current.WhatsNew, ReleaseNotes.All, returning);
         // Recorded on a fresh install too (nothing to show then), and never moved back by an older build.
         if (_settings is { LoadError: null } && (current.LastSeenVersion is null || ReleaseNotes.Compare(version, current.LastSeenVersion) > 0))
             _settings.Save(current with { LastSeenVersion = version });

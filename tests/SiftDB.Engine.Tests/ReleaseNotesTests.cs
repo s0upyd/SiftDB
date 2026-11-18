@@ -81,6 +81,30 @@ public class ReleaseNotesTests
         Assert.Equal(WhatsNewShow.None, ReleaseNotes.Decide("0.3.1", null, "majorMinor", Releases).Show);
 
     [Fact]
+    public void An_update_from_a_version_before_whats_new_shows_the_release_just_installed()
+    {
+        // Nothing recorded (that version never wrote it), but an earlier run left its files: not a fresh install.
+        var d = ReleaseNotes.Decide("0.3.1", null, "majorMinor", Releases, returningUser: true);
+        Assert.Equal(WhatsNewShow.Window, d.Show);
+        Assert.Equal(["0.3.1"], d.Releases.Select(r => r.Version));
+        Assert.Equal(WhatsNewShow.None, ReleaseNotes.Decide("0.3.1", null, "never", Releases, returningUser: true).Show);
+    }
+
+    [Fact]
+    public void A_store_says_whether_its_file_was_there_at_startup()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"siftdb-settings-{Guid.NewGuid():N}.json");
+        try
+        {
+            var fresh = new SettingsStore(path);
+            fresh.Save(fresh.Get() with { LastSeenVersion = "0.1.0" }); // this run writing it does not make it "there at startup"
+            Assert.False(fresh.ExistedAtStart);
+            Assert.True(new SettingsStore(path).ExistedAtStart);      // the next run finds it
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public void A_minor_update_opens_whats_new_with_every_release_since()
     {
         var d = ReleaseNotes.Decide("0.3.1", "0.2.0", "majorMinor", Releases);

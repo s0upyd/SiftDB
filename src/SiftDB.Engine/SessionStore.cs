@@ -39,6 +39,13 @@ public sealed class SessionStore(string directory)
 
     public static string DefaultDirectory => Path.Combine(ConnectionStore.DefaultDirectory, "session");
 
+    /// <summary>
+    /// Whether this store's file was already there when the store was made, at startup: an earlier run used SiftDB. Taken
+    /// then, before this run writes anything (autosave makes the session file within seconds, even on a fresh install).
+    /// What's New uses it to tell a fresh install from an update from a version that recorded no "last seen" (F17).
+    /// </summary>
+    public bool ExistedAtStart { get; } = File.Exists(Path.Combine(directory, "session.json"));
+
     private string ManifestPath => Path.Combine(directory, "session.json");
     private string TextPath(string id) => Path.Combine(directory, "sheets", $"{id}.sql");
 

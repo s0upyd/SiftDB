@@ -125,15 +125,25 @@ public static partial class ReleaseNotes
 
     /// <summary>
     /// What to show at startup, running <paramref name="current"/>, when the user last saw <paramref name="lastSeen"/>.
-    /// A fresh install (nothing seen yet) shows nothing. A major or minor update opens What's New with every release since
+    /// A fresh install (nothing seen yet, nothing left by an earlier run) shows nothing. A major or minor update opens What's New with every release since
     /// the last one seen; an update with only fixes says so in a small notice (or opens it too, with "all updates"). Nothing
     /// for a version that is not newer, nor when there are no notes for it (a local build).
     /// </summary>
     /// <param name="mode">"majorMinor" (the default), "all" or "never".</param>
-    public static WhatsNewDecision Decide(string current, string? lastSeen, string mode, IReadOnlyList<Release> releases)
+    /// <param name="returningUser">With nothing seen yet: an earlier version was used here (it left a session, connections
+    /// or settings behind), so this is an update from a version older than What's New, which recorded nothing. Then the
+    /// release just installed is shown. Without it, nothing seen means a fresh install, and nothing is shown.</param>
+    public static WhatsNewDecision Decide(string current, string? lastSeen, string mode, IReadOnlyList<Release> releases, bool returningUser = false)
     {
         var none = new WhatsNewDecision(WhatsNewShow.None, [], null);
-        if (lastSeen is null || mode == "never" || Compare(current, lastSeen) <= 0) return none;
+        if (mode == "never") return none;
+        if (lastSeen is null)
+        {
+            if (!returningUser) return none;
+            var installed = releases.FirstOrDefault(r => Compare(r.Version, current) <= 0);
+            return installed is null ? none : new WhatsNewDecision(WhatsNewShow.Window, [installed], null);
+        }
+        if (Compare(current, lastSeen) <= 0) return none;
         var since = releases.Where(r => Compare(r.Version, lastSeen) > 0 && Compare(r.Version, current) <= 0).ToList();
         if (since.Count == 0) return none;
         var (now, before) = (Split(current).Core!, Split(lastSeen).Core);
