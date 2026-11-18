@@ -89,8 +89,103 @@ public sealed class PostgresProvider : IDatabaseProvider
         {
             await using var meta = new NpgsqlConnection(connectionString);
             await meta.OpenAsync(ct);
-            return await PostgresIntrospector.ReadAsync(meta, ct);
+            var origins = new Dictionary<uint, PostgresIntrospector.TableNames>();
+            var schema = await PostgresIntrospector.ReadAsync(meta, ct, origins);
+            _origins = origins; // replaced whole, so a result being described never sees half of it
+            return schema;
         }
+
+        /// <summary>Every relation's names by oid, from the last introspection: what a row description's oids mean.</summary>
+        private volatile IReadOnlyDictionary<uint, PostgresIntrospector.TableNames> _origins = new Dictionary<uint, PostgresIntrospector.TableNames>();
+
+        // Following foreign keys (design section 14, F4). No query: the row description says which table oid and column
+        // number each column comes from, and the last introspection says what they are called. A table created since then
+        // has no origin until the schema is refreshed.
+        public IReadOnlyList<ColumnOrigin?> ColumnOrigins(DbDataReader reader)
+        {
+            if (PostgresRowDescription.Read(reader) is not { } fields) return [];
+            var map = _origins;
+            return fields.Select(f => f.Table != 0 && f.Column > 0 && map.TryGetValue(f.Table, out var t) && t.Columns.TryGetValue(f.Column, out var c)
+                ? new ColumnOrigin(t.Schema, t.Table, c) : null).ToList();
+        }
+
+        private const string PeekSavepoint = "siftdb_peek";
+
+        /// <summary>
+        /// On the idle session, so its own uncommitted rows are seen. Inside a transaction the lookup runs behind a
+        /// savepoint: it only reads, so it changes nothing, but a value the column's type refuses would otherwise abort the
+        /// user's transaction. In an aborted transaction, or when the session is busy, a side connection is used.
+        /// </summary>
+        public async Task<LookedUpRow?> PeekRowAsync(RowKey key, bool sessionIdle, CancellationToken ct)
+        {
+            var sql = $"select * from {Quote(key.Schema)}.{Quote(key.Table)} where {Where(key)} limit 1";
+            var status = sessionIdle ? _monitor.ProtocolStatus : "";
+            if (status is "Idle" or "InTransactionBlock")
+            {
+                var guarded = status == "InTransactionBlock";
+                if (guarded) await _monitor.SendAsync($"savepoint {PeekSavepoint}", ct);
+                try
+                {
+                    var row = await ReadRowAsync(conn, sql, key, committedOnly: false, ct);
+                    if (guarded) await _monitor.SendAsync($"release savepoint {PeekSavepoint}", ct);
+                    return row;
+                }
+                catch when (guarded)
+                {
+                    await _monitor.SendAsync($"rollback to savepoint {PeekSavepoint}; release savepoint {PeekSavepoint}", CancellationToken.None);
+                    throw;
+                }
+            }
+            await using var side = new NpgsqlConnection(connectionString);
+            await side.OpenAsync(ct);
+            return await ReadRowAsync(side, sql, key, committedOnly: true, ct);
+        }
+
+        public async Task<long?> CountRowsAsync(RowKey key, long cap, TimeSpan timeout, CancellationToken ct)
+        {
+            await using var side = new NpgsqlConnection(connectionString);
+            await side.OpenAsync(ct);
+            await using var cmd = new NpgsqlCommand(
+                $"select count(*) from (select 1 from {Quote(key.Schema)}.{Quote(key.Table)} where {Where(key)} limit {cap + 1}) s", side)
+            {
+                CommandTimeout = Math.Max(1, (int)Math.Ceiling(timeout.TotalSeconds)),
+            };
+            AddValues(cmd, key);
+            try { return (long)(await cmd.ExecuteScalarAsync(ct))!; }
+            catch (Exception ex) when (ex is NpgsqlException { InnerException: TimeoutException } or PostgresException { SqlState: PostgresErrorCodes.QueryCanceled })
+            {
+                return null; // too slow to count: the caller says so rather than waiting
+            }
+        }
+
+        private static async Task<LookedUpRow?> ReadRowAsync(NpgsqlConnection c, string sql, RowKey key, bool committedOnly, CancellationToken ct)
+        {
+            await using var cmd = new NpgsqlCommand(sql, c);
+            AddValues(cmd, key);
+            await using var r = await cmd.ExecuteReaderAsync(ct);
+            if (!await r.ReadAsync(ct)) return null;
+            var names = new string[r.FieldCount];
+            var values = new object?[r.FieldCount];
+            var types = new string[r.FieldCount];
+            for (var i = 0; i < r.FieldCount; i++)
+            {
+                names[i] = r.GetName(i);
+                values[i] = r.IsDBNull(i) ? null : r.GetValue(i);
+                types[i] = r.GetDataTypeName(i);
+            }
+            return new LookedUpRow(names, values, types, committedOnly);
+        }
+
+        private static string Where(RowKey key) => string.Join(" and ", key.Columns.Select((c, i) => $"{Quote(c)} = @p{i}"));
+
+        /// <summary>The values go as text of no declared type, so the server reads each as its column's own type.</summary>
+        private static void AddValues(NpgsqlCommand cmd, RowKey key)
+        {
+            for (var i = 0; i < key.Values.Count; i++)
+                cmd.Parameters.Add(new NpgsqlParameter($"p{i}", NpgsqlTypes.NpgsqlDbType.Unknown) { Value = key.Values[i] });
+        }
+
+        private static string Quote(string name) => "\"" + name.Replace("\"", "\"\"") + "\"";
 
         public async Task<DbDataReader> ExecuteReaderAsync(string sql, CancellationToken ct)
         {

@@ -113,6 +113,15 @@ public sealed partial class EngineHost : IAsyncDisposable
                         root.GetProperty("sql").GetString()!,
                         allRowsChecked: root.TryGetProperty("allRowsChecked", out var allRows) && allRows.ValueKind == JsonValueKind.True);
                     break;
+                case "peekRow":
+                    await PeekRowAsync(id, root.GetProperty("connectionId").GetInt32(), root);
+                    break;
+                case "rowQuery":
+                    RowQuery(id, root.GetProperty("connectionId").GetInt32(), root);
+                    break;
+                case "referencedBy":
+                    await ReferencedByAsync(id, root.GetProperty("connectionId").GetInt32(), root);
+                    break;
                 case "formatSql":
                     FormatSql(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("text").GetString()!,
                         root.GetProperty("selectionStart").GetInt32(), root.GetProperty("selectionEnd").GetInt32(),
@@ -360,10 +369,18 @@ public sealed partial class EngineHost : IAsyncDisposable
             _queries[queryId] = session;
             state.Active = session;
 
+            // Where each column comes from, and so which are links to other rows (design section 14, F4).
+            var origins = state.Connection.ColumnOrigins(reader);
+            var (links, keys) = DescribeLinks(state.Schema, origins);
             Event(new
             {
                 type = "columns", replyTo = id, queryId,
-                columns = writer.Columns.Select((c, i) => new { name = c.Name, kind = (int)c.Kind, type = GenericTypeOf(state.Provider, reader, i) }),
+                columns = writer.Columns.Select((c, i) => new
+                {
+                    name = c.Name, kind = (int)c.Kind, type = GenericTypeOf(state.Provider, reader, i),
+                    origin = i < origins.Count && origins[i] is { } o ? new { schema = o.Schema, table = o.Table, column = o.Column } : null,
+                }),
+                links, keys,
             });
             session.Start();
         }

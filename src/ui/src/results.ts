@@ -1,9 +1,10 @@
 import { BatchMeta, Bridge, BridgeEvent, Column } from './bridge';
 import { toast } from './copy';
 import { ExportFormat, exportText, suggestedName } from './export';
-import { CellRange, CompareView, Grid, GridTheme, darkTheme, lightTheme } from './grid';
+import { Cell, CellRange, CompareView, Grid, GridTheme, darkTheme, lightTheme } from './grid';
+import { MenuItem, showMenu } from './menu';
 import { setIcon, spinner } from './icons';
-import { ResultStore, decodeBatch } from './store';
+import { ResultStore, cellText, decodeBatch } from './store';
 
 /** The format and file of the last export in this run: the next export starts from them. */
 let lastFormat: ExportFormat = 'csv';
@@ -53,7 +54,21 @@ export interface ResultsContext {
   onFinished(view: ResultView): void;
   /** "Run for real" on a dry run's bar: run the statement it tried, for real this time. */
   runForReal(sql: string): void;
+  /** Following a foreign key (design section 14, F4): put this statement at the end of the sheet and run it in a new result tab. */
+  openQuery(sql: string): void;
 }
+
+/** A foreign key whose columns are all in the result (design section 14, F4): its columns' places, and what it points at. */
+interface Link { name: string; columns: number[]; schema: string; table: string; targetColumns: string[] }
+
+/**
+ * A key of a table (its primary key, or a unique one) that foreign keys point at, every column of it in the result, so a
+ * row can be asked what references it through that key.
+ */
+interface RowKeyInfo { schema: string; table: string; keyColumns: string[]; columns: number[]; primary: boolean }
+
+/** Columns a peek card shows at most: enough to recognise the row. */
+const PEEK_COLUMNS = 8;
 
 /** How a dry run's rows are laid out (design section 14, F2), as the engine reports it. */
 interface DryRun {
@@ -121,6 +136,11 @@ export class ResultView {
   private readonly realBtn = document.createElement('button');
   /** Set while this tab holds a dry run's result. */
   dry: DryRun | null = null;
+  /** This result's links and keys, as the engine worked them out. */
+  private links: Link[] = [];
+  private keys: RowKeyInfo[] = [];
+  /** Peek cards already looked up, by link and values: hovering again is instant. For this result only. */
+  private peeks = new Map<string, Promise<HTMLElement | null>>();
   /** How far an export has got, beside its (then red, stop) icon. */
   private readonly exportPctEl = document.createElement('span');
   /** The export being written, if any. Its button then reads "Cancel export" with how far it has got. */
@@ -198,6 +218,16 @@ export class ResultView {
     this.grid.onViewChange = () => this.pump();
     this.grid.onExport = (range) => void this.export(range);
     this.grid.canExport = () => this.canExport;
+    this.grid.onLinkPeek = (cell) => this.peek(cell);
+    this.grid.onLinkOpen = (cell) => void this.openLink(cell);
+    this.grid.onRefsOpen = (cell, x, y) => {
+      // The key this column is part of (the first whose values are all there, if it is in more than one).
+      for (const key of this.keys.filter((k) => k.columns.includes(cell.col))) {
+        const values = this.valuesAt(cell.row, key.columns);
+        if (values) { void this.referencedBy(key, values, x, y); return; }
+      }
+    };
+    this.grid.extraMenuItems = (cell, x, y) => this.linkMenu(cell, x, y);
     this.grid.onFrame = () => {
       if (this.m.firstPaint < 0 && this.m.firstBatch >= 0 && this.store.loadedRows > 0) {
         this.m.firstPaint = performance.now() - this.m.t0;
@@ -245,6 +275,9 @@ export class ResultView {
     this.sql = sql;
     this.label = dry ? `Dry run: ${sqlLabel(sql)}` : sqlLabel(sql);
     this.dry = null;
+    this.links = [];
+    this.keys = [];
+    this.peeks.clear();
     this.panel.title = sql;
     const t0 = performance.now();
     this.m = { ...this.freshMetrics(), t0 };
@@ -293,6 +326,9 @@ export class ResultView {
     } else {
       this.columnCount = columns.length;
       this.grid.setStore(this.store, columns);
+      this.links = (r.links as Link[] | undefined) ?? [];
+      this.keys = (r.keys as RowKeyInfo[] | undefined) ?? [];
+      this.grid.setLinks(this.links.flatMap((l) => l.columns), this.keys.flatMap((k) => k.columns));
     }
     this.pump();
   }
@@ -360,6 +396,131 @@ export class ResultView {
       this.fail(e.message);
       this.finish();
     }
+  }
+
+  // ---- following foreign keys (design section 14, F4) ------------------------------------------------------------
+
+  private linkAt(cell: Cell): Link | undefined { return this.links.find((l) => l.columns.includes(cell.col)); }
+
+  /** A row's values in some columns, or null if any is NULL (a NULL points nowhere) or the row is not loaded. */
+  private valuesAt(row: number, columns: number[]): string[] | null {
+    const b = this.store.batchFor(row);
+    if (!b) return null;
+    const values = columns.map((c) => cellText(b, c, row - b.startRow));
+    return values.every((v): v is string => v !== null) ? values : null;
+  }
+
+  /** The card for a hovered link: the first few columns of the row it points at. Looked up once per value. */
+  private peek(cell: Cell): Promise<HTMLElement | null> {
+    const link = this.linkAt(cell);
+    const values = link ? this.valuesAt(cell.row, link.columns) : null;
+    if (!link || !values) return Promise.resolve(null);
+    const cacheKey = `${link.name}\u0001${values.join('\u0001')}`;
+    let card = this.peeks.get(cacheKey);
+    if (!card) {
+      card = this.lookUp(link, values);
+      this.peeks.set(cacheKey, card);
+    }
+    return card.then((c) => (c ? (c.cloneNode(true) as HTMLElement) : null));
+  }
+
+  private async lookUp(link: Link, values: string[]): Promise<HTMLElement | null> {
+    const r = await this.ctx.bridge.request({
+      type: 'peekRow', connectionId: this.connectionId, schema: link.schema, table: link.table, columns: link.targetColumns, values,
+    });
+    const card = document.createElement('div');
+    card.className = 'gridtip peekcard';
+    card.setAttribute('role', 'tooltip');
+    const head = document.createElement('div');
+    head.className = 'peekhead';
+    const title = document.createElement('strong');
+    title.textContent = link.table;
+    head.append(title);
+    card.append(head);
+    const where = link.targetColumns.map((c, i) => `${c} = ${values[i]}`).join(', ');
+    if (r.type === 'error') {
+      card.append(Object.assign(document.createElement('div'), { className: 'tipmore', textContent: `Could not look it up: ${r.message}` }));
+      return card;
+    }
+    if (!r.found) {
+      card.append(Object.assign(document.createElement('div'), { className: 'tipmore', textContent: `No ${link.table} row with ${where}.` }));
+      return card;
+    }
+    if (r.committedOnly) {
+      head.append(Object.assign(document.createElement('span'), {
+        className: 'peeknote', textContent: '(committed data)',
+        title: 'The sheet was busy, so this was read on another connection: changes not committed in this sheet are not in it.',
+      }));
+    }
+    const table = document.createElement('table');
+    const names = r.columns as string[];
+    const shown = r.values as (string | null)[];
+    names.slice(0, PEEK_COLUMNS).forEach((name, i) => {
+      const tr = table.insertRow();
+      tr.insertCell().textContent = name;
+      const v = tr.insertCell();
+      const value = shown[i];
+      v.textContent = value === null ? 'NULL' : value.length > 120 ? value.slice(0, 120) + '…' : value;
+      if (value === null) v.className = 'null';
+    });
+    card.append(table);
+    const more = names.length > PEEK_COLUMNS ? ` · ${names.length - PEEK_COLUMNS} more columns` : '';
+    card.append(Object.assign(document.createElement('div'), { className: 'tipmore', textContent: `Ctrl+click to open it${more}` }));
+    return card;
+  }
+
+  /** Opens the row a link points at: a statement at the end of the sheet, run in a new result tab. */
+  private async openLink(cell: Cell) {
+    const link = this.linkAt(cell);
+    const values = link ? this.valuesAt(cell.row, link.columns) : null;
+    if (!link || !values) return;
+    await this.openRows(link.schema, link.table, link.targetColumns, values);
+  }
+
+  private async openRows(schema: string, table: string, columns: string[], values: string[]) {
+    const r = await this.ctx.bridge.request({ type: 'rowQuery', connectionId: this.connectionId, schema, table, columns, values });
+    if (r.type === 'error') { toast(this.gridEl, `Could not open it: ${r.message}`, 'warn'); return; }
+    this.ctx.openQuery(r.sql as string);
+  }
+
+  /** The grid menu's link items: open the row a link points at, and list what references this row. */
+  private linkMenu(cell: Cell, x: number, y: number): MenuItem[] {
+    const items: MenuItem[] = [];
+    const link = this.linkAt(cell);
+    if (link && this.valuesAt(cell.row, link.columns)) {
+      items.push({ label: `Open referenced row (${link.table})`, shortcut: 'Ctrl+click', action: () => void this.openLink(cell) });
+    }
+    for (const key of this.keys) {
+      const values = this.valuesAt(cell.row, key.columns);
+      if (!values) continue;
+      items.push({ label: this.keys.length > 1 ? `Referenced by… (${this.keyName(key)})` : 'Referenced by…', action: () => void this.referencedBy(key, values, x, y) });
+    }
+    return items;
+  }
+
+  /** How a key is told apart from the result's others: its columns, and its table when the result reads from several. */
+  private keyName(key: RowKeyInfo): string {
+    const several = new Set(this.keys.map((k) => `${k.schema}.${k.table}`)).size > 1;
+    const cols = key.primary ? `${key.keyColumns.join(', ')}, the primary key` : key.keyColumns.join(', ');
+    return several ? `${key.table}: ${cols}` : cols;
+  }
+
+  /** Counts what references the row (to 1,000, 2 s per foreign key), then offers each as a menu item that opens those rows. */
+  private async referencedBy(key: RowKeyInfo, values: string[], x: number, y: number) {
+    toast(this.gridEl, 'Counting the rows that reference this one…');
+    const r = await this.ctx.bridge.request({
+      type: 'referencedBy', connectionId: this.connectionId, schema: key.schema, table: key.table, columns: key.keyColumns, values,
+    });
+    if (r.type === 'error') { toast(this.gridEl, `Could not count them: ${r.message}`, 'warn'); return; }
+    const refs = r.references as { table: string; columns: string[]; count: number | null; capped: boolean; sql: string }[];
+    if (refs.length === 0) { toast(this.gridEl, 'Nothing references this row.'); return; }
+    document.querySelectorAll('.gridtoast').forEach((t) => t.remove());
+    showMenu(x, y, refs.map((ref) => ({
+      label: `${ref.table} (${ref.columns.join(', ')})`,
+      shortcut: ref.count === null ? 'too slow to count' : ref.capped ? '1,000+ rows' : plural(ref.count, 'row'),
+      disabled: ref.count === 0,
+      action: () => this.ctx.openQuery(ref.sql),
+    })), `Rows that reference this ${key.table}`);
   }
 
   /** Where the shown half starts among the result's columns. */

@@ -165,6 +165,13 @@ export class Sheet {
       unregisterQuery: (id) => ctx.unregisterQuery(id),
       // The user has seen what it does: run it straight away, without asking about a missing WHERE again.
       runForReal: (sql) => { if (this.connected) void this.startRun(sql); },
+      // Following a foreign key (design section 14, F4): nothing is hidden. The statement goes at the end of the sheet,
+      // where it can be read, changed and run again, and runs in a result tab of its own so the one it came from stays.
+      openQuery: (sql) => {
+        if (!this.connected) return;
+        this.editor.appendStatement(sql);
+        void this.startRun(sql, false, true);
+      },
       onFinished: (v) => {
         if (this.running !== v) { this.renderResultTabs(); return; }
         this.running = null;
@@ -529,9 +536,10 @@ export class Sheet {
     return this.startRun(sql, true);
   }
 
-  private async startRun(sql: string, dry = false) {
+  /** `newTab`: in a result tab of its own, whether or not the current one is pinned. */
+  private async startRun(sql: string, dry = false, newTab = false) {
     this.setMessage('');
-    const view = this.viewForRun();
+    const view = this.viewForRun(newTab);
     this.running = view;
     this.runStartedAt = performance.now();
     this.finished = null;
@@ -549,8 +557,8 @@ export class Sheet {
   // ---- result tabs ----------------------------------------------------------------------------------------------
 
   /** The tab a run fills: the unpinned one, or a new one if every tab is pinned. */
-  private viewForRun(): ResultView {
-    let view = this.results.find((r) => !r.pinned);
+  private viewForRun(newTab = false): ResultView {
+    let view = newTab ? undefined : this.results.find((r) => !r.pinned);
     if (!view) {
       view = new ResultView(this.resultsCtx, this.ctx.isDark());
       this.results.push(view);

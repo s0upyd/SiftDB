@@ -8,9 +8,10 @@ public static class ProviderContract
     /// Current version of the provider contract. v2 added connection fields, read-only sessions and CannotRunInTransaction;
     /// v3 added GenericTypeOf; v4 added provider settings, the statement guard (ITransactionMonitor.BeforeStatementAsync) and
     /// Dialect; v5 added ChangesEveryRow and IProviderConnection.DescribeTableAsync (the missing-WHERE warning); v6 added
-    /// IProviderConnection.DryRun; v7 added SameMeaning (Format SQL).
+    /// IProviderConnection.DryRun; v7 added SameMeaning (Format SQL); v8 added ColumnOrigins, PeekRowAsync and CountRowsAsync
+    /// (following foreign keys).
     /// </summary>
-    public const int CurrentVersion = 7;
+    public const int CurrentVersion = 8;
 }
 
 public interface IDatabaseProvider
@@ -115,4 +116,26 @@ public interface IProviderConnection : IAsyncDisposable
 
     /// <summary>Dry runs of UPDATE and DELETE on this session (design section 14, F2), or null when not offered.</summary>
     IDryRunSupport? DryRun => null;
+
+    /// <summary>
+    /// Where each column of a result comes from (design section 14, F4), in column order; null for a column that is
+    /// computed, or from a table this connection does not know (yet). Must be cheap (no query): it is asked for every
+    /// result, as soon as the reader is open. Empty when the provider cannot tell, and then nothing links.
+    /// </summary>
+    IReadOnlyList<ColumnOrigin?> ColumnOrigins(System.Data.Common.DbDataReader reader) => [];
+
+    /// <summary>
+    /// The first row of <see cref="RowKey.Table"/> whose key columns hold the key's values, or null if there is none.
+    /// <paramref name="sessionIdle"/>: the caller holds the idle session, so it may be read there (the session's own
+    /// uncommitted rows included) as long as nothing about the session changes, even if the lookup fails; otherwise it is
+    /// read on a side connection (<see cref="LookedUpRow.CommittedOnly"/>). Null too when not offered.
+    /// </summary>
+    Task<LookedUpRow?> PeekRowAsync(RowKey key, bool sessionIdle, CancellationToken ct) => Task.FromResult<LookedUpRow?>(null);
+
+    /// <summary>
+    /// How many rows of the key's table hold its values, counting no further than <paramref name="cap"/> + 1 (so "more
+    /// than cap" can be said), on a side connection. Null when it took longer than <paramref name="timeout"/>, or when
+    /// not offered.
+    /// </summary>
+    Task<long?> CountRowsAsync(RowKey key, long cap, TimeSpan timeout, CancellationToken ct) => Task.FromResult<long?>(null);
 }

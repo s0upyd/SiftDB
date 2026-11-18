@@ -15,8 +15,12 @@ internal static class PostgresIntrospector
         and n.nspname <> 'information_schema' and n.nspname !~ '^pg_'
         """;
 
+    /// <summary>A table's names by its oid, and its columns' names by their number: what a result's row description points at.</summary>
+    internal sealed record TableNames(string Schema, string Table, IReadOnlyDictionary<short, string> Columns);
+
     private sealed class Builder(string schema, string name, RelationKind kind)
     {
+        public Dictionary<short, string> ColumnNumbers = new();
         public string Schema = schema;
         public string Name = name;
         public RelationKind Kind = kind;
@@ -26,7 +30,8 @@ internal static class PostgresIntrospector
         public List<IndexInfo> Indexes = new();
     }
 
-    public static async Task<DatabaseSchema> ReadAsync(NpgsqlConnection conn, CancellationToken ct)
+    /// <param name="origins">Filled with every relation's oid and column numbers, for <see cref="TableNames"/>.</param>
+    public static async Task<DatabaseSchema> ReadAsync(NpgsqlConnection conn, CancellationToken ct, Dictionary<uint, TableNames>? origins = null)
     {
         var schemaNames = new List<string>();
         await using (var cmd = new NpgsqlCommand(
@@ -47,7 +52,7 @@ internal static class PostgresIntrospector
 
         await using (var cmd = new NpgsqlCommand($"""
             select a.attrelid, a.attname::text, format_type(a.atttypid, a.atttypmod), not a.attnotnull,
-                   pg_get_expr(d.adbin, d.adrelid)
+                   pg_get_expr(d.adbin, d.adrelid), a.attnum
             from pg_attribute a
             join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace
             left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
@@ -57,8 +62,11 @@ internal static class PostgresIntrospector
         await using (var r = await cmd.ExecuteReaderAsync(ct))
             while (await r.ReadAsync(ct))
                 if (rels.TryGetValue(r.GetFieldValue<uint>(0), out var b))
+                {
                     b.Columns.Add(new ColumnInfo(r.GetString(1), r.GetString(2), r.GetBoolean(3),
                         r.IsDBNull(4) ? null : r.GetString(4)));
+                    b.ColumnNumbers[r.GetInt16(5)] = r.GetString(1);
+                }
 
         await using (var cmd = new NpgsqlCommand($"""
             select con.conrelid, con.conname::text, con.contype::text,
@@ -100,6 +108,9 @@ internal static class PostgresIntrospector
             while (await r.ReadAsync(ct))
                 if (rels.TryGetValue(r.GetFieldValue<uint>(0), out var b))
                     b.Indexes.Add(new IndexInfo(r.GetString(1), Names(r, 3), r.GetBoolean(2)));
+
+        if (origins is not null)
+            foreach (var (oid, b) in rels) origins[oid] = new TableNames(b.Schema, b.Name, b.ColumnNumbers);
 
         var bySchema = rels.Values.ToLookup(b => b.Schema);
         var schemas = schemaNames.Select(s => new SchemaInfo(s,

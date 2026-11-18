@@ -313,6 +313,14 @@
     .gridtip .tiptext { font: 13px Consolas, "Cascadia Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere;
                         max-height: 320px; overflow: hidden; }
     .gridtip .tipmore { margin-top: 6px; color: var(--dim); font-size: 12px; }
+    /* Hovering a foreign key (design section 14, F4): the row it points at, its first few columns as name and value. */
+    .peekcard { min-width: 220px; }
+    .peekcard .peekhead { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+    .peekcard .peeknote { color: var(--tx-changed); font-size: 12px; }
+    .peekcard table { border-collapse: collapse; font: 12px Consolas, "Cascadia Mono", monospace; }
+    .peekcard td { padding: 1px 10px 1px 0; vertical-align: top; max-width: 420px; overflow-wrap: anywhere; }
+    .peekcard td:first-child { color: var(--dim); white-space: nowrap; }
+    .peekcard td.null { color: var(--dim); font-style: italic; }
     /* "Copied 3 rows × 2 columns": bottom right of the grid for a moment. */
     .gridtoast { position: fixed; z-index: 50; padding: 5px 10px; border-radius: 6px; pointer-events: none;
                  background: var(--vscode-menu-background); color: var(--vscode-menu-foreground);

@@ -1,7 +1,7 @@
 import { Column, Kind } from './bridge';
 import { announce, toTsv, toast, writeClipboard } from './copy';
 import { ExportFormat, ExportSource, exportAll } from './export';
-import { showMenu } from './menu';
+import { MenuItem, showMenu } from './menu';
 import { ResultStore, cellText } from './store';
 import { CellStyler, rulesVersion, stylersFor } from './styles';
 import { showValue } from './value-viewer';
@@ -26,6 +26,14 @@ const FIT_SAMPLE = 5000;
 /** How close (px) to a column's edge in the header the pointer must be to resize it. */
 const EDGE_HIT = 4;
 const ELLIPSIS = '…';
+/** A link or key cell's icon: its box, and how much of the cell's right edge a click on it takes. */
+const ICON_BOX = 18;
+const ICON_HIT = 22;
+/**
+ * Room kept free at the right of every cell of a link or key column, so the hover icon never covers the value: text
+ * stops short of it, right-aligned numbers end before it, and fitting a column counts it. Shown only on hover.
+ */
+const ICON_SLOT = 22;
 /** Hovering a cut-off value this long shows it whole in a tooltip. */
 const TIP_DELAY = 450;
 /** Characters a tooltip shows; the value viewer shows the rest. */
@@ -33,7 +41,7 @@ const TIP_CHARS = 1500;
 /** More cells than this are not put on the clipboard in one go: building the text would freeze the page. */
 const MAX_COPY_CELLS = 2_000_000;
 
-interface Cell { row: number; col: number }
+export interface Cell { row: number; col: number }
 /**
  * What is selected: one rectangle, from the anchor (where it started) to the focus (the cell that moves). Whole rows and
  * whole columns are kept as such, so a column selected while rows are still arriving covers the new rows too.
@@ -115,6 +123,62 @@ export class Grid {
   private rowHint = 0;
   /** Set for a dry run's result: which half of its columns is shown, and what to compare it with. */
   private view: CompareView | null = null;
+  /**
+   * Following foreign keys (design section 14, F4): the columns whose values link to another row, and what the result
+   * view does with them. A NULL never links. The grid only finds the cell; the view looks up and opens the row.
+   */
+  private linkCols = new Set<number>();
+  /** Columns of a key that other rows reference: a row's value there can be asked "what references this?". */
+  private refCols = new Set<number>();
+  /**
+   * The link or key cell under the pointer ("row:col"), or ''. It shows its icon at its right edge while hovered (and a
+   * link is underlined): ↗ opens the row it points at, ↙ lists what references it.
+   */
+  private hoverCell = '';
+  private hoverKind: 'link' | 'refs' | null = null;
+  /** The card shown when a link is hovered: built by the view (it asks the engine for the row). Null: nothing to show. */
+  onLinkPeek: ((cell: Cell) => Promise<HTMLElement | null>) | null = null;
+  /** Ctrl+click or Ctrl+Enter on a link, or a click on its ↗: open the row it points at. */
+  onLinkOpen: ((cell: Cell) => void) | null = null;
+  /** A click on a key cell's ↙: what references this row (at the pointer). */
+  onRefsOpen: ((cell: Cell, clientX: number, clientY: number) => void) | null = null;
+  /** More items for the right-click menu, for the focused cell (open the referenced row, what references this row…). */
+  extraMenuItems: ((cell: Cell, x: number, y: number) => MenuItem[]) | null = null;
+
+  /** Which columns link to other rows, and which hold a key that other rows reference, for this result. */
+  setLinks(linkCols: Iterable<number>, refCols: Iterable<number> = []) {
+    this.linkCols = new Set(linkCols);
+    this.refCols = new Set(refCols);
+    // The header-only widths setStore gave did not know about the icon's room.
+    this.widths = this.columns.map((_, c) => (this.manual[c] ? this.widths[c] : this.fitWidth(c, this.fitted ? AUTO_SAMPLE : 0, MAX_AUTO_W)));
+    this.layout();
+    this.invalidate();
+  }
+
+  /** A cell whose ↙ asks what references its row: a referenced key column, a loaded row, and not NULL. */
+  isRefCell(cell: Cell): boolean {
+    if (!this.refCols.has(cell.col) || this.view) return false;
+    const v = this.valueAt(cell.row, cell.col);
+    return v !== undefined && v !== null;
+  }
+
+  /** The room a column keeps for its icon: ICON_SLOT for a link or key column, else none. */
+  private slot(c: number): number { return !this.view && (this.linkCols.has(c) || this.refCols.has(c)) ? ICON_SLOT : 0; }
+
+  /** Whether a canvas point is on the hovered cell's icon (its last ICON_HIT px). */
+  private onIcon(cell: Cell, px: number): boolean {
+    if (this.hoverCell !== `${cell.row}:${cell.col}`) return false;
+    const right = GUTTER_W + this.colX[cell.col] + this.colWidth(cell.col) - this.wrap.scrollLeft;
+    return px >= right - ICON_HIT && px <= right;
+  }
+
+  /** A cell that links somewhere: a link column, a loaded row, and not NULL. */
+  isLink(cell: Cell): boolean {
+    if (!this.linkCols.has(cell.col) || this.view) return false;
+    const v = this.valueAt(cell.row, cell.col);
+    return v !== undefined && v !== null;
+  }
+
   /** The result column a displayed column reads from. */
   private src(c: number) { return c + (this.view?.base ?? 0); }
   private scheduled = false;
@@ -241,7 +305,7 @@ export class Grid {
       const w = v === null ? nullW : ctx.measureText(v.length > maxChars ? v.slice(0, maxChars) : v).width;
       if (w > widest) widest = w;
     }
-    return Math.min(cap, Math.max(MIN_W, Math.ceil(widest) + PAD * 2));
+    return Math.min(cap, Math.max(MIN_W, Math.ceil(widest) + PAD * 2 + this.slot(col)));
   }
 
   /**
@@ -367,6 +431,21 @@ export class Grid {
     c.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || this.columns.length === 0 || this.rowCount === 0) return;
       const hit = this.hit(e.offsetX, e.offsetY);
+      if (hit.area === 'cell' && this.onIcon(hit, e.offsetX)) {
+        e.preventDefault();
+        this.focusForClick();
+        this.select(hit);
+        if (this.hoverKind === 'link') this.onLinkOpen?.(hit);
+        else this.onRefsOpen?.(hit, e.clientX, e.clientY);
+        return;
+      }
+      if (e.ctrlKey && hit.area === 'cell' && this.isLink(hit) && this.onLinkOpen) {
+        e.preventDefault();
+        this.focusForClick();
+        this.select(hit);
+        this.onLinkOpen(hit);
+        return;
+      }
       this.focusForClick();
       e.preventDefault(); // no text selection, and keep the focus just given
       this.extendTo(hit, hit.area, e.shiftKey && this.sel !== null);
@@ -458,6 +537,11 @@ export class Grid {
     if (ctrl && key === 'c') { done(); void this.copy(e.shiftKey ? 'tsvHeaders' : 'tsv'); return; }
     if (ctrl && !e.shiftKey && key === 'a') { done(); this.selectAll(); return; }
     if ((e.shiftKey && e.key === 'F10') || e.key === 'ContextMenu') { done(); this.openMenuAtFocus(); return; }
+    if (e.key === 'Enter' && ctrl && !e.shiftKey && this.sel && this.isLink(this.sel.focus) && this.onLinkOpen) {
+      done();
+      this.onLinkOpen(this.sel.focus);
+      return;
+    }
     if (e.key === 'Enter' && !e.ctrlKey && !e.altKey && !e.shiftKey) {
       if (this.sel) { done(); void this.openValue(this.sel.focus); }
       return;
@@ -573,7 +657,15 @@ export class Grid {
       },
       { label: 'Export result…', separatorBefore: true, disabled: !this.canExport(), action: () => this.onExport(null) },
       { label: 'Export selection…', disabled: !several || !this.canExport(), action: () => this.onExport(this.range()) },
+      ...this.menuExtras(focus, x, y),
     ], 'Result actions');
+  }
+
+  private menuExtras(focus: Cell | undefined, x: number, y: number): MenuItem[] {
+    if (!focus || !this.extraMenuItems || focus.row >= this.store.loadedRows) return [];
+    const items = this.extraMenuItems(focus, x, y);
+    if (items.length) items[0] = { ...items[0], separatorBefore: true };
+    return items;
   }
 
   /** The keyboard's way to the menu: at the focused cell. */
@@ -606,6 +698,14 @@ export class Grid {
         && e.offsetY - HEADER_H + this.wrap.scrollTop < this.rowCount * ROW_H
         && e.offsetX - GUTTER_W + this.wrap.scrollLeft < this.totalW - GUTTER_W;
       const key = over ? `${hit.row}:${hit.col}` : '';
+      const kind = !over ? null : this.isLink(hit) ? 'link' : this.isRefCell(hit) ? 'refs' : null;
+      const cellKey = kind ? key : '';
+      if (cellKey !== this.hoverCell || kind !== this.hoverKind) { this.hoverCell = cellKey; this.hoverKind = kind; this.invalidate(); }
+      // On the icon: a hand, and what it does.
+      const icon = kind !== null && this.onIcon(hit, e.offsetX);
+      if (icon) c.style.cursor = 'pointer';
+      const title = !icon ? '' : kind === 'link' ? 'Open the row this points at (or Ctrl+click the value)' : 'What references this row?';
+      if (c.title !== title) c.title = title;
       if (key === this.tipCell) return;
       this.hideTip();
       if (!key) return;
@@ -613,19 +713,28 @@ export class Grid {
       const { clientX, clientY } = e;
       this.tipTimer = window.setTimeout(() => this.showTip(hit, clientX, clientY), TIP_DELAY);
     });
-    c.addEventListener('pointerleave', () => this.hideTip());
+    c.addEventListener('pointerleave', () => {
+      this.hideTip();
+      if (this.hoverCell) { this.hoverCell = ''; this.hoverKind = null; this.invalidate(); }
+    });
     c.addEventListener('pointerdown', () => this.hideTip());
   }
 
   private showTip(cell: Cell, x: number, y: number) {
     const v = this.valueAt(cell.row, cell.col);
     if (v === undefined) return;
+    // A link shows the row it points at instead (looked up by the view), if the pointer is still there when it comes.
+    if (this.isLink(cell) && this.onLinkPeek) {
+      const key = this.tipCell;
+      void this.onLinkPeek(cell).then((card) => { if (card && this.tipCell === key) { this.tip?.remove(); this.placeTip(card as HTMLDivElement, x, y); } });
+      return;
+    }
     // In a dry run, a value that would change shows both: before and after.
     const other = this.otherValue(cell);
     if (other !== undefined && other !== v) { this.placeTip(this.compareTip(v, other), x, y); return; }
     if (v === null) return;
     this.ctx.font = FONT;
-    const cut = v.includes('\n') || this.fitText(v, this.colWidth(cell.col) - PAD * 2) !== v;
+    const cut = v.includes('\n') || this.fitText(v, this.colWidth(cell.col) - PAD * 2 - this.slot(cell.col)) !== v;
     if (!cut) return;
     const tip = document.createElement('div');
     tip.className = 'gridtip';
@@ -693,6 +802,10 @@ export class Grid {
     this.store = store;
     this.columns = columns;
     this.view = view;
+    this.linkCols = new Set();
+    this.refCols = new Set();
+    this.hoverCell = '';
+    this.hoverKind = null;
     this.stylersVersion = -1;
     this.manual = columns.map(() => false);
     this.fitted = false;
@@ -712,6 +825,42 @@ export class Grid {
     this.view = view;
     this.hideTip();
     this.invalidate();
+  }
+
+  /** A hovered link or key cell's icon: a small box at the cell's right edge, with ↗ (open it) or ↙ (what references it). */
+  private drawIcon(kind: 'link' | 'refs', x: number, y: number) {
+    const ctx = this.ctx, th = this.theme;
+    ctx.save();
+    ctx.fillStyle = th.headerBg;
+    ctx.strokeStyle = th.line;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(x + 0.5, y + 0.5, ICON_BOX - 1, ICON_BOX - 1, 3);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+    this.drawGlyph(kind, x + 4, y + 4, th.accent, 10);
+  }
+
+  /** ↗ points away (to the row a link points at); ↙ points in (rows that point here). Drawn, not a font's glyph. */
+  private drawGlyph(kind: 'link' | 'refs', x: number, y: number, color: string, size: number) {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    const head = size * 0.55;
+    if (kind === 'link') {
+      ctx.moveTo(x, y + size); ctx.lineTo(x + size, y);
+      ctx.moveTo(x + size - head, y); ctx.lineTo(x + size, y); ctx.lineTo(x + size, y + head);
+    } else {
+      ctx.moveTo(x + size, y); ctx.lineTo(x, y + size);
+      ctx.moveTo(x, y + size - head); ctx.lineTo(x, y + size); ctx.lineTo(x + head, y + size);
+    }
+    ctx.stroke();
+    ctx.restore();
   }
 
   /** Total rows if known (query finished), otherwise the loaded count drives the scroll height. */
@@ -800,6 +949,7 @@ export class Grid {
         ctx.rect(Math.max(x, GUTTER_W), y, cw, ROW_H);
         ctx.clip();
         const right = this.columns[c].kind !== Kind.Text;
+        const slot = this.slot(c); // the icon's room, never written in
         ctx.textAlign = right ? 'right' : 'left';
         const value = cellText(batch, this.src(c), local);
         // A styled cell carries its own background and text colour, so it reads the same in either theme.
@@ -825,10 +975,20 @@ export class Grid {
           // NULL is a value of its own: dim and italic so it can never be mistaken for the text "NULL", 0 or ''.
           ctx.fillStyle = style?.text ?? th.dim;
           ctx.font = style?.bold ? BOLD_NULL_FONT : NULL_FONT;
-          ctx.fillText('NULL', right ? x + cw - 8 : x + 8, y + ROW_H / 2);
+          ctx.fillText('NULL', right ? x + cw - 8 - slot : x + 8, y + ROW_H / 2);
         } else {
           if (style) { ctx.fillStyle = style.text; if (style.bold) ctx.font = BOLD_FONT; }
-          ctx.fillText(this.fitText(value, cw - PAD * 2), right ? x + cw - PAD : x + PAD, y + ROW_H / 2);
+          const shown = this.fitText(value, cw - PAD * 2 - slot);
+          ctx.fillText(shown, right ? x + cw - PAD - slot : x + PAD, y + ROW_H / 2);
+          // A link is underlined only while hovered, so the grid is not covered in them; its icon shows then too.
+          if (this.hoverCell === `${r}:${c}`) {
+            if (this.hoverKind === 'link') {
+              const tw = ctx.measureText(shown).width;
+              const tx = right ? x + cw - PAD - slot - tw : x + PAD;
+              ctx.fillRect(tx, y + ROW_H / 2 + 7, tw, 1);
+            }
+            this.drawIcon(this.hoverKind!, x + cw - ICON_BOX - 3, y + (ROW_H - ICON_BOX) / 2);
+          }
         }
         ctx.font = FONT;
         ctx.fillStyle = th.fg;
@@ -893,7 +1053,11 @@ export class Grid {
       ctx.beginPath();
       ctx.rect(Math.max(x, GUTTER_W), 0, cw, HEADER_H);
       ctx.clip();
-      ctx.fillText(this.fitText(this.columns[c].name, cw - PAD * 2, 3), x + PAD, HEADER_H / 2); // proportional font: 'i' is narrow
+      // A link column and a referenced key column say so in the header, before anything is hovered: ↗ and ↙.
+      const marks: ('link' | 'refs')[] = this.view ? [] : [...(this.linkCols.has(c) ? ['link' as const] : []), ...(this.refCols.has(c) ? ['refs' as const] : [])];
+      const markW = marks.length * 13;
+      ctx.fillText(this.fitText(this.columns[c].name, cw - PAD * 2 - markW, 3), x + PAD, HEADER_H / 2); // proportional font: 'i' is narrow
+      marks.forEach((m, k) => this.drawGlyph(m, x + cw - PAD - markW + k * 13, HEADER_H / 2 - 5, th.dim, 10));
       ctx.restore();
       // A faint divider at each column's edge: it is also where the column is dragged to resize.
       ctx.strokeStyle = th.line;

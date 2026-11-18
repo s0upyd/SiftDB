@@ -363,6 +363,24 @@ export class SqlEditor {
     if (edits.length) this.editor.executeEdits('siftdb.acceptAll', edits);
   }
 
+  /**
+   * Adds a statement at the end of the sheet, after a blank line (which ends the one before it, §6), as its own undoable
+   * edit, and puts the cursor on it.
+   */
+  appendStatement(sql: string) {
+    const text = this.model.getValue();
+    const trimmed = text.replace(/\s+$/, '');
+    const end = this.model.getPositionAt(text.length);
+    const from = this.model.getPositionAt(trimmed.length);
+    const insert = (trimmed ? '\n\n' : '') + sql + ';\n';
+    this.editor.pushUndoStop();
+    this.editor.executeEdits('siftdb.follow', [{ range: new monaco.Range(from.lineNumber, from.column, end.lineNumber, end.column), text: insert }]);
+    this.editor.pushUndoStop();
+    const at = this.model.getPositionAt(trimmed.length + (trimmed ? 2 : 0));
+    this.editor.setPosition(at);
+    this.editor.revealLineInCenterIfOutsideViewport(at.lineNumber);
+  }
+
   /** The text and selection, with the version they belong to: an edit worked out for them applies only if nothing changed since. */
   formatSnapshot() { return { ...this.snapshot(), version: this.model.getAlternativeVersionId() }; }
 
