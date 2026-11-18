@@ -1,18 +1,39 @@
-# Builds the installer and update packages and publishes them as a GitHub Release (design section 9).
-# Push a tag to release:  v0.2.0 is a stable release;  v0.2.0-beta.1 (any prerelease suffix) goes to the beta channel.
+# Builds the installer and update packages and publishes them as a GitHub Release (design section 9), with release notes
+# generated from the commit messages (design section 14, F17; cliff.toml).
+#
+# To release: Actions > Release > Run workflow on main. The version is worked out from the commits since the last
+# release (anything with "!" bumps major, any feat minor, anything else patch), or chosen with "bump". The workflow
+# writes the notes and CHANGELOG.md, commits CHANGELOG.md and tags that commit, builds (the app bundles CHANGELOG.md for
+# What's New), and publishes. If nothing user-visible has changed since the last release it stops and says so.
+# The beta channel gets X.Y.Z-beta.N. Pushing a tag by hand (v0.2.0, v0.2.0-beta.1) still releases that tag.
 # Installed copies find new releases here by themselves (src/SiftDB.Host/Updater.cs).
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Channel
+        type: choice
+        options: [stable, beta]
+        default: stable
+      bump:
+        description: Version bump (auto works it out from the commit messages)
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
   push:
     tags: ['v*']
 
 permissions:
-  contents: write   # create the release and upload its files
+  contents: write   # commit CHANGELOG.md, push the tag, create the release and upload its files
 
 concurrency:
   group: release
   cancel-in-progress: false
+
+env:
+  GIT_CLIFF: git-cliff@2.10.1
 
 jobs:
   ci:
@@ -23,6 +44,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # every commit and tag: the notes cover everything since the last release
 
       - uses: actions/setup-dotnet@v5
         with:
@@ -34,29 +57,92 @@ jobs:
           cache: npm
           cache-dependency-path: src/ui/package-lock.json
 
-      - name: Version and channel from the tag
+      - name: Version, release notes and CHANGELOG.md
         id: version
         shell: pwsh
         run: |
-          $version = '${{ github.ref_name }}'.TrimStart('v')
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          function Cliff { npx --yes $env:GIT_CLIFF @args; if ($LASTEXITCODE -ne 0) { throw "git-cliff failed" } }
+
+          if ('${{ github.event_name }}' -eq 'push') {
+            # A tag pushed by hand: release exactly that tag, with its notes.
+            $tag = '${{ github.ref_name }}'
+            Cliff --current --strip all -o artifacts/notes.md
+            Cliff -o CHANGELOG.md
+          } else {
+            # Nothing user-visible since the last release: stop, and say so.
+            $context = Cliff --unreleased --context | Out-String | ConvertFrom-Json
+            if (-not $context -or @($context)[0].commits.Count -eq 0) {
+              "::notice::Nothing to release: no user-visible commits since the last release."
+              "release=false" >> $env:GITHUB_OUTPUT
+              exit 0
+            }
+
+            # The version: from the last stable release, by the commits since the last release (or as chosen).
+            $stable = git tag --list 'v*' | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
+              Sort-Object { [version]$_.TrimStart('v') } | Select-Object -Last 1
+            $base = if ($stable) { [version]$stable.TrimStart('v') } else { [version]'0.0.0' }
+            $since = if ($stable) { "$stable..HEAD" } else { 'HEAD' }
+            $subjects = git log $since --format=%s
+            $bump = '${{ inputs.bump }}'
+            if ($bump -eq 'auto') {
+              $bump = if ($subjects -match '^[a-z]+(\([^)]*\))?!:') { 'major' } elseif ($subjects -match '^feat') { 'minor' } else { 'patch' }
+            }
+            $next = switch ($bump) {
+              'major' { "$($base.Major + 1).0.0" }
+              'minor' { "$($base.Major).$($base.Minor + 1).0" }
+              default { "$($base.Major).$($base.Minor).$($base.Build + 1)" }
+            }
+            if ('${{ inputs.channel }}' -eq 'beta') {
+              $n = @(git tag --list "v$next-beta.*").Count + 1
+              $next = "$next-beta.$n"
+            }
+            $tag = "v$next"
+            Write-Host "Releasing $tag ($bump)"
+
+            Cliff --unreleased --tag $tag --strip all -o artifacts/notes.md
+            Cliff --tag $tag -o CHANGELOG.md
+
+            # CHANGELOG.md is kept in the repository as the record; the tag points at the commit that has it.
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add CHANGELOG.md
+            git commit -m "chore(release): $tag [skip ci]"
+            git tag $tag
+            git push origin HEAD:${{ github.ref_name }}
+            git push origin $tag
+          }
+
+          $version = $tag.TrimStart('v')
           $channel = if ($version.Contains('-')) { 'beta' } else { 'win' }
+          "release=true" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
           "version=$version" >> $env:GITHUB_OUTPUT
           "channel=$channel" >> $env:GITHUB_OUTPUT
+          Get-Content artifacts/notes.md
 
       - name: Build and pack
+        if: steps.version.outputs.release == 'true'
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./build/release.ps1 -Version ${{ steps.version.outputs.version }} -Channel ${{ steps.version.outputs.channel }} -DownloadPrevious
+        run: ./build/release.ps1 -Version ${{ steps.version.outputs.version }} -Channel ${{ steps.version.outputs.channel }} -DownloadPrevious -ReleaseNotes artifacts/notes.md
 
       - name: Publish the GitHub Release
+        if: steps.version.outputs.release == 'true'
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $args_ = @('vpk', 'upload', 'github', '--repoUrl', 'https://github.com/${{ github.repository }}',
                      '--token', '${{ secrets.GITHUB_TOKEN }}', '-o', 'artifacts/releases',
                      '--channel', '${{ steps.version.outputs.channel }}',
-                     '--tag', '${{ github.ref_name }}', '--releaseName', 'SiftDB ${{ steps.version.outputs.version }}',
+                     '--tag', '${{ steps.version.outputs.tag }}', '--releaseName', 'SiftDB ${{ steps.version.outputs.version }}',
                      '--publish')
           if ('${{ steps.version.outputs.channel }}' -ne 'win') { $args_ += '--pre' }
           dotnet @args_
           if ($LASTEXITCODE -ne 0) { throw "vpk upload failed" }
+          # The release's description is the generated notes.
+          gh release edit '${{ steps.version.outputs.tag }}' --notes-file artifacts/notes.md
+          if ($LASTEXITCODE -ne 0) { throw "setting the release notes failed" }

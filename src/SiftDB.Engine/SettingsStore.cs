@@ -29,6 +29,12 @@ public sealed record UserSettings(
     /// <summary>Ask before running an UPDATE or DELETE with no WHERE, or a TRUNCATE (design section 14, F1). On by default.</summary>
     public bool WarnAllRows { get; init; } = true;
 
+    /// <summary>The newest version whose What's New the user has had (design section 14, F17); null on a fresh install.</summary>
+    public string? LastSeenVersion { get; init; }
+
+    /// <summary>When What's New opens after an update: "majorMinor" (the default), "all" or "never".</summary>
+    public string WhatsNew { get; init; } = "majorMinor";
+
     /// <summary>How Format SQL lays statements out (design section 14, F7).</summary>
     public FormatOptions Format { get; init; } = FormatOptions.Default;
 
@@ -45,6 +51,7 @@ public sealed record UserSettings(
         NewSheetMode = NewSheetMode is "strict" ? "strict" : "assisted",
         ResultRules = StyleRules.Normalise(ResultRules, strict),
         Zoom = ZoomChoices.Contains(Zoom) ? Zoom : 100,
+        WhatsNew = WhatsNew is "all" or "never" ? WhatsNew : "majorMinor",
         Format = (Format ?? FormatOptions.Default) with
         {
             KeywordCase = Enum.IsDefined(Format?.KeywordCase ?? KeywordCase.AsTyped) ? Format!.KeywordCase : KeywordCase.AsTyped,
@@ -103,6 +110,8 @@ public sealed class SettingsStore(string path)
                 NewSheetMode = normalised.NewSheetMode,
                 Zoom = normalised.Zoom,
                 WarnAllRows = normalised.WarnAllRows,
+                LastSeenVersion = normalised.LastSeenVersion,
+                WhatsNew = normalised.WhatsNew,
                 Format = new StoredFormat
                 {
                     KeywordCase = normalised.Format.KeywordCase, Indent = normalised.Format.Indent,
@@ -136,6 +145,7 @@ public sealed class SettingsStore(string path)
             return _settings = new UserSettings(file.NewSheetMode ?? UserSettings.Default.NewSheetMode, rules.ToList(), providers)
                 {
                     Zoom = file.Zoom ?? 100, WarnAllRows = file.WarnAllRows ?? true,
+                    LastSeenVersion = file.LastSeenVersion, WhatsNew = file.WhatsNew ?? "majorMinor",
                     Format = new FormatOptions(
                         file.Format?.KeywordCase ?? KeywordCase.AsTyped, file.Format?.Indent ?? 4,
                         file.Format?.Commas ?? CommaPlacement.End, file.Format?.LineWidth ?? 100),
@@ -155,6 +165,8 @@ public sealed class SettingsStore(string path)
         public string? NewSheetMode { get; set; }
         public int? Zoom { get; set; }
         public bool? WarnAllRows { get; set; }
+        public string? LastSeenVersion { get; set; }
+        public string? WhatsNew { get; set; }
         public StoredFormat? Format { get; set; }
         public List<StoredRule>? ResultRules { get; set; }
         public Dictionary<string, Dictionary<string, string>>? ProviderSettings { get; set; }

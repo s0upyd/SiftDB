@@ -9,6 +9,12 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
   </ItemGroup>
 
+  <!-- The release notes the app ships with (design section 14, F17). The release workflow writes CHANGELOG.md before it
+       builds; a build without it (a local one) simply has no notes. -->
+  <ItemGroup Condition="Exists('..\..\CHANGELOG.md')">
+    <EmbeddedResource Include="..\..\CHANGELOG.md" LogicalName="SiftDB.CHANGELOG.md" Link="CHANGELOG.md" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

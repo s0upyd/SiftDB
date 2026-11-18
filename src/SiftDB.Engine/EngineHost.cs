@@ -113,6 +113,9 @@ public sealed partial class EngineHost : IAsyncDisposable
                         root.GetProperty("sql").GetString()!,
                         allRowsChecked: root.TryGetProperty("allRowsChecked", out var allRows) && allRows.ValueKind == JsonValueKind.True);
                     break;
+                case "whatsNew":
+                    WhatsNew(id, root.GetProperty("version").GetString()!, all: root.TryGetProperty("all", out var allNotes) && allNotes.ValueKind == JsonValueKind.True);
+                    break;
                 case "relationDetail":
                     await RelationDetailAsync(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("schema").GetString()!,
                         root.GetProperty("name").GetString()!);

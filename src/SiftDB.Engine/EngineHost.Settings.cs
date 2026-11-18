@@ -25,6 +25,7 @@ public sealed partial class EngineHost
             NewSheetMode = OptionalString(s, "newSheetMode") ?? current.NewSheetMode,
             Zoom = s.TryGetProperty("zoom", out var zoom) && zoom.ValueKind == JsonValueKind.Number && zoom.TryGetInt32(out var z)
                 ? z : current.Zoom,
+            WhatsNew = OptionalString(s, "whatsNew") ?? current.WhatsNew,
             Format = s.TryGetProperty("format", out var fmt) && fmt.ValueKind == JsonValueKind.Object ? ReadFormat(fmt, current.Format) : current.Format,
             WarnAllRows = s.TryGetProperty("warnAllRows", out var warn) && warn.ValueKind is JsonValueKind.True or JsonValueKind.False
                 ? warn.GetBoolean() : current.WarnAllRows,
@@ -100,6 +101,7 @@ public sealed partial class EngineHost
         zoom = s.Zoom,
         zoomChoices = UserSettings.ZoomChoices,
         warnAllRows = s.WarnAllRows,
+        whatsNew = s.WhatsNew,
         format = new
         {
             keywordCase = JsonNamingPolicy.CamelCase.ConvertName(s.Format.KeywordCase.ToString()),
@@ -116,6 +118,31 @@ public sealed partial class EngineHost
             condition = r.Condition, values = r.Values, text = r.Text, background = r.Background, bold = r.Bold,
         }),
     };
+
+    /// <summary>
+    /// "whatsNew" (design section 14, F17), at startup with the running version: what to show (the window, a notice, or
+    /// nothing), with the releases since the version last seen, which then becomes this one, so it never shows twice. With
+    /// "all" (What's New opened by hand) every release this build has notes for, and nothing is recorded.
+    /// </summary>
+    private void WhatsNew(int id, string version, bool all)
+    {
+        if (all)
+        {
+            Event(new { type = "whatsNew", replyTo = id, show = "window", releases = ReleaseNotes.All, summary = (string?)null });
+            return;
+        }
+        var current = CurrentSettings;
+        var decision = ReleaseNotes.Decide(version, current.LastSeenVersion, current.WhatsNew, ReleaseNotes.All);
+        // Recorded on a fresh install too (nothing to show then), and never moved back by an older build.
+        if (_settings is { LoadError: null } && (current.LastSeenVersion is null || ReleaseNotes.Compare(version, current.LastSeenVersion) > 0))
+            _settings.Save(current with { LastSeenVersion = version });
+        Event(new
+        {
+            type = "whatsNew", replyTo = id,
+            show = decision.Show switch { WhatsNewShow.Window => "window", WhatsNewShow.Notice => "notice", _ => "none" },
+            releases = decision.Releases, summary = decision.Summary,
+        });
+    }
 
     /// <summary>Format SQL's settings from the editor; anything left out keeps its value, anything unknown reads as the default.</summary>
     private static FormatOptions ReadFormat(JsonElement f, FormatOptions current) => new(

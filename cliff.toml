@@ -1,0 +1,56 @@
+# Release notes are generated, not written (design section 14, F17). git-cliff reads the commits since the previous
+# release and groups them by type; the release workflow writes CHANGELOG.md with this, and the notes of each release.
+# The app bundles CHANGELOG.md and shows it in What's New, so the layout below is also what the engine reads
+# (src/SiftDB.Engine/ReleaseNotes.cs): "## <version> - <date>", then "### <group>", then "- <entry>".
+#
+# Commit messages follow Conventional Commits (the rule is in CLAUDE.md):
+#   feat: ...          Highlights          perf: ... / feat(ui): ... / fix(ui): ...   Improvements
+#   fix: ...           Fixes               type!: ... (anything with !)               Breaking changes, at the top
+#   refactor, test, docs, chore, build, ci, style: not shown.
+# A "Try-it: <command id>" footer becomes a Try it link that runs that command in the app.
+# Commits that follow no convention (all of them before the rule) are shown as Other changes, so none is lost.
+
+[changelog]
+header = """
+# Changelog
+
+What changed in each SiftDB release. Generated from the commit messages by git-cliff (see cliff.toml); do not edit it by hand.
+
+"""
+body = """
+{% if version %}\
+## {{ version | trim_start_matches(pat="v") }} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## Unreleased
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {{ commit.message | split(pat="\n") | first | trim | upper_first }}\
+{% for footer in commit.footers %}{% if footer.token == "Try-it" %} ([Try it](command:{{ footer.value | trim }})){% endif %}{% endfor %}\
+{% endfor %}
+{% endfor %}\n
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = false
+split_commits = false
+protect_breaking_commits = true
+filter_commits = false
+tag_pattern = "v[0-9].*"
+sort_commits = "oldest"
+# First match wins. The hidden comments order the groups (they are stripped when printed).
+commit_parsers = [
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^Merge ", skip = true },
+  { message = "^[a-z]+(\\([^)]*\\))?!:", group = "<!-- 0 -->Breaking changes" },
+  { message = "^(feat|fix)\\(ui\\)", group = "<!-- 2 -->Improvements" },
+  { message = "^feat", group = "<!-- 1 -->Highlights" },
+  { message = "^perf", group = "<!-- 2 -->Improvements" },
+  { message = "^fix", group = "<!-- 3 -->Fixes" },
+  { message = "^(refactor|test|docs|chore|build|ci|style)(\\(|:|!)", skip = true },
+  { message = ".*", group = "<!-- 4 -->Other changes" },
+]

@@ -4,6 +4,7 @@ import { askSaveChanges } from './dialogs';
 import { applyIcons, lockIcon, spinner } from './icons';
 import { ResultView } from './results';
 import { Settings, editSettings } from './settings';
+import { Release, showUpdateNotice, showWhatsNew } from './whatsnew';
 import { FileState, Sheet, SheetContext, Target, TxState, targetKey } from './sheet';
 import type { QueryMode } from './editor';
 import { revealSelectedTab, scrollTabsWithWheel } from './tabs';
@@ -79,6 +80,7 @@ function onEvent(e: BridgeEvent) {
       document.documentElement.dataset.theme = dark ? 'dark' : 'light';
       sheets.forEach((s) => s.setTheme(dark));
       if (e.version) $('settings').title = `Settings (Ctrl+,) · SiftDB ${e.version}`;
+      gotVersion(typeof e.version === 'string' ? e.version : null);
       return;
     case 'updateReady': {
       // Downloaded in the background by the host. Restarting goes through the usual close (warning, last autosave).
@@ -597,7 +599,55 @@ $('openFile').onclick = () => void openFile();
 $('saveFile').onclick = () => { if (active) void saveSheet(active); };
 /** Settings saved: open results pick up new styling rules straight away. */
 async function openSettings() {
-  if (await editSettings(settings)) sheets.forEach((s) => s.restyle());
+  const hooks = { version: await appVersion, whatsNew: () => void openWhatsNew() };
+  if (await editSettings(settings, hooks)) sheets.forEach((s) => s.restyle());
+}
+
+// ---- What's New (design section 14, F17) ---------------------------------------------------------------------------
+
+/** The running version, from the host's "init" (null when it does not say). */
+let gotVersion: (v: string | null) => void = () => {};
+const appVersion = new Promise<string | null>((resolve) => {
+  gotVersion = resolve;
+  setTimeout(() => resolve(null), 5000); // a host that never says: carry on without
+});
+
+/**
+ * What a release note's "Try it" can run, by id: the ids a commit's "Try-it:" footer may name (CLAUDE.md). An id this
+ * build does not have shows no button.
+ */
+const COMMANDS: Record<string, () => void> = {
+  format: () => void active?.format(false),
+  formatSheet: () => void active?.format(true),
+  dryRun: () => void active?.dryRunFromEditor(),
+  run: () => void active?.runFromEditor(),
+  newSheet: () => addSheet(),
+  settings: () => void openSettings(),
+  refreshSchema: () => void refreshSchema(),
+  openFile: () => void openFile(),
+};
+
+/** Every release this build has notes for, by hand (Settings > About). */
+async function openWhatsNew() {
+  const r = await bridge.request({ type: 'whatsNew', version: (await appVersion) ?? '0.0.0', all: true });
+  await showWhatsNew((r.releases as Release[] | undefined) ?? [], runCommand, (id) => id in COMMANDS);
+}
+
+function runCommand(id: string): boolean {
+  const command = COMMANDS[id];
+  if (!command) return false;
+  command();
+  return true;
+}
+
+/** At startup: the engine says whether this is an update worth showing, and records the version as seen. */
+async function whatsNewAtStartup() {
+  const version = await appVersion;
+  if (!version) return;
+  const r = await bridge.request({ type: 'whatsNew', version });
+  const releases = (r.releases as Release[] | undefined) ?? [];
+  if (r.show === 'window') await showWhatsNew(releases, runCommand, (id) => id in COMMANDS);
+  else if (r.show === 'notice') showUpdateNotice(version, (r.summary as string | null) ?? null, () => void showWhatsNew(releases, runCommand, (id) => id in COMMANDS));
 }
 applyIcons(document);
 $('settings').onclick = () => void openSettings();
@@ -728,5 +778,6 @@ void Promise.all([catalog.load(), settings.load()]).then(async () => {
     restoring = false; // a session that cannot be restored must not stop the app starting
     if (sheets.length === 0) addSheet(true);
   }
+  void whatsNewAtStartup(); // over the restored sheets
 });
 setInterval(() => active?.tick(), 250);

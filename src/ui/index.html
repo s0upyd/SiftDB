@@ -71,6 +71,26 @@
                    box-shadow: 0 12px 40px rgba(0,0,0,.35); }
     dialog.modal.small { width: min(400px, calc(100vw - 32px)); }
     dialog.modal.wide { width: min(760px, calc(100vw - 32px)); }
+    /* What's New (design section 14, F17): each release's notes, highlights first; a long list of fixes starts folded. */
+    dialog.whatsnew { padding: 16px 20px; }
+    dialog.whatsnew h2 { margin: 0 0 8px; }
+    .whatsnewbody { max-height: calc(100vh - 180px); overflow: auto; margin-bottom: 12px; }
+    .whatsnewbody .release { padding: 6px 0 10px; border-bottom: 1px solid var(--line); }
+    .whatsnewbody .release:last-child { border-bottom: none; }
+    .whatsnewbody h3 { margin: 6px 0; font-size: 15px; }
+    .whatsnewbody details.notes { margin: 4px 0; }
+    .whatsnewbody summary { cursor: pointer; font-weight: 600; padding: 2px 0; }
+    .whatsnewbody details.breaking summary { color: var(--tx-changed); }
+    .whatsnewbody ul { margin: 4px 0 6px; padding-left: 22px; }
+    .whatsnewbody li { margin: 3px 0; line-height: 1.45; }
+    .whatsnewbody code { font: 12px Consolas, "Cascadia Mono", monospace; padding: 0 3px; border-radius: 3px; background: var(--panel); }
+    button.tryit { padding: 0 8px; font-size: 12px; margin-left: 4px; color: var(--accent); }
+    /* After an update with only fixes: a notice, bottom left, for a moment. */
+    .updatenotice { position: fixed; left: 12px; bottom: 12px; z-index: 40; display: flex; gap: 10px; align-items: center;
+                    padding: 8px 12px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px;
+                    border-left: 4px solid var(--accent); box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+    button.linkbtn { border: none; background: transparent; color: var(--accent); padding: 0 2px; }
+    button.linkbtn:hover { text-decoration: underline; }
     /* Settings: categories on the left, the chosen one's page on the right. The body keeps one height across categories. */
     .settingsbody { display: flex; gap: 16px; min-height: 320px; }
     .settingsnav { flex: none; width: 150px; display: flex; flex-direction: column; gap: 2px; padding-right: 12px; border-right: 1px solid var(--line); }

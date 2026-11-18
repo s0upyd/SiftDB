@@ -18,6 +18,8 @@ export interface UserSettings {
   warnAllRows: boolean;
   /** How Format SQL lays statements out (design section 14, F7). */
   format: FormatSettings;
+  /** When What's New opens after an update (design section 14, F17). */
+  whatsNew: 'majorMinor' | 'all' | 'never';
   /** Result styling (design section 10): one ordered list, presets included. The first rule that matches styles the cell. */
   resultRules: StyleRule[];
   /** By provider id, then setting key: the chosen value. */
@@ -47,7 +49,7 @@ export interface ProviderSettingsInfo { id: string; displayName: string; setting
 
 /** Until the engine answers. Its defaults hold the presets; the page never invents them. */
 const DEFAULTS: UserSettings = {
-  newSheetMode: 'assisted', zoom: 100, warnAllRows: true, format: { ...FORMAT_DEFAULTS }, resultRules: [], providerSettings: {},
+  newSheetMode: 'assisted', zoom: 100, warnAllRows: true, format: { ...FORMAT_DEFAULTS }, whatsNew: 'majorMinor', resultRules: [], providerSettings: {},
 };
 
 /** The settings as the engine last reported them. Until loaded, or when they cannot be read, the defaults apply. */
@@ -95,6 +97,7 @@ export class Settings {
       zoom,
       warnAllRows: s?.warnAllRows !== false,
       format: { ...FORMAT_DEFAULTS, ...(s?.format ?? {}) },
+      whatsNew: s?.whatsNew === 'all' || s?.whatsNew === 'never' ? s.whatsNew : 'majorMinor',
       resultRules: Array.isArray(s?.resultRules) ? s.resultRules : [],
       // The engine sends each provider's values with defaults filled in.
       providerSettings: Object.fromEntries(list.map((p) => [p.id, { ...(p.values ?? {}) }])),
@@ -254,9 +257,38 @@ function providerCategory(p: ProviderSettingsInfo): Category {
   };
 }
 
-/** In the order they are listed: the app's own, then one per database that has settings of its own. */
-const categories = (settings: Settings): Category[] =>
-  [appearanceCategory(settings), sqlCategory(settings), resultsCategory, ...settings.providers.map(providerCategory)];
+/** What the editor can do beyond settings: open What's New (from About), knowing the running version. */
+export interface SettingsHooks { version: string | null; whatsNew(): void }
+
+/** About: the version, What's New, and when it opens by itself (design section 14, F17). */
+function aboutCategory(hooks: SettingsHooks | undefined, close: () => void): Category {
+  return {
+    id: 'about',
+    label: 'About',
+    build(values) {
+      const group = `wn${++seq}`;
+      const choices = [
+        radio(group, 'majorMinor', 'After major and minor updates', 'New features are shown; an update with only fixes says so in a small notice.', values.whatsNew === 'majorMinor'),
+        radio(group, 'all', 'After every update', 'Fixes are shown too.', values.whatsNew === 'all'),
+        radio(group, 'never', 'Never', "What's New is still here, with the button above.", values.whatsNew === 'never'),
+      ];
+      const open = el('button', { type: 'button', textContent: "What's new…", onclick: () => { close(); hooks?.whatsNew(); } });
+      const page = el('div', { className: 'fgroup' },
+        el('p', {}, el('strong', { textContent: `SiftDB ${hooks?.version ?? ''}`.trim() })),
+        el('p', {}, open),
+        el('fieldset', {}, el('legend', { textContent: "Show What's New" }), ...choices.map((c) => c.wrap)));
+      return {
+        page,
+        apply: (into) => { into.whatsNew = (choices.find((c) => c.input.checked)?.input.value ?? 'majorMinor') as UserSettings['whatsNew']; },
+        focus: () => open.focus(),
+      };
+    },
+  };
+}
+
+/** In the order they are listed: the app's own, then one per database that has settings of its own, then About. */
+const categories = (settings: Settings, hooks: SettingsHooks | undefined, close: () => void): Category[] =>
+  [appearanceCategory(settings), sqlCategory(settings), resultsCategory, ...settings.providers.map(providerCategory), aboutCategory(hooks, close)];
 
 /** The category last looked at, for this run of the app: reopening the editor goes back to it. */
 let lastCategory = 'appearance';
@@ -264,9 +296,9 @@ let lastCategory = 'appearance';
 // ---- the editor -------------------------------------------------------------------------------------------------
 
 /** The settings editor: categories on the left, the chosen one's page on the right. Resolves true when something was saved. */
-export async function editSettings(settings: Settings): Promise<boolean> {
+export async function editSettings(settings: Settings, hooks?: SettingsHooks): Promise<boolean> {
   let saved = false;
-  const built = categories(settings).map((c) => ({ category: c, ...c.build(settings.values) }));
+  const built = categories(settings, hooks, () => dialog.close()).map((c) => ({ category: c, ...c.build(settings.values) }));
 
   const nav = el('div', { className: 'settingsnav' });
   nav.setAttribute('role', 'tablist');
