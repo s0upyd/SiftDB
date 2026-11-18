@@ -25,7 +25,9 @@ public sealed partial class EngineHost
             try { warning = await AllRowsWarningAsync(state, changes, canAsk: idle); }
             finally { if (idle) state.SessionLock.Release(); }
         }
-        Event(new { type = "runCheck", replyTo = id, allRows = warning });
+        // With a warning, the bar also offers a dry run when this statement can have one (not a TRUNCATE, say).
+        var dryRun = warning is not null && DryRunRefusal(state, sql, out _) is null;
+        Event(new { type = "runCheck", replyTo = id, allRows = warning, dryRun });
     }
 
     /// <summary>

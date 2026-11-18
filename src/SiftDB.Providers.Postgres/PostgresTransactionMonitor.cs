@@ -90,6 +90,11 @@ internal sealed class PostgresTransactionMonitor(NpgsqlConnection conn, Postgres
         return pending is null ? sql : $"{pending}; {sql}";
     }
 
+    /// <summary>For the dry run (PostgresDryRun): where the session stands, and a command sent the way this monitor sends its own,
+    /// with any held guard ending in front of it.</summary>
+    internal string ProtocolStatus => ReadProtocolStatus();
+    internal Task SendAsync(string sql, CancellationToken ct) => Run(sql, ct);
+
     private async Task Run(string sql, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(TakePending(sql), conn);

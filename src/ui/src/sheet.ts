@@ -2,6 +2,7 @@ import type { Bridge, DatabaseSchema } from './bridge';
 import { CompletionResponse, QueryMode, RunTarget, SheetAnalysis, SqlEditor } from './editor';
 import { ResultView, ResultsContext, plural } from './results';
 import { applyIcons, spinner } from './icons';
+import { showMenu } from './menu';
 import { revealSelectedTab, scrollTabsWithWheel } from './tabs';
 
 export type TxState = 'none' | 'open' | 'changed' | 'failed';
@@ -48,7 +49,10 @@ export interface ConnectResult { ok: boolean; schema: DatabaseSchema | null; err
 
 const TEMPLATE = `
   <div class="sheetbar">
-    <button class="run ib ic-go" data-icon="run" disabled aria-label="Run" title="Run the statement under the cursor (F5 or Ctrl+Enter)"></button>
+    <span class="split" role="group" aria-label="Run">
+      <button class="run ib ic-go" data-icon="run" disabled aria-label="Run" title="Run the statement under the cursor (F5 or Ctrl+Enter)"></button>
+      <button class="runMore ib ic-go" data-icon="chevronDown" disabled aria-label="More ways to run" aria-haspopup="menu" title="More ways to run: Dry run (Ctrl+Shift+F5)"></button>
+    </span>
     <button class="cancel ib ic-stop" data-icon="stop" disabled aria-label="Cancel" title="Cancel the running statement (Ctrl+.)"></button>
     <button class="begin ib ic-go" data-icon="begin" disabled aria-label="Begin transaction" title="Begin a transaction. You can also just type BEGIN: the bar follows the server either way."></button>
     <div class="modes" role="group" aria-label="How identifiers are quoted">
@@ -71,6 +75,7 @@ const TEMPLATE = `
     <span class="confirmIcon" aria-hidden="true">⚠</span>
     <span class="confirmText" role="alert"></span>
     <span class="grow"></span>
+    <button class="confirmDry" title="Run it, show the rows it would change, then roll it back (Ctrl+Shift+F5)">Dry run</button>
     <button class="confirmRun danger" title="Run it as it is">Run anyway</button>
     <button class="confirmCancel" title="Don't run it (Esc)">Cancel</button>
   </div>
@@ -117,12 +122,12 @@ export class Sheet {
   private running: ResultView | null = null;
 
   private readonly el: {
-    run: HTMLButtonElement; cancel: HTMLButtonElement; begin: HTMLButtonElement;
+    run: HTMLButtonElement; runMore: HTMLButtonElement; cancel: HTMLButtonElement; begin: HTMLButtonElement;
     modeAssisted: HTMLButtonElement; modeStrict: HTMLButtonElement;
     roChip: HTMLElement; autoChip: HTMLElement;
     txBar: HTMLElement; txIcon: HTMLElement; txLabel: HTMLElement; txDetail: HTMLElement;
     txEnd: HTMLButtonElement; txCommit: HTMLButtonElement; txRollback: HTMLButtonElement;
-    confirmBar: HTMLElement; confirmText: HTMLElement; confirmRun: HTMLButtonElement; confirmCancel: HTMLButtonElement;
+    confirmBar: HTMLElement; confirmText: HTMLElement; confirmDry: HTMLButtonElement; confirmRun: HTMLButtonElement; confirmCancel: HTMLButtonElement;
     editor: HTMLElement; splitter: HTMLElement; msg: HTMLElement; msgIcon: HTMLElement; msgText: HTMLElement; tabs: HTMLElement; results: HTMLElement; empty: HTMLElement;
   };
   private readonly resultsCtx: ResultsContext;
@@ -146,11 +151,11 @@ export class Sheet {
     parent.append(this.root);
     const $ = <T extends HTMLElement = HTMLElement>(selector: string) => this.root.querySelector(selector) as T;
     this.el = {
-      run: $('.run'), cancel: $('.cancel'), begin: $('.begin'), modeAssisted: $('.modeAssisted'), modeStrict: $('.modeStrict'),
+      run: $('.run'), runMore: $('.runMore'), cancel: $('.cancel'), begin: $('.begin'), modeAssisted: $('.modeAssisted'), modeStrict: $('.modeStrict'),
       roChip: $('.rochip'), autoChip: $('.autochip'),
       txBar: $('.txbar'), txIcon: $('.txIcon'), txLabel: $('.txLabel'), txDetail: $('.txDetail'),
       txEnd: $('.txEnd'), txCommit: $('.txCommit'), txRollback: $('.txRollback'),
-      confirmBar: $('.confirmbar'), confirmText: $('.confirmText'), confirmRun: $('.confirmRun'), confirmCancel: $('.confirmCancel'),
+      confirmBar: $('.confirmbar'), confirmText: $('.confirmText'), confirmDry: $('.confirmDry'), confirmRun: $('.confirmRun'), confirmCancel: $('.confirmCancel'),
       editor: $('.editor'), splitter: $('.splitter'), msg: $('.msg'), msgIcon: $('.msgIcon'), msgText: $('.msgText'), tabs: $('.resulttabs'), results: $('.results'), empty: $('.empty'),
     };
     scrollTabsWithWheel(this.el.tabs);
@@ -158,6 +163,8 @@ export class Sheet {
       bridge: ctx.bridge,
       registerQuery: (id, v) => ctx.registerQuery(id, v),
       unregisterQuery: (id) => ctx.unregisterQuery(id),
+      // The user has seen what it does: run it straight away, without asking about a missing WHERE again.
+      runForReal: (sql) => { if (this.connected) void this.startRun(sql); },
       onFinished: (v) => {
         if (this.running !== v) { this.renderResultTabs(); return; }
         this.running = null;
@@ -174,8 +181,9 @@ export class Sheet {
 
     this.editor = new SqlEditor(this.el.editor, this.analyze, {
       run: () => void this.runFromEditor(),
+      dryRun: () => void this.dryRunFromEditor(),
       cancel: () => this.cancel(),
-      runSql: (t) => this.handleTarget(t),
+      runSql: (t, dry) => this.handleTarget(t, dry),
       complete: this.complete,
     }, initialText);
     this.editor.setCursor(cursorLine);
@@ -184,6 +192,14 @@ export class Sheet {
     this.editor.onChange(() => this.textChanged());
 
     this.el.run.onclick = () => void this.runFromEditor();
+    // The ▾ beside Run: the other ways to run the same statement (design section 14, F2), so a dry run is in plain sight.
+    this.el.runMore.onclick = () => {
+      const r = this.el.runMore.getBoundingClientRect();
+      showMenu(r.left, r.bottom + 2, [
+        { label: 'Run', shortcut: 'F5', action: () => void this.runFromEditor() },
+        { label: 'Dry run: run, show what changes, roll back', shortcut: 'Ctrl+Shift+F5', action: () => void this.dryRunFromEditor() },
+      ], 'Ways to run');
+    };
     this.el.cancel.onclick = () => this.cancel();
     this.el.begin.onclick = () => void this.txAction('begin');
     this.el.txEnd.onclick = () => void this.txAction('commit');
@@ -195,9 +211,10 @@ export class Sheet {
     this.initSplitter();
     this.el.modeAssisted.onclick = () => this.setMode('assisted');
     this.el.modeStrict.onclick = () => this.setMode('strict');
-    this.el.confirmRun.onclick = () => this.answerConfirm(true);
-    this.el.confirmCancel.onclick = () => this.answerConfirm(false);
-    this.el.confirmBar.onkeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); this.answerConfirm(false); } };
+    this.el.confirmRun.onclick = () => this.answerConfirm('run');
+    this.el.confirmDry.onclick = () => this.answerConfirm('dry');
+    this.el.confirmCancel.onclick = () => this.answerConfirm('cancel');
+    this.el.confirmBar.onkeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); this.answerConfirm('cancel'); } };
 
     this.setMessage('Not connected. Pick a connection above and press Connect.', 'warning');
     this.updateButtons();
@@ -421,9 +438,14 @@ export class Sheet {
     this.handleTarget(await this.editor.statementToRun());
   }
 
-  private handleTarget(target: RunTarget) {
+  /** Ctrl+Shift+F5: dry-run what F5 would run (design section 14, F2). */
+  async dryRunFromEditor() {
+    this.handleTarget(await this.editor.statementToRun(), true);
+  }
+
+  private handleTarget(target: RunTarget, dry = false) {
     switch (target.kind) {
-      case 'run': void this.runSql(target.sql); break;
+      case 'run': void (dry ? this.startDryRun(target.sql) : this.runSql(target.sql)); break;
       // Nothing ran, so the result on screen is from before: mark it, or its old red error reads as this attempt's outcome.
       case 'blocked': this.setMessage(`not run: ${target.reason}`, 'warning'); this.activeResult?.markStale(); break;
       case 'none': this.setMessage('nothing to run: put the cursor in a statement, or select some text'); break;
@@ -442,14 +464,16 @@ export class Sheet {
     this.hideConfirm();
     const check = await this.ctx.bridge.request({ type: 'checkRun', connectionId: this.connectionId, sql });
     if (check.type === 'error') { this.setMessage(`not run: ${check.message}`, 'error'); return; }
-    if (check.allRows) { this.askConfirm(check.allRows as string, sql); return; }
+    if (check.allRows) { this.askConfirm(check.allRows as string, sql, !!check.dryRun); return; }
     await this.startRun(sql);
   }
 
   /** The SQL waiting for an answer on the red bar, or null while the bar is hidden. */
   private pendingConfirm: string | null = null;
 
-  private askConfirm(warning: string, sql: string) {
+  /** `canDryRun`: the bar offers a dry run too (not for a TRUNCATE, say). */
+  private askConfirm(warning: string, sql: string, canDryRun: boolean) {
+    this.el.confirmDry.hidden = !canDryRun;
     this.pendingConfirm = sql;
     this.setMessage('');
     this.activeResult?.markStale(); // nothing ran: the result on screen is from before
@@ -463,16 +487,26 @@ export class Sheet {
     this.el.confirmBar.hidden = true;
   }
 
-  private answerConfirm(run: boolean) {
+  private answerConfirm(choice: 'run' | 'dry' | 'cancel') {
     const sql = this.pendingConfirm;
     this.hideConfirm();
     this.editor.focus();
     if (sql === null) return;
-    if (run && this.connected) void this.startRun(sql);
-    else this.setMessage('Not run.');
+    if (choice === 'cancel' || !this.connected) this.setMessage('Not run.');
+    else if (choice === 'dry') void this.startDryRun(sql);
+    else void this.startRun(sql);
   }
 
-  private async startRun(sql: string) {
+  /**
+   * A dry run (design section 14, F2): the engine runs the statement, returns the rows it touches and rolls it back.
+   * Refusals (not an UPDATE or DELETE, a read-only connection…) come back as the result's error.
+   */
+  private startDryRun(sql: string) {
+    this.hideConfirm();
+    return this.startRun(sql, true);
+  }
+
+  private async startRun(sql: string, dry = false) {
     this.setMessage('');
     const view = this.viewForRun();
     this.running = view;
@@ -481,7 +515,7 @@ export class Sheet {
     this.updateButtons();
     this.renderResultTabs();
     this.ctx.changed(this); // the sheet's tab shows a spinner while it runs
-    await view.run(this.connectionId, sql);
+    await view.run(this.connectionId, sql, dry);
     this.renderResultTabs(); // its label now names this statement
   }
 
@@ -528,6 +562,7 @@ export class Sheet {
       tab.setAttribute('role', 'tab');
       tab.setAttribute('aria-selected', String(view === this.activeResult));
       tab.dataset.state = view.state;
+      tab.classList.toggle('dryrun', !!view.dry); // striped, like its bar: never taken for a real run's result
       // A failure is visible without opening the tab: a red marker here, and the reason on hover.
       tab.title = view.state === 'error' ? `${view.errorHeadline}\n\n${view.panel.title}` : view.panel.title;
       if (view.state === 'error') tab.setAttribute('aria-label', `Failed: ${view.label}`);
@@ -651,6 +686,7 @@ export class Sheet {
   private updateButtons() {
     const connected = this.connected;
     this.el.run.disabled = !connected || this.running !== null;
+    this.el.runMore.disabled = this.el.run.disabled;
     this.el.cancel.disabled = this.running === null;
     // Begin only means something on a writable session outside a transaction. When it is greyed, the tooltip says why.
     const begin = this.el.begin;

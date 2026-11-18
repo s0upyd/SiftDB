@@ -49,11 +49,15 @@ internal sealed class QuerySession
     /// <param name="onFinished">Called once the reader is closed, whether the query finished, failed or was cancelled: the
     /// session is idle again, so this is where the transaction state is read and the session lock released. It is told the
     /// rows affected and whether the statement failed (or was cancelled) part way.</param>
+    /// <param name="maxRows">Rows sent to the UI at most (0: all). The rest are still read, so the statement runs to the end
+    /// and <see cref="RecordsAffected"/> counts them all, but are not encoded or sent (a dry run shows the first ones).</param>
     public QuerySession(int id, DbDataReader reader, RowBatchWriter writer, CancellationTokenSource cts, Stopwatch sw,
-        Func<long, bool, Task>? onFinished = null)
+        Func<long, bool, Task>? onFinished = null, int maxRows = 0)
     {
-        Id = id; _reader = reader; _writer = writer; _cts = cts; _sw = sw; _onFinished = onFinished;
+        Id = id; _reader = reader; _writer = writer; _cts = cts; _sw = sw; _onFinished = onFinished; _maxRows = maxRows;
     }
+
+    private readonly int _maxRows;
 
     public void Cancel() => _cts.Cancel();
 
@@ -90,6 +94,7 @@ internal sealed class QuerySession
                 var t1 = Stopwatch.GetTimestamp();
                 _readTicks += t1 - t0;
                 if (!more) break;
+                if (_maxRows > 0 && start + _writer.RowCount >= _maxRows) continue; // past the cap: read, not kept
                 _writer.AppendRow(_reader);
                 _appendTicks += Stopwatch.GetTimestamp() - t1;
                 var limit = seq == 0 ? FirstBatchRows : BatchRows;

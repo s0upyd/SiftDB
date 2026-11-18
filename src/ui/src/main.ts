@@ -673,7 +673,10 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'F5') return;
   e.preventDefault(); // never a page reload, dialog or not
-  if (!dialogOpen()) void active?.runFromEditor();
+  if (dialogOpen()) return;
+  // Ctrl+Shift+F5 is a dry run (design section 14, F2): run, show what it changes, roll back.
+  if (e.ctrlKey && e.shiftKey) void active?.dryRunFromEditor();
+  else void active?.runFromEditor();
 });
 
 // The browser's own right-click menu has Refresh (and Back), which reload the page and drop every session: it showed

@@ -7,9 +7,10 @@ public static class ProviderContract
     /// <summary>
     /// Current version of the provider contract. v2 added connection fields, read-only sessions and CannotRunInTransaction;
     /// v3 added GenericTypeOf; v4 added provider settings, the statement guard (ITransactionMonitor.BeforeStatementAsync) and
-    /// Dialect; v5 added ChangesEveryRow and IProviderConnection.DescribeTableAsync (the missing-WHERE warning).
+    /// Dialect; v5 added ChangesEveryRow and IProviderConnection.DescribeTableAsync (the missing-WHERE warning); v6 added
+    /// IProviderConnection.DryRun.
     /// </summary>
-    public const int CurrentVersion = 5;
+    public const int CurrentVersion = 6;
 }
 
 public interface IDatabaseProvider
@@ -104,4 +105,7 @@ public interface IProviderConnection : IAsyncDisposable
     /// Must not fail, and must not disturb the session's transaction. Called only while the session is idle.
     /// </summary>
     Task<TableFacts?> DescribeTableAsync(string? schema, string table, CancellationToken ct) => Task.FromResult<TableFacts?>(null);
+
+    /// <summary>Dry runs of UPDATE and DELETE on this session (design section 14, F2), or null when not offered.</summary>
+    IDryRunSupport? DryRun => null;
 }

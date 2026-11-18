@@ -113,6 +113,9 @@ public sealed partial class EngineHost : IAsyncDisposable
                         root.GetProperty("sql").GetString()!,
                         allRowsChecked: root.TryGetProperty("allRowsChecked", out var allRows) && allRows.ValueKind == JsonValueKind.True);
                     break;
+                case "dryRun":
+                    await DryRunAsync(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("sql").GetString()!);
+                    break;
                 case "checkRun":
                     await CheckRunAsync(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("sql").GetString()!);
                     break;
@@ -412,12 +415,16 @@ public sealed partial class EngineHost : IAsyncDisposable
     /// idle. A failure here must not break the statement that triggered it, so it is reported rather than thrown.
     /// </summary>
     /// <param name="statementUndone">The statement failed and its guard undid it: the transaction carries on as before it.</param>
-    private async Task ObserveTransactionAsync(ConnectionState state, bool statement, long rowsAffected, bool statementUndone = false)
+    /// <param name="keepUnchanged">After a dry run in a transaction that had no changes: it still has none, whatever the
+    /// server's "has written" probe says (a rolled-back savepoint leaves the transaction's id assigned).</param>
+    private async Task ObserveTransactionAsync(ConnectionState state, bool statement, long rowsAffected, bool statementUndone = false,
+        bool keepUnchanged = false)
     {
         try
         {
             var monitor = state.Connection.Transactions;
             var snapshot = await monitor.GetStateAsync(CancellationToken.None);
+            if (keepUnchanged && snapshot.State == TransactionState.Changed) snapshot = snapshot with { State = TransactionState.Open };
             var now = DateTimeOffset.UtcNow;
 
             // Auto-transaction: a statement failed (or was cancelled) in the automatic transaction while nothing had changed

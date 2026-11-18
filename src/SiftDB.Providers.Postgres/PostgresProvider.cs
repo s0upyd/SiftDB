@@ -60,12 +60,26 @@ public sealed class PostgresProvider : IDatabaseProvider
                 throw new ConnectionAuthenticationException(ex.Message, ex);
             throw;
         }
-        return new PostgresConnection(conn, cs, _settings);
+        return new PostgresConnection(conn, cs, _settings, (PostgresSqlParser)Parser);
     }
 
-    private sealed class PostgresConnection(NpgsqlConnection conn, string connectionString, PostgresSettings settings) : IProviderConnection
+    private sealed class PostgresConnection : IProviderConnection
     {
-        public ITransactionMonitor Transactions { get; } = new PostgresTransactionMonitor(conn, settings);
+        private readonly NpgsqlConnection conn;
+        private readonly string connectionString;
+        private readonly PostgresTransactionMonitor _monitor;
+
+        public PostgresConnection(NpgsqlConnection conn, string connectionString, PostgresSettings settings, PostgresSqlParser parser)
+        {
+            this.conn = conn;
+            this.connectionString = connectionString;
+            _monitor = new PostgresTransactionMonitor(conn, settings);
+            DryRun = new PostgresDryRun(conn, parser, _monitor);
+        }
+
+        public ITransactionMonitor Transactions => _monitor;
+
+        public IDryRunSupport DryRun { get; }
 
         // Metadata gets its own connection: this one may be streaming a query or holding an open transaction,
         // and Npgsql allows one command at a time per connection.

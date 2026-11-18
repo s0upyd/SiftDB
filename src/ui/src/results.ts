@@ -1,7 +1,7 @@
 import { BatchMeta, Bridge, BridgeEvent, Column } from './bridge';
 import { toast } from './copy';
 import { ExportFormat, exportText, suggestedName } from './export';
-import { CellRange, Grid, GridTheme, darkTheme, lightTheme } from './grid';
+import { CellRange, CompareView, Grid, GridTheme, darkTheme, lightTheme } from './grid';
 import { setIcon, spinner } from './icons';
 import { ResultStore, decodeBatch } from './store';
 
@@ -51,7 +51,30 @@ export interface ResultsContext {
   unregisterQuery(queryId: number): void;
   /** The statement finished, failed or was cancelled: the sheet can offer Run again and refresh its result tabs. */
   onFinished(view: ResultView): void;
+  /** "Run for real" on a dry run's bar: run the statement it tried, for real this time. */
+  runForReal(sql: string): void;
 }
+
+/** How a dry run's rows are laid out (design section 14, F2), as the engine reports it. */
+interface DryRun {
+  shape: 'beforeAndAfter' | 'afterOnly' | 'deleted';
+  /** Columns in one half: the table's columns. */
+  width: number;
+  /** Rows shown at most; the count of every affected row still comes back. */
+  maxRows: number;
+  /** Which half the grid shows, for an UPDATE with both. */
+  showing: 'before' | 'after';
+}
+
+/** What a dry run cannot undo or hide, said once, on its bar's info mark. */
+const DRY_RUN_CAVEATS = [
+  'A dry run really runs the statement, then rolls it back. Things to know:',
+  '• Triggers fire, and are rolled back with everything else.',
+  '• Sequences (nextval, serial and identity columns) are not rolled back: their numbers are used up.',
+  '• Anything outside the database (dblink, foreign tables, COPY … TO PROGRAM) is not undone.',
+  '• NOTIFY waits for a commit, so nothing is sent.',
+  '• The rows are locked while it runs, as for the real statement.',
+].join('\n');
 
 /** A short tab label from the start of the SQL: whitespace collapsed, clipped. */
 export function sqlLabel(sql: string): string {
@@ -91,6 +114,13 @@ export class ResultView {
   private readonly extraEl = document.createElement('span');
   private readonly toggleEl = document.createElement('button');
   private readonly exportEl = document.createElement('button');
+  /** A dry run's controls: the Before | After switch, the caveats mark and Run for real. */
+  private readonly dryEl = document.createElement('span');
+  private readonly beforeBtn = document.createElement('button');
+  private readonly afterBtn = document.createElement('button');
+  private readonly realBtn = document.createElement('button');
+  /** Set while this tab holds a dry run's result. */
+  dry: DryRun | null = null;
   /** How far an export has got, beside its (then red, stop) icon. */
   private readonly exportPctEl = document.createElement('span');
   /** The export being written, if any. Its button then reads "Cancel export" with how far it has got. */
@@ -135,7 +165,30 @@ export class ResultView {
       if (this.exporting) this.exporting.cancelled = true;
       else void this.export(null);
     };
-    main.append(this.iconEl, text, this.exportEl, this.toggleEl);
+    this.dryEl.className = 'dryctl';
+    const modes = document.createElement('span');
+    modes.className = 'modes';
+    modes.setAttribute('role', 'group');
+    modes.setAttribute('aria-label', 'Show the values');
+    this.beforeBtn.textContent = 'Before';
+    this.beforeBtn.title = 'Show the values as they are now';
+    this.afterBtn.textContent = 'After';
+    this.afterBtn.title = 'Show the values as the statement would leave them';
+    this.beforeBtn.onclick = () => this.showHalf('before');
+    this.afterBtn.onclick = () => this.showHalf('after');
+    modes.append(this.beforeBtn, this.afterBtn);
+    const info = document.createElement('span');
+    info.className = 'dryinfo';
+    info.textContent = 'ⓘ';
+    info.tabIndex = 0;
+    info.title = DRY_RUN_CAVEATS;
+    info.setAttribute('aria-label', DRY_RUN_CAVEATS);
+    this.realBtn.className = 'danger';
+    this.realBtn.textContent = 'Run for real';
+    this.realBtn.title = 'Run the statement now, for real. Nothing from the dry run is reused.';
+    this.realBtn.onclick = () => this.ctx.runForReal(this.sql);
+    this.dryEl.append(modes, info, this.realBtn);
+    main.append(this.iconEl, text, this.dryEl, this.exportEl, this.toggleEl);
     this.detailsEl.className = 'details';
     this.statusEl.append(main, this.detailsEl);
 
@@ -181,13 +234,17 @@ export class ResultView {
     this.setState('error');
   }
 
-  /** Runs `sql` on a session, replacing whatever this tab showed. */
-  async run(connectionId: number, sql: string) {
+  /**
+   * Runs `sql` on a session, replacing whatever this tab showed. `dry`: a dry run (design section 14, F2), which runs it
+   * and rolls it back, showing the rows it would change.
+   */
+  async run(connectionId: number, sql: string, dry = false) {
     if (this.queryId) this.ctx.unregisterQuery(this.queryId); // events for the statement it replaces no longer matter
     this.queryId = 0;
     if (this.exporting) this.exporting.cancelled = true; // its rows are about to be replaced
     this.sql = sql;
-    this.label = sqlLabel(sql);
+    this.label = dry ? `Dry run: ${sqlLabel(sql)}` : sqlLabel(sql);
+    this.dry = null;
     this.panel.title = sql;
     const t0 = performance.now();
     this.m = { ...this.freshMetrics(), t0 };
@@ -204,8 +261,11 @@ export class ResultView {
     this.refreshStats();
 
     this.connectionId = connectionId;
-    // The sheet asked "checkRun" before this, and the user confirmed any missing-WHERE warning (design section 14, F1).
-    const r = await this.ctx.bridge.request({ type: 'execute', connectionId, sql, allRowsChecked: true });
+    // The sheet asked "checkRun" before this, and the user confirmed any missing-WHERE warning (design section 14, F1). A
+    // dry run needs no such check: nothing it does is kept.
+    const r = await this.ctx.bridge.request(dry
+      ? { type: 'dryRun', connectionId, sql }
+      : { type: 'execute', connectionId, sql, allRowsChecked: true });
     if (r.type === 'cancelled') { // cancelled before the database returned anything
       this.done = true;
       this.setState('cancelled');
@@ -224,8 +284,16 @@ export class ResultView {
     this.outstanding = 0; // nothing can be in flight for a query that has only just started
     this.ctx.registerQuery(this.queryId, this);
     this.m.columns = performance.now() - t0;
-    this.columnCount = (r.columns as Column[]).length;
-    this.grid.setStore(this.store, r.columns as Column[]);
+    const columns = r.columns as Column[];
+    if (r.dryRun) {
+      // An UPDATE with both halves opens on "after": what the statement would do.
+      this.dry = { ...(r.dryRun as Omit<DryRun, 'showing'>), showing: 'after' };
+      this.columnCount = this.dry.width;
+      this.grid.setStore(this.store, columns.slice(this.dryBase('after'), this.dryBase('after') + this.dry.width), this.compareView());
+    } else {
+      this.columnCount = columns.length;
+      this.grid.setStore(this.store, columns);
+    }
     this.pump();
   }
 
@@ -294,9 +362,48 @@ export class ResultView {
     }
   }
 
+  /** Where the shown half starts among the result's columns. */
+  private dryBase(half: 'before' | 'after') {
+    return this.dry?.shape === 'beforeAndAfter' && half === 'after' ? this.dry.width : 0;
+  }
+
+  /** The grid's layout for the dry run: the half shown, compared with the other when there is one. */
+  private compareView(): CompareView {
+    const d = this.dry!;
+    const both = d.shape === 'beforeAndAfter';
+    const base = this.dryBase(d.showing);
+    const other = this.dryBase(d.showing === 'after' ? 'before' : 'after');
+    return {
+      base, partner: both ? other : null, deleted: d.shape === 'deleted',
+      labels: d.showing === 'after' ? ['After', 'Before'] : ['Before', 'After'],
+    };
+  }
+
+  private showHalf(half: 'before' | 'after') {
+    if (!this.dry || this.dry.shape !== 'beforeAndAfter' || this.dry.showing === half) return;
+    this.dry.showing = half;
+    this.grid.setView(this.compareView());
+    this.refreshStats();
+  }
+
+  /** A dry run's line: what would happen, and that it did not. */
+  private describeDryRun(took: string): { headline: string; extra: string } {
+    const d = this.dry!;
+    const n = this.rowsAffected ?? this.m.rows;
+    const verb = d.shape === 'deleted' ? 'delete' : 'change';
+    const shown = this.m.rows < n ? ` · showing the first ${this.m.rows.toLocaleString()}` : '';
+    const noBefore = d.shape === 'afterOnly' ? ' · the values before need PostgreSQL 18' : '';
+    return {
+      headline: `Dry run: would ${verb} ${plural(n, 'row')}`,
+      extra: `rolled back, nothing changed${shown}${noBefore} · ${took}`,
+    };
+  }
+
   /** The one line the bar shows: what happened, and the detail beside it. */
   private describe(): { headline: string; extra: string } {
     const took = formatDuration(this.m.ended >= 0 ? this.m.ended : performance.now() - this.m.t0);
+    if (this.dry && this.state === 'complete') return this.describeDryRun(took);
+    if (this.dry && this.state === 'running') return { headline: 'Dry run…', extra: `${plural(this.store.loadedRows, 'row')} so far · ${took}` };
     switch (this.state) {
       case 'running':
         return { headline: 'Running…', extra: `${plural(this.store.loadedRows, 'row')} so far · ${took}` };
@@ -320,6 +427,15 @@ export class ResultView {
     this.statusEl.dataset.state = this.state;
     this.statusEl.hidden = this.state === 'idle';
     this.statusEl.classList.toggle('stale', this.stale);
+    // A dry run's bar is striped, so it is never taken for a real run's.
+    this.statusEl.classList.toggle('dryrun', !!this.dry);
+    this.dryEl.hidden = !this.dry || this.state !== 'complete';
+    if (this.dry) {
+      const both = this.dry.shape === 'beforeAndAfter';
+      (this.beforeBtn.parentElement as HTMLElement).hidden = !both;
+      this.beforeBtn.setAttribute('aria-pressed', String(this.dry.showing === 'before'));
+      this.afterBtn.setAttribute('aria-pressed', String(this.dry.showing === 'after'));
+    }
     this.staleEl.hidden = !this.stale;
     // A failure interrupts: announce it (once: not again when it becomes an earlier run's). Everything else is polite.
     this.statusEl.setAttribute('role', this.state === 'error' && !this.stale ? 'alert' : 'status');

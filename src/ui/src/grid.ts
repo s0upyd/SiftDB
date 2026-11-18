@@ -50,15 +50,26 @@ type Area = 'cell' | 'header' | 'gutter' | 'corner';
 export interface GridTheme {
   bg: string; altBg: string; fg: string; dim: string; headerBg: string; line: string;
   accent: string; sel: string; selIdle: string;
+  /** A dry run (design section 14, F2): a cell that would change (tint and edge mark), a row that would be deleted. */
+  changedBg: string; changed: string; deletedBg: string;
 }
+
+/**
+ * A dry run's result shows one half of its columns at a time (design section 14, F2). Displayed column c is result column
+ * c + base; with a partner, c + partner is the same column's other value (before, or after), and a cell whose two values
+ * differ is marked. `labels` names the two halves for the tooltip: [shown, other].
+ */
+export interface CompareView { base: number; partner: number | null; deleted: boolean; labels: [string, string] }
 
 export const lightTheme: GridTheme = {
   bg: '#ffffff', altBg: '#f6f8fa', fg: '#1f2328', dim: '#8c959f', headerBg: '#eaeef2', line: '#d0d7de',
   accent: '#0969da', sel: 'rgba(9,105,218,0.16)', selIdle: 'rgba(110,119,129,0.18)',
+  changedBg: '#fff8c5', changed: '#9a6700', deletedBg: '#ffebe9',
 };
 export const darkTheme: GridTheme = {
   bg: '#0d1117', altBg: '#151b23', fg: '#e6edf3', dim: '#6e7681', headerBg: '#1c232c', line: '#30363d',
   accent: '#4493f8', sel: 'rgba(68,147,248,0.26)', selIdle: 'rgba(139,148,158,0.22)',
+  changedBg: '#3a2f12', changed: '#d29922', deletedBg: '#3a161a',
 };
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -102,6 +113,10 @@ export class Grid {
   private totalW = GUTTER_W;
   private store = new ResultStore();
   private rowHint = 0;
+  /** Set for a dry run's result: which half of its columns is shown, and what to compare it with. */
+  private view: CompareView | null = null;
+  /** The result column a displayed column reads from. */
+  private src(c: number) { return c + (this.view?.base ?? 0); }
   private scheduled = false;
   private drawTimes: number[] = [];
   theme: GridTheme = lightTheme;
@@ -222,7 +237,7 @@ export class Grid {
     for (let r = 0; r < rows && widest < cap; r++) {
       const batch = this.store.batchFor(r);
       if (!batch) break;
-      const v = cellText(batch, col, r - batch.startRow);
+      const v = cellText(batch, this.src(col), r - batch.startRow);
       const w = v === null ? nullW : ctx.measureText(v.length > maxChars ? v.slice(0, maxChars) : v).width;
       if (w > widest) widest = w;
     }
@@ -326,7 +341,7 @@ export class Grid {
   /** The cell's text, null for NULL, undefined when its row has not arrived yet. */
   private valueAt(row: number, col: number): string | null | undefined {
     const b = this.store.batchFor(row);
-    return b ? cellText(b, col, row - b.startRow) : undefined;
+    return b ? cellText(b, this.src(col), row - b.startRow) : undefined;
   }
 
   private scrollIntoView(c: Cell, mode: Selection['mode']) {
@@ -529,12 +544,12 @@ export class Grid {
    * still arriving are not part of it: the range is fixed when it is made.
    */
   exportSource(r?: CellRange): ExportSource & { rows: number } {
-    const store = this.store, columns = this.columns;
+    const store = this.store, columns = this.columns, base = this.view?.base ?? 0;
     const range = r ?? { r0: 0, r1: store.loadedRows - 1, c0: 0, c1: columns.length - 1 };
     const r1 = Math.min(range.r1, store.loadedRows - 1);
     return {
       columns, r0: range.r0, r1, c0: range.c0, c1: range.c1, rows: Math.max(0, r1 - range.r0 + 1),
-      cell: (row, col) => { const b = store.batchFor(row)!; return cellText(b, col, row - b.startRow); },
+      cell: (row, col) => { const b = store.batchFor(row)!; return cellText(b, col + base, row - b.startRow); },
     };
   }
 
@@ -604,7 +619,11 @@ export class Grid {
 
   private showTip(cell: Cell, x: number, y: number) {
     const v = this.valueAt(cell.row, cell.col);
-    if (v === undefined || v === null) return;
+    if (v === undefined) return;
+    // In a dry run, a value that would change shows both: before and after.
+    const other = this.otherValue(cell);
+    if (other !== undefined && other !== v) { this.placeTip(this.compareTip(v, other), x, y); return; }
+    if (v === null) return;
     this.ctx.font = FONT;
     const cut = v.includes('\n') || this.fitText(v, this.colWidth(cell.col) - PAD * 2) !== v;
     if (!cut) return;
@@ -621,6 +640,38 @@ export class Grid {
       more.textContent = `${v.length.toLocaleString()} characters. Double-click to see all of it.`;
       tip.append(more);
     }
+    this.placeTip(tip, x, y);
+  }
+
+  /** In a dry run, the same cell's other value (before, or after); undefined when there is nothing to compare. */
+  private otherValue(cell: Cell): string | null | undefined {
+    const view = this.view;
+    if (!view || view.partner === null) return undefined;
+    const b = this.store.batchFor(cell.row);
+    return b ? cellText(b, cell.col + view.partner, cell.row - b.startRow) : undefined;
+  }
+
+  /** "Before: 10" above "After: 11", whichever of the two is shown. */
+  private compareTip(shown: string | null, other: string | null): HTMLDivElement {
+    const tip = document.createElement('div');
+    tip.className = 'gridtip';
+    tip.setAttribute('role', 'tooltip');
+    const [shownLabel, otherLabel] = this.view!.labels;
+    const line = (label: string, v: string | null) => {
+      const row = document.createElement('div');
+      row.className = 'tiptext';
+      const name = document.createElement('strong');
+      name.textContent = `${label}: `;
+      const half = TIP_CHARS / 2;
+      row.append(name, v === null ? 'NULL' : v.length > half ? v.slice(0, half) + ELLIPSIS : v);
+      return row;
+    };
+    const lines = [line(shownLabel, shown), line(otherLabel, other)];
+    tip.append(...(shownLabel === 'Before' ? lines : lines.reverse()));
+    return tip;
+  }
+
+  private placeTip(tip: HTMLDivElement, x: number, y: number) {
     document.body.append(tip);
     const r = tip.getBoundingClientRect();
     tip.style.left = `${x + 12 + r.width > window.innerWidth - 4 ? Math.max(4, x - 12 - r.width) : x + 12}px`;
@@ -637,9 +688,11 @@ export class Grid {
 
   // ---- the result ---------------------------------------------------------------------------------------------
 
-  setStore(store: ResultStore, columns: Column[]) {
+  /** `view`: a dry run's layout (see CompareView), or none. */
+  setStore(store: ResultStore, columns: Column[], view: CompareView | null = null) {
     this.store = store;
     this.columns = columns;
+    this.view = view;
     this.stylersVersion = -1;
     this.manual = columns.map(() => false);
     this.fitted = false;
@@ -651,6 +704,13 @@ export class Grid {
     this.rowHint = 0;
     this.wrap.scrollTop = 0;
     this.wrap.scrollLeft = 0;
+    this.invalidate();
+  }
+
+  /** Switches a dry run between showing the values before and after. Widths and the selection stay. */
+  setView(view: CompareView) {
+    this.view = view;
+    this.hideTip();
     this.invalidate();
   }
 
@@ -741,13 +801,26 @@ export class Grid {
         ctx.clip();
         const right = this.columns[c].kind !== Kind.Text;
         ctx.textAlign = right ? 'right' : 'left';
-        const value = cellText(batch, c, local);
+        const value = cellText(batch, this.src(c), local);
         // A styled cell carries its own background and text colour, so it reads the same in either theme.
         const style = this.stylers[c]?.(value) ?? null;
         if (style) {
           ctx.fillStyle = style.background;
           ctx.fillRect(x, y, cw, ROW_H);
         }
+        // A dry run: a row that would go is tinted red; a value that would change is tinted amber with a mark on its
+        // left edge, which also tells the two apart without colour. Drawn over any styling: here the change is the point.
+        const view = this.view;
+        if (view?.deleted) {
+          ctx.fillStyle = th.deletedBg;
+          ctx.fillRect(x, y, cw, ROW_H);
+        } else if (view && view.partner !== null && cellText(batch, c + view.partner, local) !== value) {
+          ctx.fillStyle = th.changedBg;
+          ctx.fillRect(x, y, cw, ROW_H);
+          ctx.fillStyle = th.changed;
+          ctx.fillRect(x, y + 3, 3, ROW_H - 6);
+        }
+        ctx.fillStyle = th.fg;
         if (value === null) {
           // NULL is a value of its own: dim and italic so it can never be mistaken for the text "NULL", 0 or ''.
           ctx.fillStyle = style?.text ?? th.dim;

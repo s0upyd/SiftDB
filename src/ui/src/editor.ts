@@ -1,3 +1,4 @@
+import { showMenu } from './menu';
 import { monaco } from './monaco';
 
 export type QueryMode = 'assisted' | 'strict';
@@ -62,8 +63,10 @@ export interface EditorCallbacks {
   run(): void;
   /** Ctrl+. */
   cancel(): void;
-  /** The ▶ in the margin. */
-  runSql(target: RunTarget): void;
+  /** Ctrl+Shift+F5: dry-run the statement F5 would run (design section 14, F2). */
+  dryRun(): void;
+  /** The ▶ in the margin (a click runs; its right-click menu can dry-run). */
+  runSql(target: RunTarget, dry?: boolean): void;
   /** Schema-aware suggestions. Answered by the engine, which owns the dialect and the schema cache. */
   complete: Complete;
 }
@@ -217,10 +220,33 @@ export class SqlEditor {
 
     this.editor.onDidChangeModelContent(() => this.schedule());
     this.editor.onDidChangeCursorSelection(() => this.schedule());
+    // Dry run (design section 14, F2): an action rather than a bare command, so it is in the editor's right-click menu and
+    // the F1 palette with its shortcut shown.
+    this.editor.addAction({
+      id: 'siftdb.dryRun',
+      label: 'Dry run statement (run it, show what it changes, roll back)',
+      keybindings: [KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.F5],
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 0,
+      precondition: mine,
+      run: () => cb.dryRun(),
+    });
+
     this.editor.onMouseDown((e) => {
-      if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position) {
+      if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position && e.event.leftButton) {
         void this.runStatementOnLine(e.target.position.lineNumber);
       }
+    });
+    // Right-clicking a ▶ offers Run and Dry run for that statement. Monaco has no menu of its own on the glyph margin.
+    this.editor.onContextMenu((e) => {
+      if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN || !e.target.position) return;
+      const line = e.target.position.lineNumber;
+      if (!this.model.getLineDecorations(line).some((d) => d.options.glyphMarginClassName === 'run-glyph')) return; // no ▶ here
+      const { posx, posy } = e.event;
+      showMenu(posx, posy, [
+        { label: 'Run statement', shortcut: 'F5', action: () => void this.runStatementOnLine(line) },
+        { label: 'Dry run statement', shortcut: 'Ctrl+Shift+F5', action: () => void this.runStatementOnLine(line, true) },
+      ], 'Statement actions');
     });
   }
 
@@ -355,7 +381,7 @@ export class SqlEditor {
       const line = at(s.start).lineNumber;
       return {
         range: new monaco.Range(line, 1, line, 1),
-        options: { glyphMarginClassName: 'run-glyph', glyphMarginHoverMessage: { value: 'Run this statement' } },
+        options: { glyphMarginClassName: 'run-glyph', glyphMarginHoverMessage: { value: 'Run this statement. Right-click for a dry run.' } },
       };
     });
     const r = a.pick.reason;
@@ -398,7 +424,7 @@ export class SqlEditor {
     monaco.editor.setModelMarkers(m, MARKER_OWNER, markers);
   }
 
-  private async runStatementOnLine(line: number) {
+  private async runStatementOnLine(line: number, dry = false) {
     const { text, start, end } = this.snapshot();
     const first = await this.analyze(text, start, end, this.mode);
     if (!first) return;
@@ -406,6 +432,6 @@ export class SqlEditor {
     if (!s) return;
     // Ask again with that statement selected, so the engine prepares exactly it (corrections, blocking).
     const second = await this.analyze(text, s.start, s.start + s.length, this.mode);
-    this.cb.runSql(this.toTarget(second));
+    this.cb.runSql(this.toTarget(second), dry);
   }
 }

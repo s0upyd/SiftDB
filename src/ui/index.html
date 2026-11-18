@@ -43,6 +43,11 @@
     /* A downloaded update, waiting for a restart: the one accent-filled button, so it is noticed but never in the way. */
     /* Toolbar icon buttons: square, the icon in one colour that says what the action does (applyIcons in icons.ts). */
     button.ib { padding: 4px 6px; display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
+    /* A split button: the action, and a narrow ▾ beside it for the other ways to do it (Run | Dry run). One shape. */
+    .split { display: inline-flex; }
+    .split > button:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+    .split > button + button { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-width: 0; padding: 4px 3px; }
+    .split > button + button svg { width: 11px; height: 11px; }
     .ticon { display: block; flex: none; }
     .ic-go { color: var(--tx-open); }        /* run, begin, end */
     .ic-commit { color: var(--tx-changed); } /* commit: amber, like changes pending */
@@ -278,6 +283,16 @@
                  border: 1px solid var(--line); border-radius: 9px; color: var(--fg); background: var(--bg); vertical-align: 1px; }
     .status.stale .statusIcon, .status.stale .headline, .status.stale .extra { opacity: 0.6; }
     .status.stale[data-state="error"] { background: var(--panel); }
+    /* A dry run's result (design section 14, F2): striped amber, on its bar and its tab, so it is never taken for a real
+       run's. Its controls: Before | After, the caveats mark, Run for real. */
+    .status.dryrun, .rtab.dryrun {
+      background-image: repeating-linear-gradient(135deg, var(--tx-changed-bg) 0 10px, transparent 10px 20px); }
+    .status.dryrun[data-state="complete"] { border-left-color: var(--tx-changed); }
+    .status.dryrun[data-state="complete"] .statusIcon { color: var(--tx-changed); }
+    .dryctl { display: flex; align-items: center; gap: 8px; flex: none; }
+    .dryctl .modes button { padding: 1px 9px; }
+    .dryinfo { cursor: help; color: var(--tx-changed); font-size: 15px; line-height: 20px; }
+    .dryctl button.danger { padding: 1px 10px; }
     @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 
