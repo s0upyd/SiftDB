@@ -2,7 +2,7 @@
 
 What changed in each SiftDB release. Generated from the commit messages by git-cliff (see cliff.toml); do not edit it by hand.
 
-## 0.2.0-beta.1 - 2026-11-18
+## 0.2.0 - 2026-11-18
 
 ### Highlights
 
