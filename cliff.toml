@@ -7,7 +7,8 @@
 #   feat: ...          Highlights          perf: ... / feat(ui): ... / fix(ui): ...   Improvements
 #   fix: ...           Fixes               type!: ... (anything with !)               Breaking changes, at the top
 #   refactor, test, docs, chore, build, ci, style: not shown.
-# A "Try-it: <command id>" footer becomes a Try it link that runs that command in the app.
+# A "Try-it: <command id>" footer becomes a Try it link that runs that command in the app. Only conventional commits
+# have footers (git-cliff leaves the field out for the others), so the template asks whether a commit has any first.
 # Commits that follow no convention (all of them before the rule) are shown as Other changes, so none is lost.
 
 [changelog]
@@ -27,7 +28,7 @@ body = """
 ### {{ group | striptags | trim }}
 {% for commit in commits %}
 - {{ commit.message | split(pat="\n") | first | trim | upper_first }}\
-{% for footer in commit.footers %}{% if footer.token == "Try-it" %} ([Try it](command:{{ footer.value | trim }})){% endif %}{% endfor %}\
+{% if commit.footers is defined %}{% for footer in commit.footers %}{% if footer.token == "Try-it" %} ([Try it](command:{{ footer.value | trim }})){% endif %}{% endfor %}{% endif %}\
 {% endfor %}
 {% endfor %}\n
 """
