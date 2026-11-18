@@ -32,6 +32,8 @@ export interface SheetAnalysis {
   };
   corrections: Correction[];
   issues: Issue[];
+  /** Quick fixes with no problem behind them, so no squiggle: expanding a * (design section 14, F10). */
+  actions?: { start: number; length: number; text: string; title: string }[];
 }
 
 export type Analyze = (text: string, selectionStart: number, selectionEnd: number, mode: QueryMode) => Promise<SheetAnalysis | null>;
@@ -76,7 +78,8 @@ export interface EditorCallbacks {
 const ANALYZE_DELAY_MS = 120;
 const MARKER_OWNER = 'siftdb';
 
-interface Fix { start: number; end: number; text: string; title: string }
+/** `optional`: an offer, not the fix for a problem (expanding a *), so it is not the one Alt+Enter picks first. */
+interface Fix { start: number; end: number; text: string; title: string; optional?: boolean }
 
 /** Monaco's completion and quick-fix providers are global to a language. With several editors on the page they must be
  * registered once and route by model, or every suggestion would appear once per open sheet. */
@@ -131,7 +134,7 @@ function ensureProviders() {
         return {
           title: f.title,
           kind: 'quickfix',
-          isPreferred: true,
+          isPreferred: !f.optional,
           edit: {
             edits: [{
               resource: model.uri,
@@ -461,6 +464,8 @@ export class SqlEditor {
         endLineNumber: range.endLineNumber, endColumn: range.endColumn });
       for (const fix of i.fixes ?? []) this.fixes.push({ start: i.start, end: i.start + i.length, text: fix, title: `Use ${fix}` });
     }
+    // Offers the lightbulb shows where the cursor is, with nothing marked in the text.
+    for (const x of a.actions ?? []) this.fixes.push({ start: x.start, end: x.start + x.length, text: x.text, title: x.title, optional: true });
 
     this.decorations.set(items);
     monaco.editor.setModelMarkers(m, MARKER_OWNER, markers);

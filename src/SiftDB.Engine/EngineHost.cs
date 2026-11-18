@@ -242,6 +242,11 @@ public sealed partial class EngineHost : IAsyncDisposable
                 start = i.Start, length = i.Length, code = i.Code, severity = i.Severity, message = i.Message, fixText = i.FixText,
                 fixes = i.AllFixes,
             }),
+            // Quick fixes with no problem behind them (no squiggle): expanding a * (design section 14, F10).
+            actions = state.Schema is { } s2
+                ? StarExpander.Find(s2, parser, state.Provider.Identifiers, text, CurrentSettings.Format)
+                    .Select(a => new { start = a.Start, length = a.Length, text = a.Text, title = a.Title })
+                : [],
         });
     }
 
