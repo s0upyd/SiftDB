@@ -5,7 +5,9 @@
 # release (anything with "!" bumps major, any feat minor, anything else patch), or chosen with "bump". The workflow
 # writes the notes and CHANGELOG.md, commits CHANGELOG.md and tags that commit, builds (the app bundles CHANGELOG.md for
 # What's New), and publishes. If nothing user-visible has changed since the last release it stops and says so.
-# The beta channel gets X.Y.Z-beta.N. Pushing a tag by hand (v0.2.0, v0.2.0-beta.1) still releases that tag.
+# The beta channel gets X.Y.Z-beta.N, with the changes since the last release of either kind; a stable release has
+# everything since the last stable one, its betas' changes included. Pushing a tag by hand (v0.2.0, v0.2.0-beta.1) still
+# releases that tag.
 # Installed copies find new releases here by themselves (src/SiftDB.Host/Updater.cs).
 name: Release
 
@@ -71,7 +73,12 @@ jobs:
           $exe = Join-Path $tools 'node_modules/git-cliff-windows-x64/bin/git-cliff.exe'
           if (-not (Test-Path $exe)) { throw "git-cliff is not where it should be: $exe" }
           & $exe --version
-          function Cliff { & $exe @args; if ($LASTEXITCODE -ne 0) { throw "git-cliff failed" } }
+          # A stable release covers everything since the last stable one: beta tags in between are passed over (they are
+          # pre-releases of it), so its notes and its CHANGELOG.md section hold the betas' changes too. A beta covers what
+          # changed since the last release of either kind.
+          $stableRun = if ('${{ github.event_name }}' -eq 'push') { -not '${{ github.ref_name }}'.Contains('-') } else { '${{ inputs.channel }}' -eq 'stable' }
+          $skipBetas = if ($stableRun) { @('--ignore-tags', '-') } else { @() }
+          function Cliff { & $exe @skipBetas @args; if ($LASTEXITCODE -ne 0) { throw "git-cliff failed" } }
 
           if ('${{ github.event_name }}' -eq 'push') {
             # A tag pushed by hand: release exactly that tag, with its notes.
