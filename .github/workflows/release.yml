@@ -63,7 +63,15 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force artifacts | Out-Null
-          function Cliff { npx --yes $env:GIT_CLIFF @args; if ($LASTEXITCODE -ne 0) { throw "git-cliff failed" } }
+          # git-cliff, pinned, from npm into the runner's temp folder, and its own executable called directly. Not through
+          # npx: npm takes the options written after the package name as its own, so git-cliff never got them.
+          $tools = Join-Path $env:RUNNER_TEMP 'git-cliff'
+          npm install --prefix $tools --no-save --no-audit --no-fund $env:GIT_CLIFF | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "installing git-cliff failed" }
+          $exe = Join-Path $tools 'node_modules/git-cliff-windows-x64/bin/git-cliff.exe'
+          if (-not (Test-Path $exe)) { throw "git-cliff is not where it should be: $exe" }
+          & $exe --version
+          function Cliff { & $exe @args; if ($LASTEXITCODE -ne 0) { throw "git-cliff failed" } }
 
           if ('${{ github.event_name }}' -eq 'push') {
             # A tag pushed by hand: release exactly that tag, with its notes.

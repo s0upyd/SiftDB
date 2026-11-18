@@ -145,13 +145,19 @@ public class EngineTransactionTests
     }
 
     /// <summary>Runs one statement the way the UI does: execute, then fetch until the query completes.</summary>
+    /// <summary>
+    /// Runs a statement to its end and waits for the transaction event that follows it. That event comes from the
+    /// statement's own task once its last row is read, a moment after "complete", so it is waited for by count: there are
+    /// always earlier ones (connecting, Begin), and reading the last one too soon reads the state from before.
+    /// </summary>
     private static async Task Run(EngineHost engine, Capture cap, string sql, int queryId)
     {
+        var before = cap.Of("transaction").Count;
         await engine.HandleCommandAsync(JsonSerializer.Serialize(new { type = "execute", id = 10 + queryId, connectionId = 1, sql }));
         if (cap.Of("error").Any(e => e.TryGetProperty("replyTo", out var r) && r.GetInt32() == 10 + queryId)) return;
         for (var i = 0; i < 20 && !cap.Of("complete").Any(e => e.GetProperty("queryId").GetInt32() == queryId); i++)
             await engine.HandleCommandAsync(JsonSerializer.Serialize(new { type = "fetchBatch", queryId }));
-        await WaitFor(() => cap.Of("transaction").Count > 0, "the transaction event after the statement");
+        await WaitFor(() => cap.Of("transaction").Count > before, "the transaction event after the statement");
     }
 
     private static JsonElement Last(Capture cap) => cap.Of("transaction").Last();
