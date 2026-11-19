@@ -120,11 +120,14 @@ public sealed class PostgresProvider : IDatabaseProvider
             _policy = policy;
             _monitor = new PostgresTransactionMonitor(conn, settings);
             DryRun = new PostgresDryRun(conn, parser, _monitor);
+            Plans = new PostgresPlans(conn);
         }
 
         public ITransactionMonitor Transactions => _monitor;
 
         public IDryRunSupport DryRun { get; }
+
+        public IPlanSupport Plans { get; }
 
         // Metadata gets its own connection: this one may be streaming a query or holding an open transaction,
         // and Npgsql allows one command at a time per connection.

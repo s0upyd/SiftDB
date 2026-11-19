@@ -54,11 +54,29 @@ export interface CompletionResponse {
 
 export type Complete = (text: string, offset: number) => Promise<CompletionResponse | null>;
 
+/**
+ * `sql` is what runs; `source` is the same statement as written in the editor (before Assisted corrections), starting at
+ * `sourceStart`, so a plan can point back at its table references (design section 14, F6).
+ */
 export type RunTarget =
-  | { kind: 'run'; sql: string }
+  | { kind: 'run'; sql: string; source: string; sourceStart: number }
   | { kind: 'blocked'; reason: string } // the engine says it must not run yet (problems in Strict, an ambiguity in Assisted)
   | { kind: 'none' }                    // connected, but nothing sensible under the cursor
   | { kind: 'disconnected' };           // no connection, so no SQL dialect to split with
+
+/** What to do with a statement: run it, dry-run it, or show its plan (estimated, or analysed by running it). */
+export type RunHow = 'run' | 'dry' | 'explain' | 'analyze';
+
+/** Ranges of the editor's text that follow edits (Monaco decorations), for linking a plan to the SQL it came from. */
+export interface TrackedRanges {
+  /** Where range `i` is now, or null if its text was deleted. */
+  rangeOf(i: number): { start: number; end: number } | null;
+  /** The ranges that contain `offset`. */
+  at(offset: number): number[];
+  /** Marks these ranges in the editor (empty clears the marks). */
+  highlight(indices: number[]): void;
+  dispose(): void;
+}
 
 export interface EditorCallbacks {
   /** F5 or Ctrl+Enter. */
@@ -69,8 +87,10 @@ export interface EditorCallbacks {
   dryRun(): void;
   /** Format SQL (design section 14, F7): the statement under the cursor or the selection's, or the whole sheet. */
   format(whole: boolean): void;
-  /** The ▶ in the margin (a click runs; its right-click menu can dry-run). */
-  runSql(target: RunTarget, dry?: boolean): void;
+  /** Ctrl+E: the plan of the statement F5 would run; with `analyze` (Ctrl+Shift+E) it runs and is timed (design section 14, F6). */
+  explain(analyze: boolean): void;
+  /** The ▶ in the margin (a click runs; its right-click menu can dry-run or explain). */
+  runSql(target: RunTarget, how?: RunHow): void;
   /** Schema-aware suggestions. Answered by the engine, which owns the dialect and the schema cache. */
   complete: Complete;
 }
@@ -237,6 +257,26 @@ export class SqlEditor {
       run: () => cb.dryRun(),
     });
 
+    // Visual EXPLAIN (design section 14, F6): Ctrl+E estimates only (nothing runs), Ctrl+Shift+E runs it and times it.
+    this.editor.addAction({
+      id: 'siftdb.explain',
+      label: 'Explain statement (show its plan, nothing runs)',
+      keybindings: [KeyMod.CtrlCmd | KeyCode.KeyE],
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 1,
+      precondition: mine,
+      run: () => cb.explain(false),
+    });
+    this.editor.addAction({
+      id: 'siftdb.explainAnalyze',
+      label: 'Explain analyze statement (run it, time each step, roll back)',
+      keybindings: [KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyE],
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 2,
+      precondition: mine,
+      run: () => cb.explain(true),
+    });
+
     // Format SQL (design section 14, F7). Shift+Alt+F is Monaco's own Format Document, which does nothing here (there is no
     // formatter registered with Monaco): it is taken off and given to SiftDB's, which the engine does.
     monaco.editor.addKeybindingRule({ keybinding: KeyMod.Shift | KeyMod.Alt | KeyCode.KeyF, command: '-editor.action.formatDocument' });
@@ -271,7 +311,9 @@ export class SqlEditor {
       const { posx, posy } = e.event;
       showMenu(posx, posy, [
         { label: 'Run statement', shortcut: 'F5', action: () => void this.runStatementOnLine(line) },
-        { label: 'Dry run statement', shortcut: 'Ctrl+Shift+F5', action: () => void this.runStatementOnLine(line, true) },
+        { label: 'Dry run statement', shortcut: 'Ctrl+Shift+F5', action: () => void this.runStatementOnLine(line, 'dry') },
+        { label: 'Explain statement', shortcut: 'Ctrl+E', action: () => void this.runStatementOnLine(line, 'explain') },
+        { label: 'Explain analyze statement', shortcut: 'Ctrl+Shift+E', action: () => void this.runStatementOnLine(line, 'analyze') },
       ], 'Statement actions');
     });
   }
@@ -310,14 +352,15 @@ export class SqlEditor {
   /** What F5 would run right now. Asks the engine afresh, so it is never a stale answer from before the last keystroke. */
   async statementToRun(): Promise<RunTarget> {
     const { text, start, end } = this.snapshot();
-    return this.toTarget(await this.analyze(text, start, end, this.mode));
+    return this.toTarget(await this.analyze(text, start, end, this.mode), text);
   }
 
-  private toTarget(a: SheetAnalysis | null): RunTarget {
+  /** `text`: what was analysed, so the statement as written can go with it. */
+  private toTarget(a: SheetAnalysis | null, text: string): RunTarget {
     if (!a) return { kind: 'disconnected' };
     if (a.pick.reason === 'none' || a.pick.sql === null) return { kind: 'none' };
     if (a.pick.blocked) return { kind: 'blocked', reason: a.pick.blocked };
-    return { kind: 'run', sql: a.pick.sql };
+    return { kind: 'run', sql: a.pick.sql, source: text.slice(a.pick.start, a.pick.start + a.pick.length), sourceStart: a.pick.start };
   }
 
   // ---- the text, for files and autosave ----------------------------------------------------------------------------
@@ -512,7 +555,7 @@ export class SqlEditor {
     monaco.editor.setModelMarkers(m, MARKER_OWNER, markers);
   }
 
-  private async runStatementOnLine(line: number, dry = false) {
+  private async runStatementOnLine(line: number, how: RunHow = 'run') {
     const { text, start, end } = this.snapshot();
     const first = await this.analyze(text, start, end, this.mode);
     if (!first) return;
@@ -520,6 +563,59 @@ export class SqlEditor {
     if (!s) return;
     // Ask again with that statement selected, so the engine prepares exactly it (corrections, blocking).
     const second = await this.analyze(text, s.start, s.start + s.length, this.mode);
-    this.cb.runSql(this.toTarget(second), dry);
+    this.cb.runSql(this.toTarget(second, text), how);
+  }
+
+  // ---- linking a plan to the SQL (design section 14, F6) ---------------------------------------------------------
+
+  /** The text of [start, start + length), or null when that is past the end. */
+  textAt(start: number, length: number): string | null {
+    const text = this.model.getValue();
+    return start + length <= text.length ? text.slice(start, start + length) : null;
+  }
+
+  /** Selects [start, end), scrolls it into view and gives the editor focus. */
+  select(start: number, end: number) {
+    const a = this.model.getPositionAt(start);
+    const b = this.model.getPositionAt(end);
+    const range = new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column);
+    this.editor.setSelection(range);
+    this.editor.revealRangeInCenterIfOutsideViewport(range);
+    this.editor.focus();
+  }
+
+  /** Follows these ranges through later edits. Nothing shows until `highlight` is asked for. */
+  track(ranges: { start: number; length: number }[]): TrackedRanges {
+    const toRange = (s: number, e: number) => {
+      const a = this.model.getPositionAt(s);
+      const b = this.model.getPositionAt(e);
+      return new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column);
+    };
+    const plain = { stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges };
+    const marked = { ...plain, className: 'plan-link', description: 'plan step' };
+    const collection = this.editor.createDecorationsCollection(ranges.map((r) => ({ range: toRange(r.start, r.start + r.length), options: plain })));
+    const rangeOf = (i: number) => {
+      const r = collection.getRange(i);
+      if (!r || r.isEmpty()) return null;
+      return { start: this.model.getOffsetAt(r.getStartPosition()), end: this.model.getOffsetAt(r.getEndPosition()) };
+    };
+    return {
+      rangeOf,
+      at: (offset) => ranges.map((_, i) => i).filter((i) => { const r = rangeOf(i); return !!r && offset >= r.start && offset < r.end; }),
+      highlight: (indices) => {
+        const now = ranges.map((_, i) => collection.getRange(i));
+        collection.set(now.map((r, i) => ({ range: r ?? new monaco.Range(1, 1, 1, 1), options: indices.includes(i) ? marked : plain })));
+      },
+      dispose: () => collection.clear(),
+    };
+  }
+
+  /** Calls `cb` with the text offset under the mouse, or null when it leaves the text. */
+  onMouseOffset(cb: (offset: number | null) => void) {
+    this.editor.onMouseMove((e) => {
+      const p = e.target.type === monaco.editor.MouseTargetType.CONTENT_TEXT ? e.target.position : null;
+      cb(p ? this.model.getOffsetAt(p) : null);
+    });
+    this.editor.onMouseLeave(() => cb(null));
   }
 }

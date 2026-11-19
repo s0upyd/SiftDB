@@ -340,6 +340,42 @@
     .dryctl .modes button { padding: 1px 9px; }
     .dryinfo { cursor: help; color: var(--tx-changed); font-size: 15px; line-height: 20px; }
     .dryctl button.danger { padding: 1px 10px; }
+    /* A plan (design section 14, F6): the icicle graph or the steps table, with the picked step's details beside it. */
+    .planctl { display: flex; align-items: center; gap: 8px; flex: none; }
+    .planctl button { padding: 1px 9px; }
+    .planbody { flex: 1; min-height: 0; display: flex; }
+    .planmain { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .plangraph { flex: 1; min-height: 0; overflow: auto; position: relative; padding: 0; background: var(--bg); }
+    .plangraph canvas { display: block; }
+    .plangraph canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .plantip { position: absolute; z-index: 5; max-width: 360px; padding: 6px 8px; pointer-events: none; font-size: 12px;
+               background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px;
+               box-shadow: 0 4px 12px var(--vscode-widget-shadow); display: flex; flex-direction: column; gap: 2px; }
+    .plantip strong { font-size: 13px; font-variant-numeric: tabular-nums; }
+    .planlabel { color: var(--dim); overflow-wrap: anywhere; }
+    .planwarn { color: var(--fg); }
+    .plansteps { flex: 1; min-height: 0; overflow: auto; }
+    .plansteps table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    .plansteps th { position: sticky; top: 0; background: var(--panel); text-align: left; font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+    .plansteps td { padding: 3px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+    .plansteps td.step { overflow: hidden; text-overflow: ellipsis; max-width: 0; width: 60%; }
+    .plansteps td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .plansteps tr[data-id] { cursor: pointer; }
+    .plansteps tr[data-id]:hover { background: var(--panel); }
+    .plansteps tr[aria-selected="true"] { background: var(--tab); }
+    .plandetail { flex: none; width: 300px; overflow: auto; border-left: 1px solid var(--line); padding: 8px 10px;
+                  display: flex; flex-direction: column; gap: 4px; font-size: 12px; background: var(--bg); }
+    .plandetail h3 { margin: 0 0 2px; font-size: 13px; }
+    .plandetail strong { font-size: 13px; font-variant-numeric: tabular-nums; }
+    .plandetail .planwarn { margin-top: 4px; padding: 4px 6px; border-left: 3px solid var(--tx-changed); background: var(--tx-changed-bg); }
+    .plandetail button { align-self: flex-start; margin-top: 4px; padding: 2px 10px; }
+    .plandetail details { margin-top: 6px; }
+    .plandetail summary { cursor: pointer; color: var(--dim); }
+    .plandetail dl { margin: 4px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; }
+    .plandetail dt { color: var(--dim); }
+    .plandetail dd { margin: 0; overflow-wrap: anywhere; font-family: Consolas, monospace; }
+    .monaco-editor .plan-link { background: var(--tab); outline: 1px dashed var(--fg); }
+    @media (max-width: 700px) { .plandetail { width: 200px; } }
     @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 

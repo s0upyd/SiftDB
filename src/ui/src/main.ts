@@ -620,6 +620,8 @@ const COMMANDS: Record<string, () => void> = {
   format: () => void active?.format(false),
   formatSheet: () => void active?.format(true),
   dryRun: () => void active?.dryRunFromEditor(),
+  explain: () => void active?.explainFromEditor(false),
+  explainAnalyze: () => void active?.explainFromEditor(true),
   run: () => void active?.runFromEditor(),
   newSheet: () => addSheet(),
   settings: () => void openSettings(),
@@ -735,6 +737,8 @@ window.addEventListener('keydown', (e) => {
     if (key === ',') return handled(() => void openSettings());
   }
   if (e.ctrlKey && e.shiftKey && !e.altKey && key === 's' && active) return handled(() => void saveSheet(active!, true));
+  // Visual EXPLAIN (design section 14, F6): Ctrl+E the plan (nothing runs), Ctrl+Shift+E run it and time each step.
+  if (e.ctrlKey && !e.altKey && key === 'e' && active) return handled(() => void active!.explainFromEditor(e.shiftKey));
   if (e.ctrlKey && !e.altKey && e.key === 'Tab') return handled(() => cycle(e.shiftKey ? -1 : 1));
 
   if (e.ctrlKey && e.shiftKey && active) {

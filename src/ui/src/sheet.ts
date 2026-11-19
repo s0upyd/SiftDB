@@ -1,6 +1,7 @@
 import type { Bridge, DatabaseSchema } from './bridge';
-import { CompletionResponse, QueryMode, RunTarget, SheetAnalysis, SqlEditor } from './editor';
-import { ResultView, ResultsContext, plural } from './results';
+import { CompletionResponse, QueryMode, RunHow, RunTarget, SheetAnalysis, SqlEditor } from './editor';
+import { ResultTab, ResultView, ResultsContext, plural } from './results';
+import { PlanContext, PlanView } from './plan';
 import { applyIcons, spinner } from './icons';
 import { showMenu } from './menu';
 import { revealSelectedTab, scrollTabsWithWheel } from './tabs';
@@ -117,9 +118,9 @@ export class Sheet {
   private visible = false;
 
   private readonly editor: SqlEditor;
-  private results: ResultView[] = [];
-  private activeResult: ResultView | null = null;
-  private running: ResultView | null = null;
+  private results: ResultTab[] = [];
+  private activeResult: ResultTab | null = null;
+  private running: ResultTab | null = null;
 
   private readonly el: {
     run: HTMLButtonElement; runMore: HTMLButtonElement; cancel: HTMLButtonElement; begin: HTMLButtonElement;
@@ -131,6 +132,7 @@ export class Sheet {
     editor: HTMLElement; splitter: HTMLElement; msg: HTMLElement; msgIcon: HTMLElement; msgText: HTMLElement; tabs: HTMLElement; results: HTMLElement; empty: HTMLElement;
   };
   private readonly resultsCtx: ResultsContext;
+  private readonly planCtx: PlanContext;
 
   /** `parent` is where the sheet lives: it is attached before the editor is built, because Monaco measures its container. */
   /** Stable for the sheet's life: names its autosaved text. */
@@ -172,18 +174,15 @@ export class Sheet {
         this.editor.appendStatement(sql);
         void this.startRun(sql, false, true);
       },
-      onFinished: (v) => {
-        if (this.running !== v) { this.renderResultTabs(); return; }
-        this.running = null;
-        const ms = performance.now() - this.runStartedAt;
-        // Mark the tab only if nobody was watching: on screen, the result itself says it finished.
-        if (!this.visible && ms >= FINISHED_MARK_MIN_MS && (v.state === 'complete' || v.state === 'error' || v.state === 'cancelled')) {
-          this.finished = { outcome: v.state, ms };
-        }
-        this.updateButtons();
-        this.renderResultTabs(); // a failed statement is marked on its tab
-        this.ctx.changed(this); // the sheet's tab: the spinner goes, a finished mark may come
-      },
+      onFinished: (v) => this.runFinished(v),
+    };
+    // Plans (design section 14, F6) link their steps to the table references in the editor.
+    this.planCtx = {
+      bridge: ctx.bridge,
+      onFinished: (v) => this.runFinished(v),
+      track: (ranges, source, sourceStart) =>
+        this.editor.textAt(sourceStart, source.length) === source ? this.editor.track(ranges) : null,
+      select: (start, end) => this.editor.select(start, end),
     };
 
     this.editor = new SqlEditor(this.el.editor, this.analyze, {
@@ -191,13 +190,16 @@ export class Sheet {
       dryRun: () => void this.dryRunFromEditor(),
       format: (whole) => void this.format(whole),
       cancel: () => this.cancel(),
-      runSql: (t, dry) => this.handleTarget(t, dry),
+      explain: (analyze) => void this.explainFromEditor(analyze),
+      runSql: (t, how) => this.handleTarget(t, how),
       complete: this.complete,
     }, initialText);
     this.editor.setCursor(cursorLine);
     // A new sheet with only the starter text has nothing worth asking about; with text from elsewhere it does (see restore).
     this.savedVersion = this.editor.versionId();
     this.editor.onChange(() => this.textChanged());
+    // Pointing at a table in the editor marks its steps in the plan on screen.
+    this.editor.onMouseOffset((offset) => { if (this.activeResult instanceof PlanView) this.activeResult.hoverSql(offset); });
 
     this.el.run.onclick = () => void this.runFromEditor();
     // The ▾ beside Run: the other ways to run the same statement (design section 14, F2), so a dry run is in plain sight.
@@ -206,6 +208,8 @@ export class Sheet {
       showMenu(r.left, r.bottom + 2, [
         { label: 'Run', shortcut: 'F5', action: () => void this.runFromEditor() },
         { label: 'Dry run: run, show what changes, roll back', shortcut: 'Ctrl+Shift+F5', action: () => void this.dryRunFromEditor() },
+        { label: 'Explain: show the plan, nothing runs', shortcut: 'Ctrl+E', action: () => void this.explainFromEditor(false) },
+        { label: 'Explain analyze: run, time each step, roll back', shortcut: 'Ctrl+Shift+E', action: () => void this.explainFromEditor(true) },
       ], 'Ways to run');
     };
     this.el.cancel.onclick = () => this.cancel();
@@ -351,7 +355,7 @@ export class Sheet {
     if (!active) return;
     this.finished = null; // seen now (the caller redraws the tabs)
     this.editor.layout();
-    this.activeResult?.grid.invalidate();
+    this.activeResult?.shown();
   }
 
   focusEditor() { this.editor.focus(); }
@@ -421,7 +425,7 @@ export class Sheet {
   }
 
   /** The styling rules changed: redraw the results (each grid re-matches its columns as it draws). */
-  restyle() { this.results.forEach((r) => r.grid.invalidate()); }
+  restyle() { this.results.forEach((r) => r.restyle()); }
 
   setTheme(dark: boolean) {
     this.editor.setTheme(dark);
@@ -476,12 +480,23 @@ export class Sheet {
 
   /** Ctrl+Shift+F5: dry-run what F5 would run (design section 14, F2). */
   async dryRunFromEditor() {
-    this.handleTarget(await this.editor.statementToRun(), true);
+    this.handleTarget(await this.editor.statementToRun(), 'dry');
   }
 
-  private handleTarget(target: RunTarget, dry = false) {
+  /**
+   * Ctrl+E: the plan of what F5 would run, estimates only. Ctrl+Shift+E (`analyze`): it runs, timed, and is rolled back
+   * (design section 14, F6). Either opens in a result tab of the Plan kind.
+   */
+  async explainFromEditor(analyze: boolean) {
+    this.handleTarget(await this.editor.statementToRun(), analyze ? 'analyze' : 'explain');
+  }
+
+  private handleTarget(target: RunTarget, how: RunHow = 'run') {
     switch (target.kind) {
-      case 'run': void (dry ? this.startDryRun(target.sql) : this.runSql(target.sql)); break;
+      case 'run':
+        if (how === 'explain' || how === 'analyze') void this.startPlan(target, how === 'analyze');
+        else void (how === 'dry' ? this.startDryRun(target.sql) : this.runSql(target.sql));
+        break;
       // Nothing ran, so the result on screen is from before: mark it, or its old red error reads as this attempt's outcome.
       case 'blocked': this.setMessage(`not run: ${target.reason}`, 'warning'); this.activeResult?.markStale(); break;
       case 'none': this.setMessage('nothing to run: put the cursor in a statement, or select some text'); break;
@@ -544,16 +559,43 @@ export class Sheet {
 
   /** `newTab`: in a result tab of its own, whether or not the current one is pinned. */
   private async startRun(sql: string, dry = false, newTab = false) {
+    const view = this.viewFor(ResultView, newTab);
+    this.beginRun(view);
+    await view.run(this.connectionId, sql, dry);
+    this.renderResultTabs(); // its label now names this statement
+  }
+
+  /** A plan (design section 14, F6), in the unpinned tab like a run, as a tab of the Plan kind. */
+  private async startPlan(target: RunTarget & { kind: 'run' }, analyze: boolean) {
+    this.hideConfirm();
+    const view = this.viewFor(PlanView);
+    this.beginRun(view);
+    await view.run(this.connectionId, target, analyze);
+    this.renderResultTabs();
+  }
+
+  private beginRun(view: ResultTab) {
     this.setMessage('');
-    const view = this.viewForRun(newTab);
     this.running = view;
     this.runStartedAt = performance.now();
     this.finished = null;
     this.updateButtons();
     this.renderResultTabs();
     this.ctx.changed(this); // the sheet's tab shows a spinner while it runs
-    await view.run(this.connectionId, sql, dry);
-    this.renderResultTabs(); // its label now names this statement
+  }
+
+  /** A run, a dry run or a plan finished, failed or was cancelled. */
+  private runFinished(v: ResultTab) {
+    if (this.running !== v) { this.renderResultTabs(); return; }
+    this.running = null;
+    const ms = performance.now() - this.runStartedAt;
+    // Mark the tab only if nobody was watching: on screen, the result itself says it finished.
+    if (!this.visible && ms >= FINISHED_MARK_MIN_MS && (v.state === 'complete' || v.state === 'error' || v.state === 'cancelled')) {
+      this.finished = { outcome: v.state, ms };
+    }
+    this.updateButtons();
+    this.renderResultTabs(); // a failed statement is marked on its tab
+    this.ctx.changed(this); // the sheet's tab: the spinner goes, a finished mark may come
   }
 
   cancel() {
@@ -562,28 +604,41 @@ export class Sheet {
 
   // ---- result tabs ----------------------------------------------------------------------------------------------
 
-  /** The tab a run fills: the unpinned one, or a new one if every tab is pinned. */
-  private viewForRun(newTab = false): ResultView {
-    let view = newTab ? undefined : this.results.find((r) => !r.pinned);
-    if (!view) {
-      view = new ResultView(this.resultsCtx, this.ctx.isDark());
-      this.results.push(view);
+  /**
+   * The tab a run fills: the unpinned one, or a new one if every tab is pinned. An unpinned tab of the other kind (rows
+   * for a plan, a plan for rows) is replaced where it stands.
+   */
+  private viewFor<T extends ResultView | PlanView>(kind: new (ctx: never, dark: boolean) => T, newTab = false): T {
+    const make = (): T => kind === (PlanView as unknown)
+      ? new PlanView(this.planCtx, this.ctx.isDark()) as T
+      : new ResultView(this.resultsCtx, this.ctx.isDark()) as T;
+    const unpinned = newTab ? undefined : this.results.find((r) => !r.pinned);
+    let view: T;
+    if (unpinned instanceof kind) view = unpinned;
+    else {
+      view = make();
+      if (unpinned) {
+        const at = this.results.indexOf(unpinned);
+        if (this.running === unpinned) this.running = null;
+        unpinned.dispose();
+        this.results.splice(at, 1, view);
+      } else this.results.push(view);
       this.el.results.append(view.panel);
     }
     this.showResult(view);
     return view;
   }
 
-  private showResult(view: ResultView | null) {
+  private showResult(view: ResultTab | null) {
     this.activeResult = view;
     this.results.forEach((r) => { r.panel.hidden = r !== view; });
     this.el.empty.hidden = this.results.length > 0;
-    view?.grid.invalidate();
+    view?.shown();
     this.renderResultTabs();
     this.updateButtons();
   }
 
-  private closeResult(view: ResultView) {
+  private closeResult(view: ResultTab) {
     const at = this.results.indexOf(view);
     view.dispose();
     this.results.splice(at, 1);
@@ -599,7 +654,7 @@ export class Sheet {
       tab.setAttribute('role', 'tab');
       tab.setAttribute('aria-selected', String(view === this.activeResult));
       tab.dataset.state = view.state;
-      tab.classList.toggle('dryrun', !!view.dry); // striped, like its bar: never taken for a real run's result
+      if (view.tabClass) tab.classList.add(view.tabClass); // a dry run's is striped, like its bar: never taken for a real run's result
       // A failure is visible without opening the tab: a red marker here, and the reason on hover.
       tab.title = view.state === 'error' ? `${view.errorHeadline}\n\n${view.panel.title}` : view.panel.title;
       if (view.state === 'error') tab.setAttribute('aria-label', `Failed: ${view.label}`);

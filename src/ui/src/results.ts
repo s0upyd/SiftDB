@@ -45,6 +45,27 @@ const ICON: Record<ResultState, string> = { idle: '', running: '', complete: 'âœ
 /** Whether the timing details are open. Shared, so opening them on one result keeps them open on the next. */
 let detailsOpen = false;
 
+/** What the sheet's strip of result tabs needs from any tab: rows (ResultView) or a plan (PlanView). */
+export interface ResultTab {
+  readonly panel: HTMLElement;
+  label: string;
+  /** A pinned tab survives the next run; an unpinned one is replaced by it. */
+  pinned: boolean;
+  state: ResultState;
+  errorHeadline: string;
+  /** Extra class for its tab in the strip ('dryrun', 'plan'), or ''. */
+  readonly tabClass: string;
+  /** It has just been put on screen. */
+  shown(): void;
+  /** The result styling rules changed. */
+  restyle(): void;
+  setTheme(dark: boolean): void;
+  refreshStats(): void;
+  markStale(): void;
+  cancel(): void;
+  dispose(): void;
+}
+
 /** What a result tab needs from the sheet that owns it. */
 export interface ResultsContext {
   bridge: Bridge;
@@ -105,9 +126,12 @@ export function sqlLabel(sql: string): string {
  * The status bar says what happened in one line (rows and time, or the failure in red). The detailed timings are behind a
  * Details toggle on the same bar.
  */
-export class ResultView {
+export class ResultView implements ResultTab {
   readonly panel = document.createElement('div');
   readonly grid: Grid;
+  get tabClass() { return this.dry ? 'dryrun' : ''; }
+  shown() { this.grid.invalidate(); }
+  restyle() { this.grid.invalidate(); }
   label = '';
   /** A pinned result survives the next run; an unpinned one is replaced by it. */
   pinned = false;

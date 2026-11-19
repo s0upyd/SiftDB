@@ -10,9 +10,10 @@ public static class ProviderContract
     /// Dialect; v5 added ChangesEveryRow and IProviderConnection.DescribeTableAsync (the missing-WHERE warning); v6 added
     /// IProviderConnection.DryRun; v7 added SameMeaning (Format SQL); v8 added ColumnOrigins, PeekRowAsync and CountRowsAsync
     /// (following foreign keys); v9 added DescribeRelationAsync, DescribeSchemaObjectsAsync and ScriptAsync (the schema explorer); v10 added ListDatabasesAsync and
-    /// ConnectionFieldKind.Database (picking the database in the connection form).
+    /// ConnectionFieldKind.Database (picking the database in the connection form); v11 added IProviderConnection.Plans
+    /// (Visual EXPLAIN).
     /// </summary>
-    public const int CurrentVersion = 10;
+    public const int CurrentVersion = 11;
 }
 
 public interface IDatabaseProvider
@@ -126,6 +127,9 @@ public interface IProviderConnection : IAsyncDisposable
 
     /// <summary>Dry runs of UPDATE and DELETE on this session (design section 14, F2), or null when not offered.</summary>
     IDryRunSupport? DryRun => null;
+
+    /// <summary>Query plans on this session (design section 14, F6), or null when not offered.</summary>
+    IPlanSupport? Plans => null;
 
     /// <summary>
     /// Where each column of a result comes from (design section 14, F4), in column order; null for a column that is

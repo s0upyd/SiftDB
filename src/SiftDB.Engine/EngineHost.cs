@@ -146,6 +146,9 @@ public sealed partial class EngineHost : IAsyncDisposable
                 case "dryRun":
                     await DryRunAsync(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("sql").GetString()!);
                     break;
+                case "explain":
+                    await ExplainAsync(id, root.GetProperty("connectionId").GetInt32(), root);
+                    break;
                 case "checkRun":
                     await CheckRunAsync(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("sql").GetString()!);
                     break;
