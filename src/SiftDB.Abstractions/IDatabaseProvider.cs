@@ -9,9 +9,10 @@ public static class ProviderContract
     /// v3 added GenericTypeOf; v4 added provider settings, the statement guard (ITransactionMonitor.BeforeStatementAsync) and
     /// Dialect; v5 added ChangesEveryRow and IProviderConnection.DescribeTableAsync (the missing-WHERE warning); v6 added
     /// IProviderConnection.DryRun; v7 added SameMeaning (Format SQL); v8 added ColumnOrigins, PeekRowAsync and CountRowsAsync
-    /// (following foreign keys); v9 added DescribeRelationAsync, DescribeSchemaObjectsAsync and ScriptAsync (the schema explorer).
+    /// (following foreign keys); v9 added DescribeRelationAsync, DescribeSchemaObjectsAsync and ScriptAsync (the schema explorer); v10 added ListDatabasesAsync and
+    /// ConnectionFieldKind.Database (picking the database in the connection form).
     /// </summary>
-    public const int CurrentVersion = 9;
+    public const int CurrentVersion = 10;
 }
 
 public interface IDatabaseProvider
@@ -90,6 +91,15 @@ public interface IDatabaseProvider
     void ApplySettings(IReadOnlyDictionary<string, string> values) { }
 
     Task<IProviderConnection> OpenAsync(string connectionString, ConnectionOptions options, CancellationToken ct);
+
+    /// <summary>
+    /// The databases this login can open on the server <paramref name="connectionString"/> points at, sorted, for the
+    /// connection form's Database list. The database the string names need not exist: the provider logs in wherever it
+    /// can to ask. Throws <see cref="ConnectionAuthenticationException"/> as <see cref="OpenAsync"/> does. Null when not
+    /// offered, and then the form only takes a typed name.
+    /// </summary>
+    Task<IReadOnlyList<string>?> ListDatabasesAsync(string connectionString, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<string>?>(null);
 }
 
 public interface IProviderConnection : IAsyncDisposable

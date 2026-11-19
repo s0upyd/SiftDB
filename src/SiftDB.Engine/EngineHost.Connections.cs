@@ -109,8 +109,7 @@ public sealed partial class EngineHost
     {
         var input = ReadConnection(root.GetProperty("connection"));
         if (!_providers.TryGetValue(input.Provider, out var p)) { Error(id, $"No provider '{input.Provider}'"); return; }
-        var password = OptionalString(root, "password") ?? PasswordFrom(p, root)
-            ?? (input.Id.Length == 0 ? null : Store.GetPassword(input.Id) ?? _promptedPasswords.GetValueOrDefault(input.Id));
+        var password = FormPassword(p, root, input);
         var sw = Stopwatch.StartNew();
         try
         {
@@ -124,6 +123,31 @@ public sealed partial class EngineHost
         }
         Event(new { type = "ok", replyTo = id, ms = sw.ElapsedMilliseconds });
     }
+
+    /// <summary>
+    /// The server's databases, for the form's Database list: logged in with what the form holds, as Test is. The reply's
+    /// "databases" is null when the provider cannot list them.
+    /// </summary>
+    private async Task ListDatabasesAsync(int id, JsonElement root)
+    {
+        var input = ReadConnection(root.GetProperty("connection"));
+        if (!_providers.TryGetValue(input.Provider, out var p)) { Error(id, $"No provider '{input.Provider}'"); return; }
+        var password = FormPassword(p, root, input);
+        try
+        {
+            var databases = await p.ListDatabasesAsync(p.BuildConnectionString(input.Fields, password), CancellationToken.None);
+            Event(new { type = "databases", replyTo = id, databases });
+        }
+        catch (ConnectionAuthenticationException ex)
+        {
+            Error(id, password is null ? $"The server wants a password. {ex.Message}" : $"The server turned the password down. {ex.Message}");
+        }
+    }
+
+    /// <summary>The password for a test or a database list: typed, else the pasted string's, else the one saved or typed earlier.</summary>
+    private string? FormPassword(IDatabaseProvider p, JsonElement root, SavedConnection input) =>
+        OptionalString(root, "password") ?? PasswordFrom(p, root)
+        ?? (input.Id.Length == 0 ? null : Store.GetPassword(input.Id) ?? _promptedPasswords.GetValueOrDefault(input.Id));
 
     /// <summary>Takes a pasted connection string apart for "Save as…". Its password stays here: only whether it has one goes back.</summary>
     private void ParseConnectionString(int id, string provider, string connectionString)

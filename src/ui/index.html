@@ -137,6 +137,19 @@
     .finline { display: flex; gap: 6px; padding: 0 !important; }
     .finline input { flex: 1; min-width: 0; padding: 4px 6px; }
     .fhelp { color: var(--dim); font-size: 12px; }
+    /* An editable dropdown (the connection form's Database): an input with a list button inside its right edge. */
+    .fcombo { position: relative; min-width: 0; }
+    .fcombo > input { width: 100%; padding: 4px 28px 4px 6px; }
+    .fcombo-toggle { position: absolute; top: 1px; right: 1px; bottom: 1px; width: 26px; padding: 0; border: none;
+                     border-radius: 0 3px 3px 0; background: transparent; color: var(--dim); display: flex; align-items: center; justify-content: center; }
+    .fcombo-toggle:hover { color: var(--fg); background: var(--panel); }
+    .fcombo-list { position: absolute; z-index: 10; top: calc(100% + 2px); left: 0; right: 0; max-height: 200px; overflow: auto;
+                   margin: 0; padding: 4px 0; list-style: none; background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+                   box-shadow: 0 4px 12px var(--vscode-widget-shadow); }
+    .fcombo-list > li[role=option] { padding: 3px 8px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fcombo-list > li[role=option]:hover { background: var(--panel); }
+    .fcombo-list > li[aria-selected=true] { background: var(--accent); color: #fff; }
+    .fcombo-note { padding: 3px 8px; color: var(--dim); }
     .fcheck { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: center; }
     .fcheck .fhelp { grid-column: 2; }
     .mono { font-family: Consolas, monospace; }

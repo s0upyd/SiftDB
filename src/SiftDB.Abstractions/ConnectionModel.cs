@@ -11,6 +11,11 @@ public enum ConnectionFieldKind
     FilePath,
     /// <summary>Extra driver keywords in the driver's own syntax (<c>Timeout=30;Application Name=x</c>).</summary>
     Keywords,
+    /// <summary>
+    /// The database to open on the server. The form puts it after the password, because offering the server's list of
+    /// databases (<see cref="IDatabaseProvider.ListDatabasesAsync"/>) needs a login. A typed name is fine too.
+    /// </summary>
+    Database,
 }
 
 public sealed record ConnectionChoice(string Value, string Label);

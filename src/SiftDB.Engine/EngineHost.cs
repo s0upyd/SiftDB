@@ -78,6 +78,9 @@ public sealed partial class EngineHost : IAsyncDisposable
                 case "testConnection":
                     await TestConnectionAsync(id, root);
                     break;
+                case "listDatabases":
+                    await ListDatabasesAsync(id, root);
+                    break;
                 case "openFile":
                     OpenFile(id, root.GetProperty("path").GetString()!);
                     break;

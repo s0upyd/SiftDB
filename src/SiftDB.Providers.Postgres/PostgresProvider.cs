@@ -56,13 +56,53 @@ public sealed class PostgresProvider : IDatabaseProvider
         catch (Exception ex)
         {
             await conn.DisposeAsync();
-            // 28P01: wrong password. Npgsql's own message when the server wants a password and none was given.
-            if (ex is PostgresException { SqlState: PostgresErrorCodes.InvalidPassword } ||
-                ex is NpgsqlException && ex.Message.StartsWith("No password has been provided", StringComparison.Ordinal))
-                throw new ConnectionAuthenticationException(ex.Message, ex);
+            if (IsPasswordProblem(ex)) throw new ConnectionAuthenticationException(ex.Message, ex);
             throw;
         }
         return new PostgresConnection(conn, cs, _settings, (PostgresSqlParser)Parser, Identifiers);
+    }
+
+    /// <summary>28P01: wrong password. Or Npgsql's own message when the server wants a password and none was given.</summary>
+    private static bool IsPasswordProblem(Exception ex) =>
+        ex is PostgresException { SqlState: PostgresErrorCodes.InvalidPassword } ||
+        ex is NpgsqlException && ex.Message.StartsWith("No password has been provided", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Asks pg_database, logged in to the database the form names if it is there, else to "postgres" or "template1", which
+    /// nearly every server has: the point is that the user need not know a database name yet. Not pooled, so the form
+    /// leaves no idle connections behind.
+    /// </summary>
+    public async Task<IReadOnlyList<string>?> ListDatabasesAsync(string connectionString, CancellationToken ct)
+    {
+        var b = new NpgsqlConnectionStringBuilder(connectionString) { Pooling = false };
+        string?[] candidates = [string.IsNullOrEmpty(b.Database) ? null : b.Database, "postgres", "template1"];
+        Exception? last = null;
+        foreach (var db in candidates.Where(d => d is not null).Distinct())
+        {
+            b.Database = db;
+            await using var conn = new NpgsqlConnection(b.ConnectionString);
+            try
+            {
+                await conn.OpenAsync(ct);
+            }
+            catch (PostgresException ex) when (ex.SqlState is PostgresErrorCodes.InvalidCatalogName or PostgresErrorCodes.InsufficientPrivilege)
+            {
+                last = ex; // no such database, or no CONNECT on it: try the next
+                continue;
+            }
+            catch (Exception ex) when (IsPasswordProblem(ex))
+            {
+                throw new ConnectionAuthenticationException(ex.Message, ex);
+            }
+            await using var cmd = new NpgsqlCommand(
+                "select datname from pg_database where datallowconn and not datistemplate and has_database_privilege(datname, 'CONNECT') order by datname",
+                conn);
+            var names = new List<string>();
+            await using var r = await cmd.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct)) names.Add(r.GetString(0));
+            return names;
+        }
+        throw last!;
     }
 
     private sealed class PostgresConnection : IProviderConnection

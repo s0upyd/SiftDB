@@ -1,10 +1,11 @@
 import type { Bridge } from './bridge';
 import { el, showDialog } from './dialogs';
+import { applyIcons } from './icons';
 
 // Saved connections (design section 8): the list from the engine, the edit form, and the password prompt. The engine owns
 // the store; a password goes from these forms to the engine once and never comes back.
 
-export type FieldKind = 'text' | 'number' | 'choice' | 'filePath' | 'keywords';
+export type FieldKind = 'text' | 'number' | 'choice' | 'filePath' | 'keywords' | 'database';
 
 /** One field of a provider's connection form (mirrors SiftDB.Abstractions ConnectionField). */
 export interface FieldInfo {
@@ -68,16 +69,128 @@ export class ConnectionCatalog {
 
 let fieldSeq = 0;
 
-/** A labelled row: the label is tied to its control, and help text is announced with it. */
-function row(label: string, control: HTMLElement, help?: string | null) {
-  const id = control.id || (control.id = `f${++fieldSeq}`);
-  const wrap = el('div', { className: 'frow' }, el('label', { htmlFor: id, textContent: label }), control);
+/**
+ * A labelled row: the label is tied to its control, and help text is announced with it. `target` is the control when
+ * `shown` is a box around it (an input with a button).
+ */
+function row(label: string, shown: HTMLElement, help?: string | null, target: HTMLElement = shown) {
+  const id = target.id || (target.id = `f${++fieldSeq}`);
+  const wrap = el('div', { className: 'frow' }, el('label', { htmlFor: id, textContent: label }), shown);
   if (help) {
     const h = el('div', { className: 'fhelp', id: `${id}-help`, textContent: help });
-    control.setAttribute('aria-describedby', h.id);
+    target.setAttribute('aria-describedby', h.id);
     wrap.append(h);
   }
   return wrap;
+}
+
+/**
+ * An editable dropdown: a name can be typed, or picked from a list opened with the button, Down or Alt+Down. `load` is
+ * asked every time the list opens (it may answer from a cache); a string answer is shown instead of a list, to say why
+ * there is none. Typing while the list is open narrows it; Enter or a click picks, Escape closes only the list.
+ */
+function comboBox(input: HTMLInputElement, load: () => Promise<string[] | string>, loadingText: string) {
+  const list = el('ul', { className: 'fcombo-list', id: `f${++fieldSeq}-list`, hidden: true });
+  list.setAttribute('role', 'listbox');
+  input.autocomplete = 'off';
+  input.setAttribute('role', 'combobox');
+  input.setAttribute('aria-autocomplete', 'list');
+  input.setAttribute('aria-expanded', 'false');
+  input.setAttribute('aria-controls', list.id);
+  const toggle = el('button', { type: 'button', className: 'fcombo-toggle', tabIndex: -1 });
+  toggle.dataset.icon = 'chevronDown';
+  toggle.setAttribute('aria-label', 'Show the list');
+  applyIcons(el('div', {}, toggle));
+  const box = el('div', { className: 'fcombo' }, input, toggle, list);
+
+  let items: string[] | null = null; // null while loading, or when there is a message instead
+  let shown: string[] = [];
+  let active = -1;
+  let narrowed = false; // only once the user types: opening the list shows all of it
+  let seq = 0; // which opening an answer belongs to
+
+  const isOpen = () => !list.hidden;
+  const note = (text: string) => list.replaceChildren(el('li', { className: 'fcombo-note', textContent: text }));
+  const close = () => {
+    seq++;
+    list.hidden = true;
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
+  };
+  const render = () => {
+    if (!items) return;
+    const q = input.value.trim().toLowerCase();
+    shown = narrowed && q ? items.filter((i) => i.toLowerCase().includes(q)) : items;
+    if (active >= shown.length) active = shown.length - 1;
+    input.removeAttribute('aria-activedescendant');
+    if (!shown.length) { note(items.length ? `None match "${input.value.trim()}".` : 'The list is empty.'); return; }
+    list.replaceChildren(...shown.map((name, i) => {
+      const li = el('li', { id: `${list.id}-${i}`, textContent: name });
+      li.setAttribute('role', 'option');
+      li.setAttribute('aria-selected', String(i === active));
+      li.onmousedown = (e) => e.preventDefault(); // keep the focus in the input
+      li.onclick = () => pick(name);
+      return li;
+    }));
+    if (active >= 0) {
+      const li = list.children[active] as HTMLElement;
+      input.setAttribute('aria-activedescendant', li.id);
+      li.scrollIntoView({ block: 'nearest' });
+    }
+  };
+  const pick = (name: string) => {
+    input.value = name;
+    input.dispatchEvent(new Event('change'));
+    close();
+  };
+  const open = async () => {
+    const mine = ++seq;
+    items = null;
+    narrowed = false;
+    active = -1;
+    note(loadingText);
+    list.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+    const r = await load();
+    if (mine !== seq) return; // closed, or opened again, meanwhile
+    if (typeof r === 'string') { note(r); return; }
+    items = r;
+    active = r.indexOf(input.value.trim());
+    render();
+  };
+
+  toggle.onmousedown = (e) => e.preventDefault();
+  toggle.onclick = () => {
+    if (isOpen()) { close(); return; }
+    input.focus();
+    void open();
+  };
+  input.addEventListener('blur', close);
+  input.addEventListener('input', () => {
+    if (!isOpen() || !items) return;
+    narrowed = true;
+    active = -1;
+    render();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' && (e.altKey || !isOpen())) { e.preventDefault(); if (!isOpen()) void open(); return; }
+    if (!isOpen()) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!shown.length || !items) return;
+      if (e.altKey) { close(); return; }
+      active = Math.max(0, Math.min(shown.length - 1, active + (e.key === 'ArrowDown' ? 1 : -1)));
+      render();
+    } else if (e.key === 'Enter') {
+      e.preventDefault(); // pick, never save the form from an open list
+      if (active >= 0 && items) pick(shown[active]); else close();
+    } else if (e.key === 'Escape') {
+      e.preventDefault(); // closes the list, not the dialog
+      e.stopPropagation();
+      close();
+    }
+  });
+  return box;
 }
 
 function check(label: string, checked: boolean, help?: string) {
@@ -156,6 +269,8 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
 
   // Containers the provider's fields go into, refilled when the type changes.
   const serverFields = el('div', { className: 'fgroup' });
+  // The database goes after the password: the list of the server's databases needs the login above it.
+  const databaseFields = el('div', { className: 'fgroup' });
   const securitySet = el('fieldset', {});
   const advanced = el('details', {});
   const legend = el('legend', {});
@@ -179,6 +294,7 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
     rows.clear();
     for (const f of provider.fields) {
       let control: HTMLInputElement | HTMLSelectElement;
+      let shown: HTMLElement | undefined;
       if (f.kind === 'choice') {
         control = el('select', {}, ...(f.choices ?? []).map((c) => el('option', { value: c.value, textContent: c.label })));
         control.value = values[f.key] ?? f.default ?? f.choices?.[0]?.value ?? '';
@@ -188,16 +304,21 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
         control = el('input', { type: 'text', spellcheck: false, value: values[f.key] ?? (fresh ? f.default ?? '' : ''), placeholder: f.placeholder ?? f.default ?? '' });
         if (f.kind === 'number') control.inputMode = 'numeric';
         if (f.kind === 'keywords' || f.kind === 'filePath') control.classList.add('mono');
+        // (listDatabases is defined further down, with the password it needs; it runs only once the form is up)
+        if (f.kind === 'database') shown = comboBox(control, () => listDatabases(), 'Listing the server\'s databases…');
       }
       if (f.required) control.required = true;
       control.dataset.key = f.key;
       control.addEventListener('change', applyConditions);
       controls.set(f.key, control);
-      rows.set(f.key, row(f.label, control, f.help));
+      rows.set(f.key, row(f.label, shown ?? control, f.help, control));
     }
-    const group = (g: string) => provider.fields.filter((f) => f.group === g).map((f) => rows.get(f.key)!);
+    const group = (g: string, which = (_: FieldInfo) => true) =>
+      provider.fields.filter((f) => f.group === g && which(f)).map((f) => rows.get(f.key)!);
     legend.textContent = provider.displayName;
-    serverFields.replaceChildren(...group('server'));
+    serverFields.replaceChildren(...group('server', (f) => f.kind !== 'database'));
+    databaseFields.replaceChildren(...group('server', (f) => f.kind === 'database'));
+    databaseFields.hidden = !databaseFields.children.length;
     securitySet.replaceChildren(el('legend', { textContent: 'Security' }), ...group('security'));
     securitySet.hidden = securitySet.children.length === 1;
     advanced.replaceChildren(el('summary', { textContent: 'Advanced' }), ...group('advanced'));
@@ -294,6 +415,36 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
     return [...controls.values()].find((c) => c.required && !c.disabled && !c.value.trim()) ?? null;
   };
 
+  // The Database list: asked of the server with what the form holds, as Test does. Kept while the server details and
+  // the password stay the same, so opening the list again is instant; a failure is not kept, so reopening retries.
+  let passwordEdits = 0;
+  password.addEventListener('input', () => { passwordEdits++; });
+  let databases: { key: string; answer: Promise<string[] | string> } | null = null;
+  const listDatabases = (): Promise<string[] | string> => {
+    const isDatabase = (key: string) => provider.fields.find((f) => f.key === key)?.kind === 'database';
+    const gap = [...controls].find(([key, c]) => !isDatabase(key) && c.required && !c.disabled && !c.value.trim());
+    if (gap) {
+      const label = provider.fields.find((f) => f.key === gap[0])?.label ?? gap[0];
+      return Promise.resolve(`Fill in ${label} first, to list the server's databases.`);
+    }
+    const connection = readForm();
+    const server = Object.fromEntries(Object.entries(connection.fields).filter(([key]) => !isDatabase(key)));
+    const key = JSON.stringify([provider.id, server, passwordChanged, passwordEdits]);
+    if (databases?.key !== key) {
+      const answer = bridge.request({ type: 'listDatabases', connection, ...passwordPart() }).then((r): string[] | string => {
+        if (r.type === 'error') {
+          if (databases?.answer === answer) databases = null;
+          return `Could not list the databases: ${r.message}`;
+        }
+        const names = r.databases as string[] | null;
+        if (!names) return `${provider.displayName} connections cannot list their databases here. Type the name.`;
+        return names.length ? names : 'This login cannot open any database on the server.';
+      });
+      databases = { key, answer };
+    }
+    return databases.answer;
+  };
+
   const test = el('button', { type: 'button', textContent: 'Test' });
   test.onclick = async () => {
     const m = missing();
@@ -322,7 +473,7 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
     existing ? el('p', { className: 'dim', textContent: 'Changes apply the next time a sheet connects.' }) : '',
     row('Database type', type, typeHelp),
     row('Name', name, 'Sheet files refer to the connection by this name, so it must be unique.'),
-    el('fieldset', {}, legend, serverFields, row('Password', passwordBox), remember.wrap),
+    el('fieldset', {}, legend, serverFields, row('Password', passwordBox), remember.wrap, databaseFields),
     securitySet,
     el('fieldset', {}, el('legend', { textContent: 'Safety' }), readOnly.wrap, auto.wrap),
     advanced,

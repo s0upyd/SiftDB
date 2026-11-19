@@ -18,8 +18,9 @@ internal static class PostgresConnectionFields
     [
         new(Host, "Host", ConnectionFieldKind.Text, "server", Default: "localhost", Required: true),
         new(Port, "Port", ConnectionFieldKind.Number, "server", Default: "5432"),
-        new(Database, "Database", ConnectionFieldKind.Text, "server", Required: true, Placeholder: "postgres"),
         new(Username, "User", ConnectionFieldKind.Text, "server", Placeholder: "postgres"),
+        new(Database, "Database", ConnectionFieldKind.Database, "server", Required: true, Placeholder: "postgres",
+            Help: "Type a name, or open the list to pick one of the server's databases."),
         new(SslMode, "SSL", ConnectionFieldKind.Choice, "security", Default: "Prefer",
             Help: "Verify CA checks the server's certificate against a CA you trust; Verify full also checks the host name.",
             Choices:

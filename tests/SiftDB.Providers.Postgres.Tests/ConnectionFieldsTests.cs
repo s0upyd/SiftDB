@@ -101,7 +101,8 @@ public class ConnectionFieldsTests
     public void Every_field_has_a_stable_key_and_the_ca_file_depends_on_verification()
     {
         var fields = _pg.ConnectionFields;
-        Assert.Equal(["host", "port", "database", "username", "sslMode", "rootCertificate", "extra"], fields.Select(f => f.Key));
+        Assert.Equal(["host", "port", "username", "database", "sslMode", "rootCertificate", "extra"], fields.Select(f => f.Key));
+        Assert.Equal(ConnectionFieldKind.Database, fields.Single(f => f.Key == "database").Kind); // after the password, with a list
         var ca = fields.Single(f => f.Key == "rootCertificate");
         Assert.Equal("sslMode", ca.EnabledWhen!.Key);
         Assert.Equal(["VerifyCA", "VerifyFull"], ca.EnabledWhen.Values);

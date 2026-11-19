@@ -48,6 +48,11 @@ public sealed class EngineConnectionTests : IAsyncLifetime
             return Task.FromResult<IProviderConnection>(new Conn());
         }
 
+        public Task<IReadOnlyList<string>?> ListDatabasesAsync(string cs, CancellationToken ct) =>
+            cs.EndsWith("password=right", StringComparison.Ordinal)
+                ? Task.FromResult<IReadOnlyList<string>?>(["app", "postgres"])
+                : throw new ConnectionAuthenticationException("password authentication failed", new Exception());
+
         private sealed class WholeTextParser : ISqlParser
         {
             public IReadOnlyList<SqlToken> Tokenize(string sql) => [];
@@ -252,6 +257,21 @@ public sealed class EngineConnectionTests : IAsyncLifetime
 
         var id = await Save("dev", remember: true, password: "right"); // editing a saved one: its saved password is used
         Assert.Equal("ok", Type(await Send(new { type = "testConnection", connection = new { id, provider = "fake", fields = new { host = "h" } } })));
+    }
+
+    [Fact]
+    public async Task Lists_databases_with_the_login_the_form_holds()
+    {
+        var ok = await Send(new { type = "listDatabases", connection = new { provider = "fake", fields = new { host = "h" } }, password = "right" });
+        Assert.Equal("databases", Type(ok));
+        Assert.Equal(["app", "postgres"], ok.GetProperty("databases").EnumerateArray().Select(d => d.GetString()));
+
+        var bad = await Send(new { type = "listDatabases", connection = new { provider = "fake", fields = new { host = "h" } } });
+        Assert.Equal("error", Type(bad));
+        Assert.Contains("wants a password", bad.GetProperty("message").GetString());
+
+        var id = await Save("dev", remember: true, password: "right"); // editing a saved one: its saved password is used
+        Assert.Equal("databases", Type(await Send(new { type = "listDatabases", connection = new { id, provider = "fake", fields = new { host = "h" } } })));
     }
 
     [Fact]
