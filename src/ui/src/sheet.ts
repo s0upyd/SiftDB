@@ -360,6 +360,9 @@ export class Sheet {
 
   focusEditor() { this.editor.focus(); }
 
+  /** This sheet's editor actions, for the command palette (design section 14, F12). */
+  editorActions() { return this.editor.actions(); }
+
   /** "Script as" from the schema tree (design section 14, F13): into the sheet at the cursor, never run. */
   insertScript(sql: string) {
     this.editor.insertBlock(sql);

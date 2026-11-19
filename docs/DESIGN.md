@@ -383,7 +383,7 @@ Agreed 2026-11-17, merged here 2026-11-18. Seventeen features, in suggested buil
 | F9 | Backslash commands (`\d`, `\dt`, …) | Schema model, statement splitter, record view | Not started |
 | F10 | Expand `*` | Identifier resolver, `ScopeAnalyzer`, formatter settings | **Built** (§11); CTEs and subqueries later |
 | F11 | Paste a list as `IN (…)` | Resolver (column types), editor paste handling | Not started |
-| F12 | App-wide command palette | Monaco's existing F1 palette, every feature's commands | Not started |
+| F12 | App-wide command palette | Monaco's existing F1 palette and quick-input service, every feature's commands | Proof of concept (Monaco's widget, window-hosted); registry not started |
 | F13 | Richer schema explorer (keys, constraints, indexes, triggers…) | `SchemaModel`, `PostgresIntrospector`, schema tree (`tree.ts`) | **Built** (§11); *Describe* waits for F9 |
 | F14 | Saved queries as palette commands | Command palette (F12), `SheetFile` header, bind variables (§4) | Not started |
 | F15 | Link templates (open a URL with values from a result) | Command registry (F12), result styling's column matching, host | Not started |
@@ -616,9 +616,15 @@ Features F7–F12 are small and independent, so they can be slotted in at any po
 
 **What exists today:** Monaco's own command palette is already bundled (`F1`, and *Command Palette* in the editor's right-click menu; see `monaco.ts`). It only lists **editor** actions: Monaco's built-ins plus the one SiftDB action registered with `addAction` (*Accept all identifier corrections*). It only works while the editor has focus, and it can't ask for an argument (such as picking a table).
 
-**Plan:** a SiftDB palette at app level that **includes** Monaco's editor actions, rather than a second, competing list.
+**Plan (decided 2026-11-19): use Monaco's own palette, not a SiftDB-drawn one,** because it saves most of the work. Every SiftDB command is registered as a Monaco editor action from the registry (below), so Monaco's list holds SiftDB's commands and its own editor actions together: one list, never two. The second step an action needs comes from Monaco's quick-input service (`IQuickInputService.pick()` / `input()`, the same machinery VS Code's commands use), reached through Monaco's internal modules (`platform/quickinput/common/quickInput.js`, `editor/standalone/browser/standaloneServices.js`); `monaco.ts` already imports internal paths and pins the version, so this is one more path to recheck on a Monaco upgrade. Monaco's palette already lists recently used commands first.
 
-- **Open:** `Ctrl+Shift+P` from anywhere. `F1` and the editor's *Command Palette* menu item open the same palette, so there's only one.
+**Proof of concept (2026-11-19, `palette.ts`, committed as a refactor):** a second `QuickInputService` hosted by the window instead of an editor, as VS Code hosts it in its workbench, so the palette opens **centred over the app from anywhere with no editor focused** and needs no focus change. Its container has the `monaco-component` class, which is where Monaco's theme puts its colour variables for widgets outside an editor. Two findings: Monaco's quick-input keys (Down and Up, Page Down and Up, Ctrl+Home and End, Enter, Esc) are keybindings whose handlers ask Monaco's *global* quick-input service for the open picker, which only knows editor-hosted ones (and Monaco only listens for keybindings inside editors), so the host handles those keys itself and calls the same methods on its picker; and the command list is SiftDB's own (`pick()` over the app's commands plus the active sheet's `getSupportedActions()`), not Monaco's commands provider, which lists only the focused editor's actions. The proof's command list is hand-written in `main.ts`; the registry below replaces it. Shortcut labels for Monaco's actions come from its keybinding service (`lookupKeybinding`); SiftDB's own editor actions are bound under a per-editor context key, so their labels come from the registry instead.
+
+**Accepted trade-offs of Monaco's palette:** it is in Monaco's theme (vs / vs-dark, which the editor already follows), and an item cannot be greyed out, so a command that cannot run now is hidden, or says why in its description. (The earlier trade-offs, needing a focused editor and being drawn at the top of it, went away with the window-hosted widget.) If these become a problem, the registry is the part to keep and only the drawing is replaced (the custom overlay below).
+
+**Left to build:** the registry and the full command list below; second steps for switching the sheet's connection and opening a recent file; the "can it run now?" conditions; the editor's right-click *Command Palette* item opening this palette rather than Monaco's in-editor one; app keys (F5 and the like) ignored while the palette is open; recently used kept across runs (in settings).
+
+- **Open:** `Ctrl+Shift+P` and `F1` from anywhere, and the editor's *Command Palette* menu item.
 - **Contents,** grouped and searchable by name, by description and by shortcut text:
   - **Sheets:** new, open, save, save as, close, next/previous, switch mode Assisted/Strict
   - **Run:** run, run script (`Shift+F5`), cancel, dry run, EXPLAIN / EXPLAIN ANALYZE
@@ -629,10 +635,10 @@ Features F7–F12 are small and independent, so they can be slotted in at any po
   - **Schema:** the backslash commands from feature 9, with pickers, and refresh schema
   - **App:** settings, toggle mini-map, toggle theme, about
 - **Arguments:** an action that needs input opens a **second step** in the same palette (a fuzzy picker for tables, connections, sheets or files) instead of a dialog.
-- **Context-aware:** actions that can't run right now (*Commit* with no transaction, *Dry run* on a SELECT) are hidden, or shown greyed with the reason.
+- **Context-aware:** actions that can't run right now (*Commit* with no transaction, *Dry run* on a SELECT) are hidden, or say why in their description (Monaco cannot grey an item out).
 - **Recently used** actions appear first when the box is empty.
 - **One command registry:** every action is defined once (id, label, description, group, shortcut, "can run now?" condition, optional argument kind, handler). Menus, shortcuts, the palette, and the backslash commands (feature 9) all read from it, so a new feature adds its command in one place and it appears everywhere, with the correct shortcut text. The registry lives in the UI. Commands that need the engine send a bridge command, and the engine keeps the backslash-command definitions so a future TUI gets them too.
-- **Look:** a centred overlay drawn in SiftDB's theme (not Monaco's quick-input widget, which is tied to the editor), operated entirely from the keyboard: arrows, Enter, `Esc`.
+- **Look:** Monaco's quick-input widget for now (see the trade-offs above). The fallback, if it is ever needed: a centred overlay drawn in SiftDB's theme, operated entirely from the keyboard (arrows, Enter, `Esc`), reading the same registry.
 
 ### F13. Richer schema explorer
 

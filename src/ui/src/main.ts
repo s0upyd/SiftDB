@@ -3,6 +3,7 @@ import { ConnectionCatalog, EditResult, askPassword, editConnection } from './co
 import { askSaveChanges } from './dialogs';
 import { applyIcons, lockIcon, spinner } from './icons';
 import { ResultView } from './results';
+import { PaletteCommand, openPalette, pickFrom, shortcutFor } from './palette';
 import { Settings, editSettings } from './settings';
 import { Release, showUpdateNotice, showWhatsNew } from './whatsnew';
 import { FileState, Sheet, SheetContext, Target, TxState, targetKey } from './sheet';
@@ -629,6 +630,38 @@ const COMMANDS: Record<string, () => void> = {
   openFile: () => void openFile(),
 };
 
+// ---- the command palette (design section 14, F12) ---------------------------------------------------------------
+// PROOF OF CONCEPT: a hand-written list, not the command registry F12 plans. It checks that Monaco's quick-input widget,
+// hosted by the window, opens from anywhere and can take a second step.
+
+function paletteCommands(): PaletteCommand[] {
+  const app: PaletteCommand[] = [
+    { id: 'run', label: 'Run statement', shortcut: 'F5', run: COMMANDS.run },
+    { id: 'dryRun', label: 'Dry run statement', shortcut: 'Ctrl+Shift+F5', run: COMMANDS.dryRun },
+    { id: 'explain', label: 'Explain statement', shortcut: 'Ctrl+E', run: COMMANDS.explain },
+    { id: 'explainAnalyze', label: 'Explain analyze statement', shortcut: 'Ctrl+Shift+E', run: COMMANDS.explainAnalyze },
+    { id: 'format', label: 'Format SQL', shortcut: 'Shift+Alt+F', run: COMMANDS.format },
+    { id: 'formatSheet', label: 'Format sheet', run: COMMANDS.formatSheet },
+    { id: 'newSheet', label: 'New sheet', shortcut: 'Ctrl+T', run: COMMANDS.newSheet },
+    { id: 'openFile', label: 'Open file…', shortcut: 'Ctrl+O', run: COMMANDS.openFile },
+    { id: 'settings', label: 'Settings', shortcut: 'Ctrl+,', run: COMMANDS.settings },
+    { id: 'refreshSchema', label: 'Refresh schema', run: COMMANDS.refreshSchema },
+    {
+      // A second step, as VS Code's commands have: pick the sheet in the same widget.
+      id: 'goToSheet', label: 'Go to sheet…', description: 'pick one of the open sheets',
+      run: async () => {
+        const sheet = await pickFrom(sheets.map((s) => ({ label: s.title, description: s === active ? 'current' : undefined, value: s })), 'Pick a sheet');
+        if (sheet) { activate(sheet); sheet.focusEditor(); }
+      },
+    },
+  ];
+  // The active sheet's editor actions (Monaco's own, and SiftDB's registered with it), minus those already listed above.
+  const editor = (active?.editorActions() ?? [])
+    .filter((a) => !a.id.startsWith('siftdb.'))
+    .map((a): PaletteCommand => ({ id: a.id, label: a.label, shortcut: shortcutFor(a.id), description: 'editor', run: a.run }));
+  return [...app, ...editor];
+}
+
 /** Every release this build has notes for, by hand (Settings > About). */
 async function openWhatsNew() {
   const r = await bridge.request({ type: 'whatsNew', version: (await appVersion) ?? '0.0.0', all: true });
@@ -723,11 +756,18 @@ initSideSplitter();
 
 /** A connection form or password prompt is open: the sheets' shortcuts must not act behind it. */
 const dialogOpen = () => document.querySelector('dialog[open]') !== null;
+/** The command palette has the keys while it is open. */
+const paletteOpen = () => !!document.activeElement?.closest('.siftdb-quickinput');
 
 window.addEventListener('keydown', (e) => {
-  if (dialogOpen()) return;
+  if (dialogOpen() || paletteOpen()) return;
   const key = e.key.toLowerCase();
   const handled = (fn: () => void) => { e.preventDefault(); e.stopPropagation(); fn(); };
+
+  // The command palette (design section 14, F12): F1 or Ctrl+Shift+P, from anywhere. Monaco's own F1 never sees the key.
+  if ((e.key === 'F1' && !e.ctrlKey && !e.altKey && !e.shiftKey) || (e.ctrlKey && e.shiftKey && !e.altKey && key === 'p')) {
+    return handled(() => void openPalette(paletteCommands()));
+  }
 
   if (e.ctrlKey && !e.shiftKey && !e.altKey) {
     if (key === 't') return handled(() => addSheet());

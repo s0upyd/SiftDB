@@ -566,6 +566,18 @@ export class SqlEditor {
     this.cb.runSql(this.toTarget(second, text), how);
   }
 
+  /**
+   * Monaco's own editor actions (and SiftDB's registered with addAction), for the app's command palette (design section
+   * 14, F12). Running one gives this editor focus first: they act on it.
+   */
+  actions(): { id: string; label: string; run(): Promise<void> }[] {
+    return this.editor.getSupportedActions().map((a) => ({
+      id: a.id,
+      label: a.label,
+      run: async () => { this.editor.focus(); await a.run(); },
+    }));
+  }
+
   // ---- linking a plan to the SQL (design section 14, F6) ---------------------------------------------------------
 
   /** The text of [start, start + length), or null when that is past the end. */

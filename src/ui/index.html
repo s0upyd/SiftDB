@@ -376,6 +376,10 @@
     .plandetail dd { margin: 0; overflow-wrap: anywhere; font-family: Consolas, monospace; }
     .monaco-editor .plan-link { background: var(--tab); outline: 1px dashed var(--fg); }
     @media (max-width: 700px) { .plandetail { width: 200px; } }
+    /* The command palette's host (design section 14, F12): the whole window, so Monaco's quick-input widget is centred
+       over the app as in VS Code. Only the widget itself takes the mouse. */
+    .siftdb-quickinput { position: fixed; inset: 0; z-index: 1000; pointer-events: none; }
+    .siftdb-quickinput .quick-input-widget { pointer-events: auto; }
     @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 
