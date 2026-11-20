@@ -878,3 +878,9 @@ These may be refined once there's user feedback.
 - **Follow keys, hover peek:** use the sheet's own session when it's idle, so you see your own uncommitted rows. When it's busy, use a short read-only side connection and label the card "(committed data)".
 - **Mini-map:** on by default, but shown only for statements with two or more tables.
 - **Visual EXPLAIN, plan history:** later. Pinning two plans to compare them covers before and after for now.
+
+## 15. Known issues (to fix)
+
+Bugs found in built features. Each one is removed when its fix lands.
+
+- **Mini-map (F5): UNION branches are marked unjoined.** In a statement with three `UNION`ed SELECTs, every table in two of the branches got "No join condition". That is strictly true, but wrong: the branches of a `UNION`, `INTERSECT` or `EXCEPT` are separate queries. Likely cause (not yet confirmed in `JoinMapper`): the branches are read as one scope, so the largest joined group of one branch is taken for the whole query. Fix: make each branch its own group or scope, and only warn about missing joins within a branch.
