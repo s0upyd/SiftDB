@@ -111,6 +111,10 @@ public sealed partial class EngineHost : IAsyncDisposable
                 case "recent":
                     Recent(id);
                     break;
+                case "cancelOther":
+                    await CancelOtherAsync(id, root.GetProperty("connectionId").GetInt32(), root.GetProperty("pid").GetInt32(),
+                        terminate: root.TryGetProperty("terminate", out var terminate) && terminate.ValueKind == JsonValueKind.True);
+                    break;
                 case "rememberCommand":
                     RememberCommand(id, root.GetProperty("commandId").GetString()!);
                     break;
@@ -217,6 +221,7 @@ public sealed partial class EngineHost : IAsyncDisposable
         var auto = autoTransaction && !options.ReadOnly;
         var state = new ConnectionState(connId, p, conn) { SavedId = savedId, ReadOnly = options.ReadOnly, AutoTransaction = auto };
         _connections[connId] = state;
+        if (conn.Locks is not null) EnsureLockWatch(); // who's blocking me (design section 14, F3)
         Event(new { type = "connected", replyTo = id, connectionId = connId, savedId, readOnly = options.ReadOnly, autoTransaction = auto });
         await state.SessionLock.WaitAsync();
         try { await ObserveTransactionAsync(state, statement: false, rowsAffected: -1); }
@@ -602,6 +607,7 @@ public sealed partial class EngineHost : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        StopLockWatch();
         // Every session's statement first, including one not answered yet (waiting for a lock, say): disposing a connection
         // waits for its command, and a command waiting for a lock that another of these sessions holds would never end.
         foreach (var c in _connections.Values) CancelCurrent(c);
@@ -643,5 +649,8 @@ public sealed partial class EngineHost : IAsyncDisposable
 
         /// <summary>The running statement started in an automatic transaction with no changes: if it fails, roll back.</summary>
         public bool ResetIfItFails { get; set; }
+
+        /// <summary>Who's blocking me (design section 14, F3): what the lock watcher last saw and told the UI.</summary>
+        public LockWatchState LockWatch { get; } = new();
     }
 }

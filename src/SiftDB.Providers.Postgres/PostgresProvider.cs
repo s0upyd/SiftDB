@@ -121,9 +121,13 @@ public sealed class PostgresProvider : IDatabaseProvider
             _monitor = new PostgresTransactionMonitor(conn, settings);
             DryRun = new PostgresDryRun(conn, parser, _monitor);
             Plans = new PostgresPlans(conn);
+            // The backend's process id is known from the start-up handshake; reading it never touches the session.
+            Locks = new PostgresLocks(connectionString, () => conn.ProcessID);
         }
 
         public ITransactionMonitor Transactions => _monitor;
+
+        public ILockInspector Locks { get; }
 
         public IDryRunSupport DryRun { get; }
 

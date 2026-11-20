@@ -261,6 +261,24 @@
     .txIcon { font-size: 15px; width: 1.2em; text-align: center; }
     .txDetail { color: var(--dim); }
     .txbar .grow { flex: 1; }
+    /* Who's blocking me (design section 14, F3): the note while this transaction makes others wait, and the amber strip
+       while this sheet's statement waits for someone else's lock. */
+    .txBlocking { color: var(--tx-changed); font-weight: 600; cursor: help; }
+    .lockbar { padding: 5px 10px; border-bottom: 1px solid var(--line); border-left: 5px solid var(--tx-changed); background: var(--tx-changed-bg); color: var(--fg); }
+    .lockhead { display: flex; align-items: center; gap: 10px; }
+    .lockhead .grow { flex: 1; }
+    .lockhead button { flex: none; }
+    .lockIcon { color: var(--tx-changed); display: flex; flex: none; }
+    .lockText { min-width: 0; overflow-wrap: anywhere; line-height: 20px; }
+    .lockText code, .lockquery { font-family: Consolas, monospace; font-size: 12px; }
+    .lockmsg { margin: 4px 0 0 24px; color: var(--dim); }
+    .lockdetails { margin: 6px 0 2px 24px; display: grid; gap: 8px; }
+    .lockrow { border-left: 2px solid var(--tx-changed); padding-left: 8px; }
+    .lockquery { margin: 3px 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9em; overflow: auto; background: var(--bg); border: 1px solid var(--line); padding: 4px 6px; border-radius: 3px; }
+    .lockquery.dim { color: var(--dim); font-family: inherit; }
+    .locknote { color: var(--dim); }
+    .lockacts { display: flex; gap: 8px; margin-top: 3px; }
+    .tab .running.waiting { color: var(--tx-changed); }
 
     /* The missing-WHERE warning (design section 14, F1): red, above the editor, until Run anyway or Cancel. */
     .confirmbar { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-bottom: 1px solid var(--line);

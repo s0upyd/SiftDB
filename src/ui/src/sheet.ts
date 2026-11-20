@@ -4,6 +4,7 @@ import { ResultTab, ResultView, ResultsContext, plural } from './results';
 import { PlanContext, PlanView } from './plan';
 import { commands, shortcutOf } from './commands';
 import { MiniMap } from './minimap';
+import { BlockerBar, OtherSession, OwnSheet, OwnSheets, blockingNote } from './blockers';
 import { applyIcons, spinner } from './icons';
 import { showMenu } from './menu';
 import { revealSelectedTab, scrollTabsWithWheel } from './tabs';
@@ -36,6 +37,8 @@ export interface SheetContext {
   askPassword(name: string, retry: boolean, message?: string): Promise<string | null>;
   /** The text, the mode or the file changed: the session needs autosaving. */
   persist(sheet: Sheet): void;
+  /** Another open sheet, by its engine connection id: its tab name, and bringing it to the front (design section 14, F3). */
+  otherSheet(connectionId: number): OwnSheet | null;
 }
 
 /** A sheet's file, as the engine reported it (design section 6). */
@@ -69,11 +72,13 @@ const TEMPLATE = `
     <span class="txIcon" aria-hidden="true"></span>
     <strong class="txLabel"></strong>
     <span class="txDetail"></span>
+    <span class="txBlocking" hidden></span>
     <span class="grow"></span>
     <button class="txEnd ib ic-go" data-icon="tick" aria-label="End transaction" title="End the transaction (commit). Nothing has changed in it."></button>
     <button class="txCommit ib ic-commit" data-icon="tick" aria-label="Commit" title="Commit the changes (Ctrl+Shift+Enter)"></button>
     <button class="txRollback ib ic-stop" data-icon="cross" aria-label="Roll back" title="Roll back (Ctrl+Shift+R)"></button>
   </div>
+  <div class="lockbar" hidden role="status" aria-live="polite"></div>
   <div class="confirmbar" hidden>
     <span class="confirmIcon" aria-hidden="true">⚠</span>
     <span class="confirmText" role="alert"></span>
@@ -121,6 +126,7 @@ export class Sheet {
 
   private readonly editor: SqlEditor;
   private readonly miniMap: MiniMap;
+  private readonly blockers: BlockerBar;
   private results: ResultTab[] = [];
   private activeResult: ResultTab | null = null;
   private running: ResultTab | null = null;
@@ -129,7 +135,7 @@ export class Sheet {
     run: HTMLButtonElement; runMore: HTMLButtonElement; cancel: HTMLButtonElement; begin: HTMLButtonElement;
     modeAssisted: HTMLButtonElement; modeStrict: HTMLButtonElement;
     roChip: HTMLElement; autoChip: HTMLElement;
-    txBar: HTMLElement; txIcon: HTMLElement; txLabel: HTMLElement; txDetail: HTMLElement;
+    txBar: HTMLElement; txIcon: HTMLElement; txLabel: HTMLElement; txDetail: HTMLElement; txBlocking: HTMLElement; lockBar: HTMLElement;
     txEnd: HTMLButtonElement; txCommit: HTMLButtonElement; txRollback: HTMLButtonElement;
     confirmBar: HTMLElement; confirmText: HTMLElement; confirmDry: HTMLButtonElement; confirmRun: HTMLButtonElement; confirmCancel: HTMLButtonElement;
     editor: HTMLElement; splitter: HTMLElement; msg: HTMLElement; msgIcon: HTMLElement; msgText: HTMLElement; tabs: HTMLElement; results: HTMLElement; empty: HTMLElement;
@@ -158,7 +164,7 @@ export class Sheet {
     this.el = {
       run: $('.run'), runMore: $('.runMore'), cancel: $('.cancel'), begin: $('.begin'), modeAssisted: $('.modeAssisted'), modeStrict: $('.modeStrict'),
       roChip: $('.rochip'), autoChip: $('.autochip'),
-      txBar: $('.txbar'), txIcon: $('.txIcon'), txLabel: $('.txLabel'), txDetail: $('.txDetail'),
+      txBar: $('.txbar'), txIcon: $('.txIcon'), txLabel: $('.txLabel'), txDetail: $('.txDetail'), txBlocking: $('.txBlocking'), lockBar: $('.lockbar'),
       txEnd: $('.txEnd'), txCommit: $('.txCommit'), txRollback: $('.txRollback'),
       confirmBar: $('.confirmbar'), confirmText: $('.confirmText'), confirmDry: $('.confirmDry'), confirmRun: $('.confirmRun'), confirmCancel: $('.confirmCancel'),
       editor: $('.editor'), splitter: $('.splitter'), msg: $('.msg'), msgIcon: $('.msgIcon'), msgText: $('.msgText'), tabs: $('.resulttabs'), results: $('.results'), empty: $('.empty'),
@@ -226,6 +232,14 @@ export class Sheet {
       ], 'Ways to run');
     };
     this.el.cancel.onclick = () => this.cancel();
+    // Who's blocking me (design section 14, F3).
+    this.blockers = new BlockerBar(this.el.lockBar, {
+      cancelMine: () => this.cancel(),
+      signal: async (pid, terminate) => {
+        const r = await this.ctx.bridge.request({ type: 'cancelOther', connectionId: this.connectionId, pid, terminate });
+        return r.type === 'error' ? String(r.message) : null;
+      },
+    });
     this.el.begin.onclick = () => void this.txAction('begin');
     this.el.txEnd.onclick = () => void this.txAction('commit');
     this.el.txCommit.onclick = () => void this.txAction('commit');
@@ -346,6 +360,8 @@ export class Sheet {
     this.readOnly = false;
     this.el.roChip.hidden = true;
     this.el.autoChip.hidden = true;
+    this.blockers.update([]);
+    this.blockedByMe = [];
     this.setTx('none', null, 0, 0);
     await this.ctx.bridge.request({ type: 'disconnect', connectionId: id });
     this.updateButtons();
@@ -632,6 +648,7 @@ export class Sheet {
   private runFinished(v: ResultTab) {
     if (this.running !== v) { this.renderResultTabs(); return; }
     this.running = null;
+    this.blockers.update([]); // it no longer waits for anyone
     const ms = performance.now() - this.runStartedAt;
     // Mark the tab only if nobody was watching: on screen, the result itself says it finished.
     if (!this.visible && ms >= FINISHED_MARK_MIN_MS && (v.state === 'complete' || v.state === 'error' || v.state === 'cancelled')) {
@@ -742,6 +759,45 @@ export class Sheet {
   /** Changes pending that closing this sheet would throw away. */
   get txPending(): boolean { return this.tx.state === 'changed' || this.tx.state === 'failed'; }
 
+  // ---- who's blocking me (design section 14, F3) ------------------------------------------------------------------
+
+  /** The running statement is waiting for another session's lock: the tab shows an hourglass instead of the spinner. */
+  get waitingForLock(): boolean { return this.isRunning && this.blockers.waiting; }
+
+  /**
+   * The engine's "mine": which of these sessions are other sheets of this window, as their tab names and a way to go to
+   * them, by pid.
+   */
+  private ownSheets(mine: { pid: number; connectionId: number }[]): OwnSheets {
+    const map = new Map<number, OwnSheet>();
+    for (const m of mine) { const s = this.ctx.otherSheet(m.connectionId); if (s) map.set(m.pid, s); }
+    return map;
+  }
+
+  /** An engine "blockers" event: the sessions this sheet's statement waits for, [] when it no longer waits. */
+  onBlockers(sessions: OtherSession[], mine: { pid: number; connectionId: number }[] = []) {
+    const was = this.waitingForLock;
+    this.blockers.update(this.isRunning ? sessions : [], this.ownSheets(mine));
+    if (this.waitingForLock !== was) this.ctx.changed(this); // the tab's hourglass
+  }
+
+  private blockedByMe: OtherSession[] = [];
+  private blockedSheets: OwnSheets = new Map();
+
+  /** An engine "blocking" event: the sessions waiting for this sheet's open transaction, for the transaction bar's note. */
+  onBlocking(sessions: OtherSession[], mine: { pid: number; connectionId: number }[] = []) {
+    this.blockedByMe = sessions;
+    this.blockedSheets = this.ownSheets(mine);
+    this.renderBlockingNote();
+  }
+
+  private renderBlockingNote() {
+    const note = this.tx.state === 'none' ? null : blockingNote(this.blockedByMe, this.blockedSheets);
+    this.el.txBlocking.hidden = !note;
+    this.el.txBlocking.textContent = note?.text ?? '';
+    this.el.txBlocking.title = note?.title ?? '';
+  }
+
   /** An engine "transaction" event for this sheet's session. */
   onTransaction(e: {
     state: TxState; startedAt: string | null; statements: number; rowsChanged: number; automatic?: boolean; autoReset?: boolean;
@@ -780,7 +836,8 @@ export class Sheet {
       el.txCommit.hidden = s !== 'changed';
       el.txRollback.hidden = idleAuto;     // the only way out of a failed transaction
       this.updateTxDetail();
-    }
+    } else this.blockedByMe = []; // no transaction, so nobody waits for it
+    this.renderBlockingNote();
     this.updateButtons();
   }
 

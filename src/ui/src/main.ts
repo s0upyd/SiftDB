@@ -1,7 +1,11 @@
 import { BatchMeta, Bridge, BridgeEvent, DatabaseSchema, connectBridge } from './bridge';
 import { ConnectionCatalog, EditResult, askPassword, editConnection } from './connections';
 import { askSaveChanges } from './dialogs';
-import { applyIcons, lockIcon, spinner } from './icons';
+import { applyIcons, lockIcon, spinner, waitIcon } from './icons';
+import type { OtherSession } from './blockers';
+
+/** Which of the other sessions an event names are this window's own sheets (design section 14, F3). */
+type Mine = { pid: number; connectionId: number }[];
 import { ResultView } from './results';
 import { Command, CommandGroup, CommandRegistry, GROUPS, commands, shortcutOf } from './commands';
 import { PaletteItem, choose, paletteDone, paletteOpen, pickFrom, shortcutFor } from './palette';
@@ -72,6 +76,10 @@ const ctx: SheetContext = {
   changed: () => { renderTabs(); updateHostState(); },
   askPassword,
   persist: () => scheduleAutosave(),
+  otherSheet: (connectionId) => {
+    const s = connections.get(connectionId);
+    return s ? { title: s.title, show: () => activate(s) } : null;
+  },
 };
 
 // ---- events from the engine --------------------------------------------------------------------------------------
@@ -105,6 +113,13 @@ function onEvent(e: BridgeEvent) {
       return;
     case 'transaction':
       connections.get(e.connectionId)?.onTransaction(e as unknown as Parameters<Sheet['onTransaction']>[0]);
+      return;
+    // Who's blocking me (design section 14, F3): whom a sheet's statement waits for, and who waits for its transaction.
+    case 'blockers':
+      connections.get(e.connectionId)?.onBlockers((e.blockers as OtherSession[] | undefined) ?? [], (e.mine as Mine | undefined) ?? []);
+      return;
+    case 'blocking':
+      connections.get(e.connectionId)?.onBlocking((e.sessions as OtherSession[] | undefined) ?? [], (e.mine as Mine | undefined) ?? []);
       return;
     case 'transactionUnknown':
       connections.get(e.connectionId)?.setMessage(`transaction state unavailable: ${e.message}`, 'warning');
@@ -175,7 +190,13 @@ function renderTabs() {
     // finished while you were elsewhere: its outcome, until you look at the sheet.
     const run = document.createElement('span');
     run.setAttribute('role', 'img');
-    if (sheet.isRunning) {
+    if (sheet.waitingForLock) {
+      // Waiting for another session's lock (design section 14, F3): an hourglass, not the spinner, so it is told apart.
+      run.className = 'running waiting';
+      run.append(waitIcon());
+      run.title = 'Waiting for another session\'s lock: open the sheet to see who';
+      run.setAttribute('aria-label', 'waiting for a lock');
+    } else if (sheet.isRunning) {
       run.className = 'running';
       run.append(spinner());
       run.title = 'Running';

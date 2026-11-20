@@ -39,6 +39,30 @@ export function lockIcon(): SVGSVGElement {
 }
 
 /**
+ * An hourglass: a statement waiting for another session's lock (design section 14, F3). Not a padlock, which already
+ * marks a read-only sheet.
+ */
+export function waitIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 12 12');
+  svg.setAttribute('width', '11');
+  svg.setAttribute('height', '11');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.classList.add('waiticon');
+  const glass = document.createElementNS(SVG_NS, 'path');
+  glass.setAttribute('d', 'M2.5 1h7M2.5 11h7M3.5 1v1.6c0 1.4 2.5 2.4 2.5 3.4s-2.5 2-2.5 3.4V11M8.5 1v1.6C8.5 4 6 5 6 6s2.5 2 2.5 3.4V11');
+  glass.setAttribute('fill', 'none');
+  glass.setAttribute('stroke', 'currentColor');
+  glass.setAttribute('stroke-width', '1.3');
+  glass.setAttribute('stroke-linecap', 'round');
+  const sand = document.createElementNS(SVG_NS, 'path');
+  sand.setAttribute('d', 'M4.4 9.6h3.2L6 8.2z');
+  sand.setAttribute('fill', 'currentColor');
+  svg.append(glass, sand);
+  return svg;
+}
+
+/**
  * Toolbar button icons: 16 px, one colour (currentColor, so CSS gives each its meaning: green to run or begin, amber to
  * commit, red to stop or roll back). Lines unless a shape is marked filled.
  */

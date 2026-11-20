@@ -61,6 +61,14 @@ internal sealed class QuerySession
 
     public void Cancel() => _cts.Cancel();
 
+    private volatile bool _readingFromServer = true;
+
+    /// <summary>
+    /// The statement is waiting on the database (for its next rows, or for a lock), not on the UI to take the rows already
+    /// read. False once it has finished. Who's blocking me (design section 14, F3) looks for blockers only while this holds.
+    /// </summary>
+    public bool ReadingFromServer => _readingFromServer;
+
     public bool IsCancelled(Exception ex) => _cts.IsCancellationRequested || ex is OperationCanceledException;
 
     public void Start() => _ = Task.Run(ProduceAsync);
@@ -80,7 +88,9 @@ internal sealed class QuerySession
                 var data = _writer.Flush();
                 if (_firstBatchTicks < 0) _firstBatchTicks = _sw.ElapsedTicks;
                 var w0 = Stopwatch.GetTimestamp();
+                _readingFromServer = false; // waiting for the UI to take rows, if the channel is full
                 await Channel.Writer.WriteAsync(new EncodedBatch(seq++, start, rows, data), ct);
+                _readingFromServer = true;
                 _writeTicks += Stopwatch.GetTimestamp() - w0;
                 start += rows;
                 TotalRows = start;
@@ -114,6 +124,7 @@ internal sealed class QuerySession
         }
         finally
         {
+            _readingFromServer = false;
             await _reader.DisposeAsync();
             if (_onFinished is not null)
             {
