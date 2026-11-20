@@ -602,9 +602,17 @@ public sealed partial class EngineHost : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        // Every session's statement first, including one not answered yet (waiting for a lock, say): disposing a connection
+        // waits for its command, and a command waiting for a lock that another of these sessions holds would never end.
+        foreach (var c in _connections.Values) CancelCurrent(c);
         foreach (var q in _queries.Values) q.Cancel();
         AbandonExports();
-        foreach (var c in _connections.Values) await c.Connection.DisposeAsync();
+        // One session that cannot be closed cleanly must not leave the others open.
+        foreach (var c in _connections.Values)
+        {
+            try { await c.Connection.DisposeAsync(); }
+            catch (Exception) { /* closing anyway: there is nobody left to tell */ }
+        }
     }
 
     private sealed class ConnectionState(int id, IDatabaseProvider provider, IProviderConnection connection)

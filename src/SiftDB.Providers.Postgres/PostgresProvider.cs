@@ -291,6 +291,14 @@ public sealed class PostgresProvider : IDatabaseProvider
             }
         }
 
-        public ValueTask DisposeAsync() => conn.DisposeAsync();
+        /// <summary>
+        /// A session the server has already ended (from another sheet's "End their session", an admin, a restart) cannot be
+        /// reset on close: Npgsql's attempt fails on the dead socket. It is closed all the same, and that is not an error.
+        /// </summary>
+        public async ValueTask DisposeAsync()
+        {
+            try { await conn.DisposeAsync(); }
+            catch (NpgsqlException) { /* already gone: nothing left to close or roll back */ }
+        }
     }
 }
