@@ -3,6 +3,7 @@ import { CompletionResponse, QueryMode, RunHow, RunTarget, SheetAnalysis, SqlEdi
 import { ResultTab, ResultView, ResultsContext, plural } from './results';
 import { PlanContext, PlanView } from './plan';
 import { commands, shortcutOf } from './commands';
+import { MiniMap } from './minimap';
 import { applyIcons, spinner } from './icons';
 import { showMenu } from './menu';
 import { revealSelectedTab, scrollTabsWithWheel } from './tabs';
@@ -119,6 +120,7 @@ export class Sheet {
   private visible = false;
 
   private readonly editor: SqlEditor;
+  private readonly miniMap: MiniMap;
   private results: ResultTab[] = [];
   private activeResult: ResultTab | null = null;
   private running: ResultTab | null = null;
@@ -196,6 +198,15 @@ export class Sheet {
       complete: this.complete,
     }, initialText);
     this.editor.setCursor(cursorLine);
+    // The query mini-map (design section 14, F5), in the editor's top right corner, following each analysis.
+    this.miniMap = new MiniMap(this.el.editor, {
+      select: (start, end, version) => { if (this.editor.versionId() === version) this.editor.select(start, end); },
+      highlight: (ranges) => this.editor.highlightRanges(ranges),
+      insert: (version, at, text) => {
+        if (!this.editor.insertAt(version, at, text)) this.setMessage('The text changed meanwhile, so the join was not added. Try again.', 'warning');
+      },
+    });
+    this.editor.onAnalysis((a, version) => this.miniMap.update(a?.map ?? null, a?.pick.start ?? 0, version));
     // A new sheet with only the starter text has nothing worth asking about; with text from elsewhere it does (see restore).
     this.savedVersion = this.editor.versionId();
     this.editor.onChange(() => this.textChanged());
@@ -345,6 +356,7 @@ export class Sheet {
     await this.disconnect();
     this.results.forEach((r) => r.dispose());
     this.results = [];
+    this.miniMap.dispose();
     this.editor.dispose();
     this.root.remove();
   }

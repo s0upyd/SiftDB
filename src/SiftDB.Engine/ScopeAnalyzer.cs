@@ -28,7 +28,8 @@ internal sealed record ScopeEntry(
 internal sealed record ScopeResult(List<ScopeEntry> Entries, HashSet<int> Claimed);
 
 /// <summary>
-/// Finds the tables a statement mentions (after FROM, JOIN, INTO, UPDATE), with aliases, resolved against the schema.
+/// Finds the tables a statement mentions (after FROM, JOIN, INTO, UPDATE, and a DELETE's or MERGE's USING), with aliases,
+/// resolved against the schema.
 /// Works on tokens, so it copes with half-typed SQL. Shared by completion and the identifier resolver.
 /// Token indexes refer to the statement's token list; -1 means "no such token".
 /// </summary>
@@ -42,10 +43,14 @@ internal static class ScopeAnalyzer
         {
             if (st[i].Kind != SqlTokenKind.Keyword) continue;
             var w = Text(st[i], text).ToLowerInvariant();
-            if (w is not ("from" or "join" or "update" or "into")) continue;
+            if (w is not ("from" or "join" or "update" or "into" or "using")) continue;
+            // DELETE … USING b and MERGE … USING s name tables; JOIN b USING (id) names columns.
+            if (w == "using" && i + 1 < st.Count && IsPunct(st[i + 1], text, '(')
+                && !(i + 2 < st.Count && st[i + 2].Kind == SqlTokenKind.Keyword && Text(st[i + 2], text).ToLowerInvariant() is "select" or "values"))
+                continue;
 
             var next = ParseRef(schema, policy, st, i + 1, text, entries, claimed);
-            if (w == "from")
+            if (w is "from" or "using")
                 while (next < st.Count && IsPunct(st[next], text, ','))
                     next = ParseRef(schema, policy, st, next + 1, text, entries, claimed);
             i = Math.Max(i, next - 1);

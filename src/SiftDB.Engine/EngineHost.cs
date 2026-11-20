@@ -281,6 +281,11 @@ public sealed partial class EngineHost : IAsyncDisposable
                 ? StarExpander.Find(s2, parser, state.Provider.Identifiers, text, CurrentSettings.Format)
                     .Select(a => new { start = a.Start, length = a.Length, text = a.Text, title = a.Title })
                 : [],
+            // The query mini-map of the statement the cursor is in (design section 14, F5); null under two tables, and, like
+            // the rest of the analysis, until the schema is loaded.
+            map = state.Schema is { } s3 && pick.Range is { } mapped
+                ? JoinMapper.Map(s3, parser, state.Provider.Identifiers, text, mapped)
+                : null,
         });
     }
 

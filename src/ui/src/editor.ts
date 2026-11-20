@@ -1,5 +1,6 @@
 import { commands, parseKey, shortcutOf } from './commands';
 import { showMenu } from './menu';
+import type { JoinMap } from './minimap';
 import { monaco } from './monaco';
 
 export type QueryMode = 'assisted' | 'strict';
@@ -35,6 +36,8 @@ export interface SheetAnalysis {
   issues: Issue[];
   /** Quick fixes with no problem behind them, so no squiggle: expanding a * (design section 14, F10). */
   actions?: { start: number; length: number; text: string; title: string }[];
+  /** The query mini-map of the statement in `pick` (design section 14, F5); null under two tables. */
+  map?: JoinMap | null;
 }
 
 export type Analyze = (text: string, selectionStart: number, selectionEnd: number, mode: QueryMode) => Promise<SheetAnalysis | null>;
@@ -467,6 +470,40 @@ export class SqlEditor {
     return true;
   }
 
+  // ---- the query mini-map (design section 14, F5) -----------------------------------------------------------------
+
+  private analysisListeners: ((a: SheetAnalysis | null, version: number) => void)[] = [];
+  private mapLinks: monaco.editor.IEditorDecorationsCollection | null = null;
+
+  /** Every analysis painted, with the text version it was made for: the mini-map draws the statement's map from it. */
+  onAnalysis(fn: (a: SheetAnalysis | null, version: number) => void) { this.analysisListeners.push(fn); }
+
+  /** Marks these ranges (a table reference, a join condition) while the mini-map points at them; [] clears. */
+  highlightRanges(ranges: { start: number; length: number }[]) {
+    this.mapLinks ??= this.editor.createDecorationsCollection();
+    this.mapLinks.set(ranges.filter((r) => r.length > 0).map((r) => {
+      const a = this.model.getPositionAt(r.start), b = this.model.getPositionAt(r.start + r.length);
+      return { range: new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column), options: { className: 'map-link', description: 'mini-map' } };
+    }));
+  }
+
+  /**
+   * Inserts text at an offset of the text version `version` (a suggested join's condition), as one undoable edit, and
+   * leaves the cursor after it. False, and nothing changed, when the text has changed since.
+   */
+  insertAt(version: number, at: number, text: string): boolean {
+    if (this.model.getAlternativeVersionId() !== version) return false;
+    const p = this.model.getPositionAt(at);
+    this.editor.pushUndoStop();
+    this.editor.executeEdits('siftdb.map', [{ range: new monaco.Range(p.lineNumber, p.column, p.lineNumber, p.column), text }]);
+    this.editor.pushUndoStop();
+    const end = this.model.getPositionAt(at + text.length);
+    this.editor.setPosition(end);
+    this.editor.revealPositionInCenterIfOutsideViewport(end);
+    this.editor.focus();
+    return true;
+  }
+
   private snapshot() {
     const sel = this.editor.getSelection()!;
     return {
@@ -488,6 +525,8 @@ export class SqlEditor {
     // Superseded by a newer request, or the text moved on while we waited (another update is already queued).
     if (mine !== this.seq || text !== this.model.getValue()) return;
     this.paint(a);
+    const version = this.model.getAlternativeVersionId();
+    for (const fn of this.analysisListeners) fn(a, version);
   }
 
   private paint(a: SheetAnalysis | null) {

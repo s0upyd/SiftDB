@@ -5,6 +5,7 @@ import { applyIcons, lockIcon, spinner } from './icons';
 import { ResultView } from './results';
 import { Command, CommandGroup, CommandRegistry, GROUPS, commands, shortcutOf } from './commands';
 import { PaletteItem, choose, paletteDone, paletteOpen, pickFrom, shortcutFor } from './palette';
+import { toggleMiniMap } from './minimap';
 import { Settings, editSettings } from './settings';
 import { Release, showUpdateNotice, showWhatsNew } from './whatsnew';
 import { FileState, Sheet, SheetContext, Target, TxState, targetKey } from './sheet';
@@ -737,6 +738,11 @@ commands.add(
   {
     id: 'acceptAll', label: 'Accept all identifier corrections', group: 'Editor', localKeys: ['Ctrl+Alt+Q'], description: 'the greyed quotes become text',
     when: () => !!active, run: () => active?.acceptAllCorrections(),
+  },
+  {
+    // The query mini-map (design section 14, F5): for every sheet, remembered between runs.
+    id: 'toggleMiniMap', label: 'Show or hide query map', group: 'Editor', keys: ['Ctrl+Shift+M'],
+    description: 'the tables of the statement and how they are joined', run: () => toggleMiniMap(),
   },
 
   // Results: the result on screen.
