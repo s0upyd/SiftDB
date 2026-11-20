@@ -208,6 +208,10 @@
     .tab { display: flex; align-items: center; gap: 6px; padding: 5px 4px 5px 12px; flex: 0 1 auto; min-width: 116px; max-width: 220px; white-space: nowrap; cursor: pointer;
            background: var(--tab); border: 1px solid var(--line); border-bottom: none; border-radius: 6px 6px 0 0; color: var(--dim); }
     .tab[aria-selected="true"] { background: var(--bg); color: var(--fg); font-weight: 600; margin-bottom: -1px; padding-bottom: 6px; }
+    /* A sheet with changes waiting for Commit (amber) or a failed transaction waiting for Rollback (red): the whole tab is
+       tinted, with a line along its top, selected or not. The dot and the tooltip say the same, so colour is not alone. */
+    .tab.tx-changed { background: var(--tx-changed-bg); box-shadow: inset 0 2px 0 var(--tx-changed); color: var(--fg); }
+    .tab.tx-failed { background: var(--tx-failed-bg); box-shadow: inset 0 2px 0 var(--tx-failed); color: var(--fg); }
     .tab .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     /* Unsaved edits: a dot after the name, in the text colour (no extra colour to learn). */
     /* The one "running" mark (sheet tabs, result tabs, the result status bar): a small ring in one colour. */

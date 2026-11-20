@@ -129,6 +129,9 @@ function renderTabs() {
     tab.className = 'tab';
     tab.setAttribute('role', 'tab');
     tab.setAttribute('aria-selected', String(sheet === active));
+    // Changes waiting for Commit, or a failed transaction waiting for Rollback, colour the whole tab, so they are seen from
+    // any other sheet. An open transaction with nothing changed only has its dot: auto-transaction sheets are always in one.
+    if (sheet.tx.state === 'changed' || sheet.tx.state === 'failed') tab.classList.add(`tx-${sheet.tx.state}`);
     tab.onclick = () => activate(sheet);
 
     // A dot when this sheet's session is inside a transaction, so it can't be forgotten behind another tab.
@@ -140,7 +143,8 @@ function renderTabs() {
     const title = document.createElement('span');
     title.className = 'title';
     title.textContent = sheet.title;
-    tab.title = sheet.file?.path ?? '';
+    tab.title = [sheet.file?.path, sheet.tx.state === 'changed' ? 'Changes pending: not committed yet'
+      : sheet.tx.state === 'failed' ? 'Transaction aborted: roll back to continue' : ''].filter(Boolean).join('\n');
 
     // A dot after the name while the sheet has edits that are not in its file (design section 6).
     const unsaved = document.createElement('span');
