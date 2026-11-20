@@ -257,10 +257,71 @@ function providerCategory(p: ProviderSettingsInfo): Category {
   };
 }
 
-/** What the editor can do beyond settings: open What's New (from About), knowing the running version. */
-export interface SettingsHooks { version: string | null; whatsNew(): void }
+/** How a check for updates went (the host's "updateCheck"). */
+export interface UpdateCheckResult {
+  status: 'notInstalled' | 'upToDate' | 'ready' | 'failed';
+  /** The version downloaded and waiting for a restart (ready, or failed after an earlier download). */
+  version: string | null;
+  error: string | null;
+}
 
-/** About: the version, What's New, and when it opens by itself (design section 14, F17). */
+/** Checking for updates by hand, and restarting into one (the host does both). */
+export interface UpdateHooks {
+  check(): Promise<UpdateCheckResult>;
+  /** The version already downloaded and waiting, if any. */
+  ready(): string | null;
+  /** Called with the download's progress while a check downloads; returns the way to stop listening. */
+  onProgress(fn: (version: string, percent: number) => void): () => void;
+  restart(): void;
+}
+
+/** What the editor can do beyond settings: open What's New (from About), knowing the running version, and updates. */
+export interface SettingsHooks { version: string | null; whatsNew(): void; updates?: UpdateHooks }
+
+/** What a check's outcome says, in About and in the palette's message. */
+export function describeUpdateCheck(r: UpdateCheckResult, current: string | null): string {
+  switch (r.status) {
+    case 'ready': return `SiftDB ${r.version} is downloaded. Restart to use it: your sheets come back as they were.`;
+    case 'upToDate': return `You have the latest version${current ? ` (${current})` : ''}.`;
+    case 'notInstalled': return 'This copy runs from a build folder, so it never updates itself. An installed SiftDB does.';
+    case 'failed': return `Could not check for updates: ${r.error ?? 'unknown error'}. Is the network reachable? SiftDB also checks by itself every few hours.`;
+  }
+}
+
+/**
+ * Check for updates, with what it found beside it: checking, the download's progress, up to date, or a downloaded update
+ * with Restart to update. An update already waiting shows straight away.
+ */
+function updatesRow(updates: UpdateHooks, current: string | null, close: () => void): HTMLElement {
+  const check = el('button', { type: 'button', textContent: 'Check for updates' });
+  const restart = el('button', { type: 'button', className: 'primary', textContent: 'Restart to update', hidden: true });
+  const status = el('span', { className: 'updatestatus' });
+  status.setAttribute('role', 'status');
+  const showReady = (version: string) => {
+    status.textContent = describeUpdateCheck({ status: 'ready', version, error: null }, current);
+    restart.hidden = false;
+  };
+  const waiting = updates.ready();
+  if (waiting) showReady(waiting);
+  restart.onclick = () => { close(); updates.restart(); };
+  check.onclick = async () => {
+    check.disabled = true;
+    restart.hidden = true;
+    status.textContent = 'Checking for updates…';
+    const stop = updates.onProgress((version, percent) => { status.textContent = `Downloading SiftDB ${version}… ${percent}%`; });
+    try {
+      const r = await updates.check();
+      if (r.status === 'ready' && r.version) showReady(r.version);
+      else status.textContent = describeUpdateCheck(r, current);
+    } finally {
+      stop();
+      check.disabled = false;
+    }
+  };
+  return el('p', { className: 'updaterow' }, check, restart, status);
+}
+
+/** About: the version, updates, What's New, and when it opens by itself (design section 14, F17). */
 function aboutCategory(hooks: SettingsHooks | undefined, close: () => void): Category {
   return {
     id: 'about',
@@ -275,6 +336,7 @@ function aboutCategory(hooks: SettingsHooks | undefined, close: () => void): Cat
       const open = el('button', { type: 'button', textContent: "What's new…", onclick: () => { close(); hooks?.whatsNew(); } });
       const page = el('div', { className: 'fgroup' },
         el('p', {}, el('strong', { textContent: `SiftDB ${hooks?.version ?? ''}`.trim() })),
+        ...(hooks?.updates ? [updatesRow(hooks.updates, hooks.version, close)] : []),
         el('p', {}, open),
         el('fieldset', {}, el('legend', { textContent: "Show What's New" }), ...choices.map((c) => c.wrap)));
       return {

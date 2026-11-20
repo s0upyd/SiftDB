@@ -375,6 +375,9 @@
     .plandetail dt { color: var(--dim); }
     .plandetail dd { margin: 0; overflow-wrap: anywhere; font-family: Consolas, monospace; }
     .monaco-editor .plan-link { background: var(--tab); outline: 1px dashed var(--fg); }
+    /* Settings › About: Check for updates, Restart to update, and what the check found, on one line that wraps. */
+    .updaterow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .updatestatus { color: var(--dim); }
     /* The query mini-map (design section 14, F5): over the editor's top right, clear of its scrollbar. Small, and it scrolls
        when a statement has more tables than fit. Red is only ever with ⚠, never the only signal. */
     .sheet .editor { position: relative; }

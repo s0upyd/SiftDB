@@ -188,11 +188,35 @@ public partial class MainWindow : Window, IEngineOutput
         _updateTimer.Tick += async (_, _) =>
         {
             _updateTimer.Interval = TimeSpan.FromHours(4);
-            if (await _updater.CheckAndDownloadAsync() is { } version)
-                SendEvent(JsonSerializer.Serialize(new { type = "updateReady", version }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            if (await _updater.CheckAndDownloadAsync() is { Status: UpdateStatus.Ready, Version: { } version })
+                SendJson(new { type = "updateReady", version });
         };
         _updateTimer.Start();
     }
+
+    /// <summary>
+    /// "Check for updates" (Settings › About, the palette): checks now, waiting for a check already running, and answers how
+    /// it went. The download's progress is sent as it goes, and a downloaded update also shows the toolbar's Restart button.
+    /// </summary>
+    private async Task CheckForUpdatesNowAsync(int replyTo)
+    {
+        var lastPercent = -1;
+        var r = await _updater.CheckAndDownloadAsync(wait: true, progress: (version, percent) =>
+        {
+            if (percent == lastPercent) return;
+            lastPercent = percent;
+            SendJson(new { type = "updateProgress", version, percent });
+        });
+        SendJson(new { type = "updateCheck", replyTo, status = r.Status, version = r.Version, error = r.Error, current = _updater.CurrentVersion });
+        if (r is { Status: UpdateStatus.Ready, Version: { } ready }) SendJson(new { type = "updateReady", version = ready });
+    }
+
+    private static readonly JsonSerializerOptions WebJson = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
+
+    private void SendJson(object message) => SendEvent(JsonSerializer.Serialize(message, WebJson));
 
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
@@ -218,6 +242,9 @@ public partial class MainWindow : Window, IEngineOutput
                 return;
             case "flushed": // the page's last autosave is written: close now
                 if (_closeConfirmed) FinishClose();
+                return;
+            case "checkForUpdates": // by hand, from Settings › About or the palette
+                _ = CheckForUpdatesNowAsync(doc.RootElement.GetProperty("id").GetInt32());
                 return;
             case "applyUpdate": // restart into the downloaded update, through the usual close (warning, last autosave)
                 _updateOnClose = true;

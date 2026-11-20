@@ -6,7 +6,7 @@ import { ResultView } from './results';
 import { Command, CommandGroup, CommandRegistry, GROUPS, commands, shortcutOf } from './commands';
 import { PaletteItem, choose, paletteDone, paletteOpen, pickFrom, shortcutFor } from './palette';
 import { toggleMiniMap } from './minimap';
-import { Settings, editSettings } from './settings';
+import { Settings, UpdateCheckResult, UpdateHooks, describeUpdateCheck, editSettings } from './settings';
 import { Release, showUpdateNotice, showWhatsNew } from './whatsnew';
 import { FileState, Sheet, SheetContext, Target, TxState, targetKey } from './sheet';
 import type { QueryMode } from './editor';
@@ -85,8 +85,13 @@ function onEvent(e: BridgeEvent) {
       if (e.version) $('settings').title = `Settings (Ctrl+,) · SiftDB ${e.version}`;
       gotVersion(typeof e.version === 'string' ? e.version : null);
       return;
+    case 'updateProgress':
+      // A download a check by hand started (Settings › About): its percent.
+      updateProgress.forEach((fn) => fn(String(e.version), Number(e.percent)));
+      return;
     case 'updateReady': {
       // Downloaded in the background by the host. Restarting goes through the usual close (warning, last autosave).
+      updateReadyVersion = String(e.version);
       const button = $('update');
       button.querySelector('.label')!.textContent = `Restart to update to ${e.version}`;
       button.title = `SiftDB ${e.version} is downloaded. Restart now to use it: your sheets come back as they were.\n`
@@ -608,8 +613,33 @@ async function saveSheet(sheet: Sheet, as = false): Promise<boolean> {
 $('openFile').onclick = () => void openFile();
 $('saveFile').onclick = () => { if (active) void saveSheet(active); };
 /** Settings saved: open results pick up new styling rules straight away. */
+// ---- updates by hand (design section 9) ----------------------------------------------------------------------------
+// The host checks by itself a little after start and every few hours; these are for checking now.
+
+/** The version the host has downloaded and is waiting to restart into, once it says so. */
+let updateReadyVersion: string | null = null;
+const updateProgress = new Set<(version: string, percent: number) => void>();
+
+const updateHooks: UpdateHooks = {
+  check: async () => {
+    const r = await bridge.request({ type: 'checkForUpdates' });
+    if (r.type === 'error') return { status: 'failed', version: null, error: r.message };
+    return { status: r.status as UpdateCheckResult['status'], version: (r.version as string | null) ?? null, error: (r.error as string | null) ?? null };
+  },
+  ready: () => updateReadyVersion,
+  onProgress: (fn) => { updateProgress.add(fn); return () => updateProgress.delete(fn); },
+  restart: () => bridge.send({ type: 'applyUpdate' }),
+};
+
+/** The palette's "Check for updates": the outcome in the sheet's message bar; a downloaded one also shows Restart at the top. */
+async function checkForUpdates() {
+  active?.setMessage('Checking for updates…');
+  const r = await updateHooks.check();
+  active?.setMessage(describeUpdateCheck(r, await appVersion), r.status === 'failed' ? 'warning' : 'info');
+}
+
 async function openSettings(category?: string) {
-  const hooks = { version: await appVersion, whatsNew: () => void openWhatsNew() };
+  const hooks = { version: await appVersion, whatsNew: () => void openWhatsNew(), updates: updateHooks };
   if (await editSettings(settings, hooks, category)) sheets.forEach((s) => s.restyle());
 }
 
@@ -768,6 +798,7 @@ commands.add(
   { id: 'settings', label: 'Settings', group: 'App', keys: ['Ctrl+,'], run: () => openSettings() },
   { id: 'whatsNew', label: "What's New", group: 'App', description: 'every release this build has notes for', run: () => openWhatsNew() },
   { id: 'about', label: 'About SiftDB', group: 'App', description: 'the version, and when What\'s New opens', run: () => openSettings('about') },
+  { id: 'checkForUpdates', label: 'Check for updates', group: 'App', description: 'and download one, ready for a restart', run: () => checkForUpdates() },
   { id: 'applyUpdate', label: 'Restart to update', group: 'App', when: () => !$('update').hidden, run: () => bridge.send({ type: 'applyUpdate' }) },
   { id: 'commandPalette', label: 'Show all commands', group: 'App', keys: ['F1', 'Ctrl+Shift+P'], unlisted: true, run: () => openPalette() },
 );
