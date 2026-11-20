@@ -213,11 +213,20 @@ public sealed class EngineSettingsTests : IAsyncDisposable
         var b = Path.Combine(_dir.FullName, "b.sql");
         await Send(engine, new { type = "saveFile", path = a, text = "select 1;", mode = "assisted", lineEnding = "lf", encoding = "utf-8" });
         await Send(engine, new { type = "saveFile", path = b, text = "select 2;", mode = "assisted", lineEnding = "lf", encoding = "utf-8" });
-        await Send(engine, new { type = "openFile", path = a.ToUpperInvariant() }); // the same file, by another spelling
-        Assert.Equal([a.ToUpperInvariant(), b], Strings(await Send(engine, new { type = "recent" }), "files"));
+        // The same file by another spelling, on every system: it is listed once, as its full path.
+        await Send(engine, new { type = "openFile", path = Path.Combine(_dir.FullName, ".", "a.sql") });
+        Assert.Equal([a, b], Strings(await Send(engine, new { type = "recent" }), "files"));
 
         File.Delete(b);
-        Assert.Equal([a.ToUpperInvariant()], Strings(await Send(engine, new { type = "recent" }), "files"));
+        Assert.Equal([a], Strings(await Send(engine, new { type = "recent" }), "files"));
+    }
+
+    [Fact]
+    public void Paths_differing_only_in_case_are_one_file_only_where_the_file_system_ignores_case()
+    {
+        var list = UserSettings.Remember(["/x/a.sql"], "/x/A.sql", UserSettings.MaxRecentFiles, UserSettings.PathComparer);
+        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()) Assert.Equal(["/x/A.sql"], list);
+        else Assert.Equal(["/x/A.sql", "/x/a.sql"], list); // Linux: two files
     }
 
     [Fact]

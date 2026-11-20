@@ -132,7 +132,7 @@ public sealed partial class EngineHost
     /// <summary>"rememberCommand": a command was run from the palette. Answered like "recent".</summary>
     private void RememberCommand(int id, string commandId)
     {
-        Remember(s => s with { RecentCommands = UserSettings.Remember(s.RecentCommands, commandId, UserSettings.MaxRecentCommands, ignoreCase: false) });
+        Remember(s => s with { RecentCommands = UserSettings.Remember(s.RecentCommands, commandId, UserSettings.MaxRecentCommands, StringComparer.Ordinal) });
         Recent(id);
     }
 
@@ -140,7 +140,7 @@ public sealed partial class EngineHost
     private void RememberFile(string path)
     {
         var full = Path.GetFullPath(path);
-        Remember(s => s with { RecentFiles = UserSettings.Remember(s.RecentFiles, full, UserSettings.MaxRecentFiles, ignoreCase: true) });
+        Remember(s => s with { RecentFiles = UserSettings.Remember(s.RecentFiles, full, UserSettings.MaxRecentFiles, UserSettings.PathComparer) });
     }
 
     private void Remember(Func<UserSettings, UserSettings> change)

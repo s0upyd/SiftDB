@@ -51,15 +51,21 @@ public sealed record UserSettings(
     public const int MaxRecentCommands = 10, MaxRecentFiles = 15;
 
     /// <summary>
-    /// <paramref name="list"/> with <paramref name="item"/> first and any earlier copy of it taken out, at most
-    /// <paramref name="max"/> long. File paths compare ignoring case (Windows), command ids exactly.
+    /// How file paths compare: ignoring case where the file system does (Windows, macOS by default), exactly elsewhere, where
+    /// <c>a.sql</c> and <c>A.sql</c> are two files.
     /// </summary>
-    public static IReadOnlyList<string> Remember(IReadOnlyList<string> list, string item, int max, bool ignoreCase) =>
-        Recent([item, .. list], max, ignoreCase);
+    public static readonly StringComparer PathComparer =
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
-    private static List<string> Recent(IEnumerable<string>? items, int max, bool ignoreCase) =>
-        (items ?? []).Where(i => !string.IsNullOrWhiteSpace(i))
-            .Distinct(ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal).Take(max).ToList();
+    /// <summary>
+    /// <paramref name="list"/> with <paramref name="item"/> first and any earlier copy of it taken out, at most
+    /// <paramref name="max"/> long. File paths compare with <see cref="PathComparer"/>, command ids exactly.
+    /// </summary>
+    public static IReadOnlyList<string> Remember(IReadOnlyList<string> list, string item, int max, StringComparer comparer) =>
+        Recent([item, .. list], max, comparer);
+
+    private static List<string> Recent(IEnumerable<string>? items, int max, StringComparer comparer) =>
+        (items ?? []).Where(i => !string.IsNullOrWhiteSpace(i)).Distinct(comparer).Take(max).ToList();
 
     /// <summary>The indent sizes offered, in spaces, and the line width's bounds.</summary>
     public static readonly IReadOnlyList<int> IndentChoices = [2, 4, 8];
@@ -75,8 +81,8 @@ public sealed record UserSettings(
         ResultRules = StyleRules.Normalise(ResultRules, strict),
         Zoom = ZoomChoices.Contains(Zoom) ? Zoom : 100,
         WhatsNew = WhatsNew is "all" or "never" ? WhatsNew : "majorMinor",
-        RecentCommands = Recent(RecentCommands, MaxRecentCommands, ignoreCase: false),
-        RecentFiles = Recent(RecentFiles, MaxRecentFiles, ignoreCase: true),
+        RecentCommands = Recent(RecentCommands, MaxRecentCommands, StringComparer.Ordinal),
+        RecentFiles = Recent(RecentFiles, MaxRecentFiles, PathComparer),
         Format = (Format ?? FormatOptions.Default) with
         {
             KeywordCase = Enum.IsDefined(Format?.KeywordCase ?? KeywordCase.AsTyped) ? Format!.KeywordCase : KeywordCase.AsTyped,
