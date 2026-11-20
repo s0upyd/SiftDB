@@ -15,13 +15,16 @@ import { QuickPickFocus } from '@monaco/platform/quickinput/common/quickInput.js
 import { QuickInputService, QuickPickItem, QuickPickSeparator } from '@monaco/platform/quickinput/browser/quickInputService.js';
 
 /** One entry of the palette. `shortcut` is shown beside it. */
-export interface PaletteCommand {
+export interface PaletteItem {
   id: string;
   label: string;
+  /** The heading it is listed under. */
+  group: string;
   shortcut?: string;
   /** Extra words it can be found by, and a short note shown with it. */
   description?: string;
-  run(): void | Promise<void>;
+  /** Why it cannot run now: listed with it (an item cannot be greyed out), and choosing it says so instead of running. */
+  reason?: string;
 }
 
 /** The whole window as the widget's host: what Monaco's layout service says for VS Code's workbench. */
@@ -129,26 +132,34 @@ export function shortcutFor(commandId: string): string | undefined {
   }
 }
 
-/** Recently run commands, newest first, for the top of the list. For this run of the app only. */
-const recent: string[] = [];
+/** The palette is on screen (a command list or a second step): the app's own shortcuts must leave the keys to it. */
+export const paletteOpen = () => !!service?.currentQuickInput || !!document.activeElement?.closest('.siftdb-quickinput');
 
-/** Opens the palette on these commands; the chosen one runs once the palette has closed. */
-export async function openPalette(commands: PaletteCommand[]) {
+/**
+ * Opens the palette on these items: `recent` (ids, newest first) at the top, then the rest under their groups, in the
+ * order given. Resolves with the chosen item once the palette has closed, or undefined if it was dismissed.
+ */
+export async function choose(items: PaletteItem[], recent: string[]): Promise<PaletteItem | undefined> {
   returnTo = document.activeElement as HTMLElement | null;
-  const byId = new Map(commands.map((c) => [c.id, c]));
-  const item = (c: PaletteCommand): QuickPickItem & { command: PaletteCommand } => ({
+  const byId = new Map(items.map((c) => [c.id, c]));
+  const pick = (c: PaletteItem): QuickPickItem & { item: PaletteItem } => ({
     label: c.label,
-    description: [c.shortcut, c.description].filter(Boolean).join(' · ') || undefined,
-    command: c,
+    description: [c.shortcut, c.reason ?? c.description].filter(Boolean).join(' · ') || undefined,
+    item: c,
   });
-  const used = recent.map((id) => byId.get(id)).filter((c): c is PaletteCommand => !!c);
-  const rest = commands.filter((c) => !used.includes(c)).sort((a, b) => a.label.localeCompare(b.label));
-  const picks: ((QuickPickItem & { command: PaletteCommand }) | QuickPickSeparator)[] = used.length
-    ? [{ type: 'separator', label: 'recently used' }, ...used.map(item), { type: 'separator', label: 'other commands' }, ...rest.map(item)]
-    : rest.map(item);
+  const used = recent.map((id) => byId.get(id)).filter((c): c is PaletteItem => !!c);
+  const picks: ((QuickPickItem & { item: PaletteItem }) | QuickPickSeparator)[] = [];
+  if (used.length) picks.push({ type: 'separator', label: 'recently used' }, ...used.map(pick));
+  let group: string | null = null;
+  for (const c of items) {
+    if (used.includes(c)) continue;
+    if (c.group !== group) picks.push({ type: 'separator', label: (group = c.group) });
+    picks.push(pick(c));
+  }
   const chosen = await quickInput().pick(picks, { placeHolder: 'Type the name of a command', matchOnDescription: true });
-  if (!chosen) { returnTo = null; return; }
-  recent.splice(0, recent.length, chosen.command.id, ...recent.filter((id) => id !== chosen.command.id).slice(0, 9));
-  await chosen.command.run();
-  returnTo = null;
+  if (!chosen) returnTo = null;
+  return chosen?.item;
 }
+
+/** After a chosen command has run (and any second step of it closed): focus is no longer the palette's to give back. */
+export function paletteDone() { returnTo = null; }

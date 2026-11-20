@@ -175,6 +175,59 @@ public sealed class EngineSettingsTests : IAsyncDisposable
         Assert.Equal("error", saved.GetProperty("type").GetString());
         Assert.Contains("left as it is", saved.GetProperty("message").GetString());
     }
+
+    private static string[] Strings(JsonElement r, string name) => [.. r.GetProperty(name).EnumerateArray().Select(e => e.GetString()!)];
+
+    [Fact]
+    public async Task Recently_used_commands_come_newest_first_once_each_and_survive_a_restart()
+    {
+        await using (var engine = NewEngine())
+        {
+            await Send(engine, new { type = "rememberCommand", commandId = "format" });
+            await Send(engine, new { type = "rememberCommand", commandId = "newSheet" });
+            var r = await Send(engine, new { type = "rememberCommand", commandId = "format" });
+            Assert.Equal("recent", r.GetProperty("type").GetString());
+            Assert.Equal(["format", "newSheet"], Strings(r, "commands"));
+            // The settings editor saves the whole set it knows, which leaves the recent lists alone.
+            await Send(engine, new { type = "saveSettings", settings = new { newSheetMode = "strict" } });
+        }
+        await using var again = NewEngine();
+        Assert.Equal(["format", "newSheet"], Strings(await Send(again, new { type = "recent" }), "commands"));
+    }
+
+    [Fact]
+    public async Task Only_the_last_ten_commands_are_kept()
+    {
+        await using var engine = NewEngine();
+        JsonElement r = default;
+        for (var i = 0; i < 12; i++) r = await Send(engine, new { type = "rememberCommand", commandId = $"c{i}" });
+        Assert.Equal(UserSettings.MaxRecentCommands, Strings(r, "commands").Length);
+        Assert.Equal("c11", Strings(r, "commands")[0]);
+    }
+
+    [Fact]
+    public async Task Files_opened_and_saved_are_recent_files_and_one_that_is_gone_is_not_offered()
+    {
+        await using var engine = NewEngine();
+        var a = Path.Combine(_dir.FullName, "a.sql");
+        var b = Path.Combine(_dir.FullName, "b.sql");
+        await Send(engine, new { type = "saveFile", path = a, text = "select 1;", mode = "assisted", lineEnding = "lf", encoding = "utf-8" });
+        await Send(engine, new { type = "saveFile", path = b, text = "select 2;", mode = "assisted", lineEnding = "lf", encoding = "utf-8" });
+        await Send(engine, new { type = "openFile", path = a.ToUpperInvariant() }); // the same file, by another spelling
+        Assert.Equal([a.ToUpperInvariant(), b], Strings(await Send(engine, new { type = "recent" }), "files"));
+
+        File.Delete(b);
+        Assert.Equal([a.ToUpperInvariant()], Strings(await Send(engine, new { type = "recent" }), "files"));
+    }
+
+    [Fact]
+    public async Task Without_a_store_nothing_is_remembered_and_nothing_fails()
+    {
+        await using var engine = NewEngine(withStore: false);
+        var r = await Send(engine, new { type = "rememberCommand", commandId = "format" });
+        Assert.Equal("recent", r.GetProperty("type").GetString());
+        Assert.Empty(Strings(r, "commands"));
+    }
 }
 
 /// <summary>Settings a provider describes for itself (design section 10): stored per provider, applied, never interpreted.</summary>

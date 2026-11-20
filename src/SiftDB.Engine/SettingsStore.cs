@@ -38,6 +38,29 @@ public sealed record UserSettings(
     /// <summary>How Format SQL lays statements out (design section 14, F7).</summary>
     public FormatOptions Format { get; init; } = FormatOptions.Default;
 
+    /// <summary>
+    /// The command palette's recently used commands, by id, newest first (design section 14, F12). Ids this version does not
+    /// have are kept: the UI skips them, and a later version may have them again.
+    /// </summary>
+    public IReadOnlyList<string> RecentCommands { get; init; } = [];
+
+    /// <summary>Sheet files recently opened or saved, as full paths, newest first: the palette's "Open recent file…" (F12).</summary>
+    public IReadOnlyList<string> RecentFiles { get; init; } = [];
+
+    /// <summary>How many of each recent list are kept.</summary>
+    public const int MaxRecentCommands = 10, MaxRecentFiles = 15;
+
+    /// <summary>
+    /// <paramref name="list"/> with <paramref name="item"/> first and any earlier copy of it taken out, at most
+    /// <paramref name="max"/> long. File paths compare ignoring case (Windows), command ids exactly.
+    /// </summary>
+    public static IReadOnlyList<string> Remember(IReadOnlyList<string> list, string item, int max, bool ignoreCase) =>
+        Recent([item, .. list], max, ignoreCase);
+
+    private static List<string> Recent(IEnumerable<string>? items, int max, bool ignoreCase) =>
+        (items ?? []).Where(i => !string.IsNullOrWhiteSpace(i))
+            .Distinct(ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal).Take(max).ToList();
+
     /// <summary>The indent sizes offered, in spaces, and the line width's bounds.</summary>
     public static readonly IReadOnlyList<int> IndentChoices = [2, 4, 8];
     public const int MinLineWidth = 40, MaxLineWidth = 400;
@@ -52,6 +75,8 @@ public sealed record UserSettings(
         ResultRules = StyleRules.Normalise(ResultRules, strict),
         Zoom = ZoomChoices.Contains(Zoom) ? Zoom : 100,
         WhatsNew = WhatsNew is "all" or "never" ? WhatsNew : "majorMinor",
+        RecentCommands = Recent(RecentCommands, MaxRecentCommands, ignoreCase: false),
+        RecentFiles = Recent(RecentFiles, MaxRecentFiles, ignoreCase: true),
         Format = (Format ?? FormatOptions.Default) with
         {
             KeywordCase = Enum.IsDefined(Format?.KeywordCase ?? KeywordCase.AsTyped) ? Format!.KeywordCase : KeywordCase.AsTyped,
@@ -119,6 +144,8 @@ public sealed class SettingsStore(string path)
                 WarnAllRows = normalised.WarnAllRows,
                 LastSeenVersion = normalised.LastSeenVersion,
                 WhatsNew = normalised.WhatsNew,
+                RecentCommands = normalised.RecentCommands.Count == 0 ? null : [.. normalised.RecentCommands],
+                RecentFiles = normalised.RecentFiles.Count == 0 ? null : [.. normalised.RecentFiles],
                 Format = new StoredFormat
                 {
                     KeywordCase = normalised.Format.KeywordCase, Indent = normalised.Format.Indent,
@@ -153,6 +180,7 @@ public sealed class SettingsStore(string path)
                 {
                     Zoom = file.Zoom ?? 100, WarnAllRows = file.WarnAllRows ?? true,
                     LastSeenVersion = file.LastSeenVersion, WhatsNew = file.WhatsNew ?? "majorMinor",
+                    RecentCommands = file.RecentCommands ?? [], RecentFiles = file.RecentFiles ?? [],
                     Format = new FormatOptions(
                         file.Format?.KeywordCase ?? KeywordCase.AsTyped, file.Format?.Indent ?? 4,
                         file.Format?.Commas ?? CommaPlacement.End, file.Format?.LineWidth ?? 100),
@@ -174,6 +202,8 @@ public sealed class SettingsStore(string path)
         public bool? WarnAllRows { get; set; }
         public string? LastSeenVersion { get; set; }
         public string? WhatsNew { get; set; }
+        public List<string>? RecentCommands { get; set; }
+        public List<string>? RecentFiles { get; set; }
         public StoredFormat? Format { get; set; }
         public List<StoredRule>? ResultRules { get; set; }
         public Dictionary<string, Dictionary<string, string>>? ProviderSettings { get; set; }

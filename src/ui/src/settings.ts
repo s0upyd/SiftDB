@@ -295,8 +295,11 @@ let lastCategory = 'appearance';
 
 // ---- the editor -------------------------------------------------------------------------------------------------
 
-/** The settings editor: categories on the left, the chosen one's page on the right. Resolves true when something was saved. */
-export async function editSettings(settings: Settings, hooks?: SettingsHooks): Promise<boolean> {
+/**
+ * The settings editor: categories on the left, the chosen one's page on the right. It opens on `category` (an id, such as
+ * 'about') when given, else on the one last looked at. Resolves true when something was saved.
+ */
+export async function editSettings(settings: Settings, hooks?: SettingsHooks, category?: string): Promise<boolean> {
   let saved = false;
   const built = categories(settings, hooks, () => dialog.close()).map((c) => ({ category: c, ...c.build(settings.values) }));
 
@@ -374,7 +377,7 @@ export async function editSettings(settings: Settings, hooks?: SettingsHooks): P
 
   const dialog = el('dialog', { className: 'modal wide' }, form);
   dialog.setAttribute('aria-label', 'Settings');
-  const start = Math.max(0, built.findIndex((b) => b.category.id === lastCategory));
+  const start = Math.max(0, built.findIndex((b) => b.category.id === (category ?? lastCategory)));
   show(start);
   const done = showDialog(dialog);
   built[start].focus();

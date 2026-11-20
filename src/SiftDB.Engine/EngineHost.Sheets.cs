@@ -25,6 +25,7 @@ public sealed partial class EngineHost
             text = content.Text, mode = content.Header.Mode, connectionName = name, savedId = saved?.Id,
             lineEnding = content.LineEnding, encoding = content.Encoding, headerOther = PairsOut(content.Header.Other),
         });
+        RememberFile(path);
     }
 
     /// <summary>
@@ -40,6 +41,7 @@ public sealed partial class EngineHost
         SheetFile.Write(path, root.GetProperty("text").GetString()!, header,
             OptionalString(root, "lineEnding") ?? SheetFile.Crlf, OptionalString(root, "encoding") ?? "utf-8");
         Event(new { type = "fileSaved", replyTo = id, path = Path.GetFullPath(path), fileName = Path.GetFileName(path) });
+        RememberFile(path);
     }
 
     /// <summary>

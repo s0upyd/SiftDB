@@ -3,7 +3,8 @@ import { ConnectionCatalog, EditResult, askPassword, editConnection } from './co
 import { askSaveChanges } from './dialogs';
 import { applyIcons, lockIcon, spinner } from './icons';
 import { ResultView } from './results';
-import { PaletteCommand, openPalette, pickFrom, shortcutFor } from './palette';
+import { Command, CommandGroup, CommandRegistry, GROUPS, commands, shortcutOf } from './commands';
+import { PaletteItem, choose, paletteDone, paletteOpen, pickFrom, shortcutFor } from './palette';
 import { Settings, editSettings } from './settings';
 import { Release, showUpdateNotice, showWhatsNew } from './whatsnew';
 import { FileState, Sheet, SheetContext, Target, TxState, targetKey } from './sheet';
@@ -322,12 +323,15 @@ async function afterEdit(r: EditResult) {
   rebuildTree(); // a rename shows in the tree straight away
 }
 
-editBtn.onclick = async () => {
-  const id = savedIdOf(pickEl.value);
+/** The saved connection the picker shows for the visible sheet, in the connection form. */
+async function editPickedConnection() {
+  const id = active ? savedIdOf(active.draftChoice) : null;
   const c = id ? catalog.byId(id) : undefined;
   if (c) await afterEdit(await editConnection(bridge, catalog, c));
-};
-newConnBtn.onclick = async () => afterEdit(await editConnection(bridge, catalog, null));
+}
+const newConnection = async () => afterEdit(await editConnection(bridge, catalog, null));
+editBtn.onclick = () => void editPickedConnection();
+newConnBtn.onclick = () => void newConnection();
 /** Saving a pasted string: the engine takes it apart into fields. Its password stays in the engine. */
 saveAsBtn.onclick = async () => {
   const cs = connEl.value.trim();
@@ -546,11 +550,15 @@ function applyConnection(sheet: Sheet, savedId: string | null, connectionName: s
 /** Ctrl+O: the native dialog, then the file in a sheet (an already-open file just comes to the front). */
 async function openFile() {
   const d = await bridge.request({ type: 'openFileDialog', currentPath: active?.file?.path ?? null });
-  if (!d.path) return;
-  const already = sheets.find((s) => s.file?.path.toLowerCase() === String(d.path).toLowerCase());
+  if (d.path) await openPath(String(d.path));
+}
+
+/** A file in a sheet, from the dialog or the recent files (the engine adds it to them). */
+async function openPath(path: string) {
+  const already = sheets.find((s) => s.file?.path.toLowerCase() === path.toLowerCase());
   if (already) { activate(already); return; }
-  const r = await bridge.request({ type: 'openFile', path: d.path });
-  if (r.type === 'error') { active?.setMessage(`Could not open ${d.path}: ${r.message}`, 'error'); return; }
+  const r = await bridge.request({ type: 'openFile', path });
+  if (r.type === 'error') { active?.setMessage(`Could not open ${path}: ${r.message}`, 'error'); return; }
 
   // A blank untitled sheet is reused, unless the file names a connection and that sheet is connected elsewhere.
   const namesConnection = !!(r.savedId || r.connectionName);
@@ -599,9 +607,9 @@ async function saveSheet(sheet: Sheet, as = false): Promise<boolean> {
 $('openFile').onclick = () => void openFile();
 $('saveFile').onclick = () => { if (active) void saveSheet(active); };
 /** Settings saved: open results pick up new styling rules straight away. */
-async function openSettings() {
+async function openSettings(category?: string) {
   const hooks = { version: await appVersion, whatsNew: () => void openWhatsNew() };
-  if (await editSettings(settings, hooks)) sheets.forEach((s) => s.restyle());
+  if (await editSettings(settings, hooks, category)) sheets.forEach((s) => s.restyle());
 }
 
 // ---- What's New (design section 14, F17) ---------------------------------------------------------------------------
@@ -613,65 +621,20 @@ const appVersion = new Promise<string | null>((resolve) => {
   setTimeout(() => resolve(null), 5000); // a host that never says: carry on without
 });
 
-/**
- * What a release note's "Try it" can run, by id: the ids a commit's "Try-it:" footer may name (CLAUDE.md). An id this
- * build does not have shows no button.
- */
-const COMMANDS: Record<string, () => void> = {
-  format: () => void active?.format(false),
-  formatSheet: () => void active?.format(true),
-  dryRun: () => void active?.dryRunFromEditor(),
-  explain: () => void active?.explainFromEditor(false),
-  explainAnalyze: () => void active?.explainFromEditor(true),
-  run: () => void active?.runFromEditor(),
-  newSheet: () => addSheet(),
-  settings: () => void openSettings(),
-  refreshSchema: () => void refreshSchema(),
-  openFile: () => void openFile(),
-};
-
-// ---- the command palette (design section 14, F12) ---------------------------------------------------------------
-// PROOF OF CONCEPT: a hand-written list, not the command registry F12 plans. It checks that Monaco's quick-input widget,
-// hosted by the window, opens from anywhere and can take a second step.
-
-function paletteCommands(): PaletteCommand[] {
-  const app: PaletteCommand[] = [
-    { id: 'run', label: 'Run statement', shortcut: 'F5', run: COMMANDS.run },
-    { id: 'dryRun', label: 'Dry run statement', shortcut: 'Ctrl+Shift+F5', run: COMMANDS.dryRun },
-    { id: 'explain', label: 'Explain statement', shortcut: 'Ctrl+E', run: COMMANDS.explain },
-    { id: 'explainAnalyze', label: 'Explain analyze statement', shortcut: 'Ctrl+Shift+E', run: COMMANDS.explainAnalyze },
-    { id: 'format', label: 'Format SQL', shortcut: 'Shift+Alt+F', run: COMMANDS.format },
-    { id: 'formatSheet', label: 'Format sheet', run: COMMANDS.formatSheet },
-    { id: 'newSheet', label: 'New sheet', shortcut: 'Ctrl+T', run: COMMANDS.newSheet },
-    { id: 'openFile', label: 'Open file…', shortcut: 'Ctrl+O', run: COMMANDS.openFile },
-    { id: 'settings', label: 'Settings', shortcut: 'Ctrl+,', run: COMMANDS.settings },
-    { id: 'refreshSchema', label: 'Refresh schema', run: COMMANDS.refreshSchema },
-    {
-      // A second step, as VS Code's commands have: pick the sheet in the same widget.
-      id: 'goToSheet', label: 'Go to sheet…', description: 'pick one of the open sheets',
-      run: async () => {
-        const sheet = await pickFrom(sheets.map((s) => ({ label: s.title, description: s === active ? 'current' : undefined, value: s })), 'Pick a sheet');
-        if (sheet) { activate(sheet); sheet.focusEditor(); }
-      },
-    },
-  ];
-  // The active sheet's editor actions (Monaco's own, and SiftDB's registered with it), minus those already listed above.
-  const editor = (active?.editorActions() ?? [])
-    .filter((a) => !a.id.startsWith('siftdb.'))
-    .map((a): PaletteCommand => ({ id: a.id, label: a.label, shortcut: shortcutFor(a.id), description: 'editor', run: a.run }));
-  return [...app, ...editor];
-}
-
 /** Every release this build has notes for, by hand (Settings > About). */
 async function openWhatsNew() {
   const r = await bridge.request({ type: 'whatsNew', version: (await appVersion) ?? '0.0.0', all: true });
-  await showWhatsNew((r.releases as Release[] | undefined) ?? [], runCommand, (id) => id in COMMANDS);
+  await showWhatsNew((r.releases as Release[] | undefined) ?? [], runCommand, (id) => commands.has(id));
 }
 
+/**
+ * A release note's "Try it" (design section 14, F17): any registry command, by id. One that cannot run now says why in
+ * the sheet's message bar. False for an id this build does not have.
+ */
 function runCommand(id: string): boolean {
-  const command = COMMANDS[id];
-  if (!command) return false;
-  command();
+  const c = commands.get(id);
+  if (!c) return false;
+  void runIfAllowed(c);
   return true;
 }
 
@@ -681,8 +644,227 @@ async function whatsNewAtStartup() {
   if (!version) return;
   const r = await bridge.request({ type: 'whatsNew', version });
   const releases = (r.releases as Release[] | undefined) ?? [];
-  if (r.show === 'window') await showWhatsNew(releases, runCommand, (id) => id in COMMANDS);
-  else if (r.show === 'notice') showUpdateNotice(version, (r.summary as string | null) ?? null, () => void showWhatsNew(releases, runCommand, (id) => id in COMMANDS));
+  if (r.show === 'window') await showWhatsNew(releases, runCommand, (id) => commands.has(id));
+  else if (r.show === 'notice') showUpdateNotice(version, (r.summary as string | null) ?? null, () => void showWhatsNew(releases, runCommand, (id) => commands.has(id)));
+}
+
+// ---- the command registry and palette (design section 14, F12) ------------------------------------------------------
+// Every SiftDB action, defined once (commands.ts). The palette lists them, the window's shortcuts run them (see keyboard
+// below), the editor takes its menu labels and keybindings from them, and What's New's "Try it" runs them by id. The ids
+// are stable: release notes and the recently used list name them.
+
+/** A command that cannot run now says why where the user is looking: the visible sheet's message bar. */
+const notify = (reason: string) => active?.setMessage(reason, 'warning');
+
+async function runIfAllowed(c: Command) {
+  const state = CommandRegistry.state(c);
+  if (state === false) return;
+  if (typeof state === 'string') { notify(state); return; }
+  await c.run();
+}
+
+/** The grid on screen, or false (the result commands are then not listed). */
+const grid = () => active?.currentGrid ?? null;
+const needsSelection = (): boolean | string => !grid() ? false : !!grid()!.selection || 'Select some cells in the result first.';
+const copy = (id: string, label: string, as: 'tsv' | 'tsvHeaders' | 'csv' | 'json', keys?: string[]): Command => ({
+  id, label, group: 'Results', when: needsSelection, run: () => grid()?.copy(as), ...(keys ? { localKeys: keys } : {}),
+});
+
+commands.add(
+  // Sheets
+  { id: 'newSheet', label: 'New sheet', group: 'Sheets', keys: ['Ctrl+T'], description: 'on the connection of the sheet you are on', run: () => { addSheet(); } },
+  { id: 'openFile', label: 'Open file…', group: 'Sheets', keys: ['Ctrl+O'], run: () => openFile() },
+  { id: 'openRecent', label: 'Open recent file…', group: 'Sheets', description: 'files you opened or saved', run: () => openRecentFile() },
+  { id: 'save', label: 'Save', group: 'Sheets', keys: ['Ctrl+S'], when: () => !!active, run: async () => { await saveSheet(active!); } },
+  { id: 'saveAs', label: 'Save as…', group: 'Sheets', keys: ['Ctrl+Shift+S'], when: () => !!active, run: async () => { await saveSheet(active!, true); } },
+  { id: 'closeSheet', label: 'Close sheet', group: 'Sheets', keys: ['Ctrl+W'], when: () => !!active, run: () => closeSheet(active!) },
+  { id: 'nextSheet', label: 'Next sheet', group: 'Sheets', keys: ['Ctrl+Tab'], when: () => sheets.length > 1, run: () => cycle(1) },
+  { id: 'previousSheet', label: 'Previous sheet', group: 'Sheets', keys: ['Ctrl+Shift+Tab'], when: () => sheets.length > 1, run: () => cycle(-1) },
+  { id: 'goToSheet', label: 'Go to sheet…', group: 'Sheets', description: 'pick one of the open sheets', when: () => sheets.length > 1, run: goToSheet },
+  {
+    id: 'modeAssisted', label: 'Switch to Assisted mode', group: 'Sheets', description: 'the quotes the database needs are added for you',
+    when: () => !!active && active.mode !== 'assisted', run: () => active?.setMode('assisted'),
+  },
+  {
+    id: 'modeStrict', label: 'Switch to Strict mode', group: 'Sheets', description: 'the text you write is the text that runs',
+    when: () => !!active && active.mode !== 'strict', run: () => active?.setMode('strict'),
+  },
+
+  // Run. The sheet itself says why a statement cannot run (not connected, nothing under the cursor), as it does for F5.
+  { id: 'run', label: 'Run statement', group: 'Run', keys: ['F5'], localKeys: ['Ctrl+Enter'], description: 'or the selection', when: () => !!active, run: () => active?.runFromEditor() },
+  {
+    id: 'dryRun', label: 'Dry run statement', group: 'Run', keys: ['Ctrl+Shift+F5'], description: 'run it, show what it changes, roll back',
+    when: () => !!active, run: () => active?.dryRunFromEditor(),
+  },
+  {
+    id: 'explain', label: 'Explain statement', group: 'Run', keys: ['Ctrl+E'], description: 'show its plan; nothing runs',
+    when: () => !!active, run: () => active?.explainFromEditor(false),
+  },
+  {
+    id: 'explainAnalyze', label: 'Explain analyze statement', group: 'Run', keys: ['Ctrl+Shift+E'], description: 'run it, time each step, roll back',
+    when: () => !!active, run: () => active?.explainFromEditor(true),
+  },
+  { id: 'cancel', label: 'Cancel running statement', group: 'Run', localKeys: ['Ctrl+.'], when: () => !!active?.isRunning, run: () => active?.cancel() },
+
+  // Transactions: only the ones that mean something now are listed, and their keys are left alone otherwise (Ctrl+Shift+Enter
+  // is Monaco's "insert line above").
+  {
+    id: 'begin', label: 'Begin transaction', group: 'Transactions',
+    when: () => !!active?.connected && !active.readOnly && active.tx.state === 'none', run: () => active?.txAction('begin'),
+  },
+  {
+    id: 'commit', label: 'Commit transaction', group: 'Transactions', keys: ['Ctrl+Shift+Enter'],
+    when: () => active?.tx.state === 'open' || active?.tx.state === 'changed', run: () => active?.txAction('commit'),
+  },
+  {
+    id: 'rollback', label: 'Roll back transaction', group: 'Transactions', keys: ['Ctrl+Shift+R'],
+    when: () => !!active && active.tx.state !== 'none', run: () => active?.txAction('rollback'),
+  },
+
+  // Connections
+  { id: 'connect', label: 'Connect', group: 'Connections', description: 'the connection picked above, in a session of its own', when: () => !!active, run: connectActive },
+  { id: 'connectTo', label: 'Connect sheet to…', group: 'Connections', description: 'pick a saved connection', when: () => !!active, run: connectTo },
+  { id: 'disconnect', label: 'Disconnect', group: 'Connections', description: "close this sheet's session", when: () => !!active?.connected, run: disconnectActive },
+  {
+    id: 'editConnection', label: 'Edit connection…', group: 'Connections',
+    when: () => !!active && !catalog.error && !!savedIdOf(active.draftChoice) && !!catalog.byId(savedIdOf(active.draftChoice)!), run: editPickedConnection,
+  },
+  { id: 'newConnection', label: 'New connection…', group: 'Connections', when: () => !catalog.error && catalog.providers.length > 0, run: newConnection },
+
+  // Editor. Monaco's own editor actions are added to the list when a sheet is open (see openPalette).
+  { id: 'format', label: 'Format SQL', group: 'Editor', localKeys: ['Shift+Alt+F'], description: 'the statement, or the selection', when: () => !!active, run: () => active?.format(false) },
+  { id: 'formatSheet', label: 'Format sheet', group: 'Editor', description: 'every statement', when: () => !!active, run: () => active?.format(true) },
+  {
+    id: 'acceptAll', label: 'Accept all identifier corrections', group: 'Editor', localKeys: ['Ctrl+Alt+Q'], description: 'the greyed quotes become text',
+    when: () => !!active, run: () => active?.acceptAllCorrections(),
+  },
+
+  // Results: the result on screen.
+  copy('copy', 'Copy selection', 'tsv', ['Ctrl+C']),
+  copy('copyWithNames', 'Copy selection with column names', 'tsvHeaders', ['Ctrl+Shift+C']),
+  copy('copyCsv', 'Copy selection as CSV', 'csv'),
+  copy('copyJson', 'Copy selection as JSON', 'json'),
+  {
+    id: 'exportResult', label: 'Export result…', group: 'Results',
+    when: () => !grid() ? false : grid()!.canExport() || 'Nothing to export yet.', run: () => grid()?.onExport(null),
+  },
+  { id: 'pinResult', label: 'Pin result', group: 'Results', description: 'the next run opens a new tab', when: () => active?.currentResult?.pinned === false, run: () => active?.togglePin() },
+  { id: 'unpinResult', label: 'Unpin result', group: 'Results', description: 'the next run replaces it', when: () => !!active?.currentResult?.pinned, run: () => active?.togglePin() },
+  { id: 'closeResult', label: 'Close result', group: 'Results', when: () => !!active?.currentResult, run: () => active?.closeCurrentResult() },
+  { id: 'closeResults', label: 'Close unpinned results', group: 'Results', when: () => (active?.resultCount ?? 0) > 0, run: () => active?.closeResults(false) },
+  { id: 'closeAllResults', label: 'Close all results', group: 'Results', description: 'pinned ones too', when: () => (active?.resultCount ?? 0) > 0, run: () => active?.closeResults(true) },
+
+  // Schema
+  { id: 'refreshSchema', label: 'Refresh schema', group: 'Schema', description: "reload the connection's tables and columns", when: () => !active ? false : !!active.target || 'Not connected: connect the sheet first.', run: () => refreshSchema() },
+  { id: 'filterSchema', label: 'Filter schema tree', group: 'Schema', when: () => !treeFilter.disabled || 'Connect first: the tree is empty.', run: () => treeFilter.focus() },
+
+  // App
+  { id: 'settings', label: 'Settings', group: 'App', keys: ['Ctrl+,'], run: () => openSettings() },
+  { id: 'whatsNew', label: "What's New", group: 'App', description: 'every release this build has notes for', run: () => openWhatsNew() },
+  { id: 'about', label: 'About SiftDB', group: 'App', description: 'the version, and when What\'s New opens', run: () => openSettings('about') },
+  { id: 'applyUpdate', label: 'Restart to update', group: 'App', when: () => !$('update').hidden, run: () => bridge.send({ type: 'applyUpdate' }) },
+  { id: 'commandPalette', label: 'Show all commands', group: 'App', keys: ['F1', 'Ctrl+Shift+P'], unlisted: true, run: () => openPalette() },
+);
+
+/** Recently used commands, newest first (the engine keeps them in settings.json, so they survive a restart). */
+let recentCommands: string[] = [];
+
+function rememberCommand(id: string) {
+  recentCommands = [id, ...recentCommands.filter((r) => r !== id)];
+  void bridge.request({ type: 'rememberCommand', commandId: id }).then((r) => {
+    if (r.type === 'recent') recentCommands = r.commands as string[];
+  });
+}
+
+/**
+ * F1 or Ctrl+Shift+P, from anywhere: the registry's commands that can be listed now, by group, then Monaco's own editor
+ * actions for the sheet on screen. The chosen one runs once the palette has closed.
+ */
+async function openPalette() {
+  if (paletteOpen()) return;
+  const order = (g: string) => GROUPS.indexOf(g as CommandGroup);
+  const items: (PaletteItem & { run(): void | Promise<void> })[] = [];
+  for (const c of commands.all()) {
+    if (c.unlisted) continue;
+    const state = CommandRegistry.state(c);
+    if (state === false) continue;
+    items.push({
+      id: c.id, label: c.label, group: c.group, shortcut: shortcutOf(c), description: c.description,
+      reason: typeof state === 'string' ? state : undefined, run: c.run,
+    });
+  }
+  // Monaco's (comment line, find, go to line…). SiftDB's own are in the registry already, and its palette is this one.
+  const editorActions = (active?.editorActions() ?? [])
+    .filter((a) => !a.id.startsWith('siftdb.') && a.id !== 'editor.action.quickCommand')
+    .sort((a, b) => a.label.localeCompare(b.label))
+    .map((a) => ({ id: a.id, label: a.label, group: 'Editor', shortcut: shortcutFor(a.id), run: a.run }));
+  items.push(...editorActions);
+  items.sort((a, b) => order(a.group) - order(b.group)); // stable: each group keeps its own order
+
+  const chosen = await choose(items, recentCommands);
+  if (!chosen) return;
+  try {
+    if (chosen.reason) { notify(chosen.reason); return; }
+    rememberCommand(chosen.id);
+    await items.find((i) => i.id === chosen.id)?.run();
+  } finally {
+    paletteDone();
+  }
+}
+
+/** The palette's second step: one of the open sheets. */
+async function goToSheet() {
+  const sheet = await pickFrom(sheets.map((s) => ({ label: s.title, description: s === active ? 'current' : s.file?.path, value: s })), 'Pick a sheet');
+  if (sheet) activate(sheet);
+}
+
+/** The palette's second step: a saved connection (or a pasted string) for the sheet on screen, then Connect. */
+async function connectTo() {
+  const sheet = active;
+  if (!sheet) return;
+  const current = sheet.target ? choiceFor(sheet.target) : null;
+  const choices = [
+    ...catalog.saved.map((c) => ({
+      label: `${c.name}${c.readOnly ? ' (read-only)' : ''}`,
+      description: [`saved:${c.id}` === current ? 'connected' : '', catalog.describe(c)].filter(Boolean).join(' · '),
+      value: `saved:${c.id}`,
+    })),
+    { label: 'Connection string…', description: 'type or paste one above', value: STRING_CHOICE },
+  ];
+  const choice = await pickFrom(choices, `Connect "${sheet.title}" to`);
+  if (!choice || sheet !== active) return;
+  sheet.draftChoice = choice;
+  renderPicker();
+  scheduleAutosave();
+  if (choice === STRING_CHOICE) { connEl.focus(); return; }
+  await connectActive();
+}
+
+/** Ends the visible sheet's session. Uncommitted changes are rolled back, so they are asked about first. */
+async function disconnectActive() {
+  const sheet = active;
+  if (!sheet?.connected) return;
+  if (sheet.txPending &&
+      !window.confirm(`"${sheet.title}" has changes that are not committed. Disconnecting rolls them back.\n\nDisconnect anyway?`)) return;
+  await sheet.disconnect();
+  sheet.setMessage('Disconnected. Press Connect to open a new session.');
+  rebuildTree();
+  renderPicker();
+  updateHostState();
+}
+
+/** The palette's second step: a file opened or saved recently (the engine keeps the list, and leaves out ones gone since). */
+async function openRecentFile() {
+  const r = await bridge.request({ type: 'recent' });
+  const files = r.type === 'recent' ? (r.files as string[]) : [];
+  if (!files.length) { active?.setMessage('No recent files yet: files you open or save are listed here.'); return; }
+  const split = (p: string) => { const i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/')); return { name: p.slice(i + 1), dir: p.slice(0, i) }; };
+  const open = new Set(sheets.map((s) => s.file?.path.toLowerCase()));
+  const path = await pickFrom(files.map((f) => {
+    const { name, dir } = split(f);
+    return { label: name, description: open.has(f.toLowerCase()) ? `open · ${dir}` : dir, value: f };
+  }), 'Open a recent file');
+  if (path) await openPath(path);
 }
 applyIcons(document);
 $('settings').onclick = () => void openSettings();
@@ -751,53 +933,27 @@ function initSideSplitter() {
 initSideSplitter();
 
 // ---- keyboard ----------------------------------------------------------------------------------------------------
-// Capture phase and stopPropagation: Monaco binds some of these itself (Ctrl+Shift+Enter is "insert line above"), so it
-// must not also see them.
+// The window's shortcuts are the registry's `keys` (design section 14, F12), from anywhere on the page: F5 and Ctrl+E in
+// the grid or the tree as in the editor. Capture phase and stopPropagation: Monaco binds some of these itself
+// (Ctrl+Shift+Enter is "insert line above"), so it must not also see them. A command that cannot be listed now (Commit
+// with no transaction) leaves its key to whoever else wants it.
 
 /** A connection form or password prompt is open: the sheets' shortcuts must not act behind it. */
 const dialogOpen = () => document.querySelector('dialog[open]') !== null;
-/** The command palette has the keys while it is open. */
-const paletteOpen = () => !!document.activeElement?.closest('.siftdb-quickinput');
 
 window.addEventListener('keydown', (e) => {
+  // Never a page reload (it would drop every session), whatever has the keys.
+  if (e.key === 'F5') e.preventDefault();
+  // A dialog, or the palette (its list and any second step), has the keys while it is open.
   if (dialogOpen() || paletteOpen()) return;
-  const key = e.key.toLowerCase();
-  const handled = (fn: () => void) => { e.preventDefault(); e.stopPropagation(); fn(); };
-
-  // The command palette (design section 14, F12): F1 or Ctrl+Shift+P, from anywhere. Monaco's own F1 never sees the key.
-  if ((e.key === 'F1' && !e.ctrlKey && !e.altKey && !e.shiftKey) || (e.ctrlKey && e.shiftKey && !e.altKey && key === 'p')) {
-    return handled(() => void openPalette(paletteCommands()));
-  }
-
-  if (e.ctrlKey && !e.shiftKey && !e.altKey) {
-    if (key === 't') return handled(() => addSheet());
-    if (key === 'w' && active) return handled(() => void closeSheet(active!));
-    if (key === 's' && active) return handled(() => void saveSheet(active!));
-    if (key === 'o') return handled(() => void openFile());
-    if (key === ',') return handled(() => void openSettings());
-  }
-  if (e.ctrlKey && e.shiftKey && !e.altKey && key === 's' && active) return handled(() => void saveSheet(active!, true));
-  // Visual EXPLAIN (design section 14, F6): Ctrl+E the plan (nothing runs), Ctrl+Shift+E run it and time each step.
-  if (e.ctrlKey && !e.altKey && key === 'e' && active) return handled(() => void active!.explainFromEditor(e.shiftKey));
-  if (e.ctrlKey && !e.altKey && e.key === 'Tab') return handled(() => cycle(e.shiftKey ? -1 : 1));
-
-  if (e.ctrlKey && e.shiftKey && active) {
-    const s = active.tx.state;
-    if (e.key === 'Enter' && (s === 'open' || s === 'changed')) return handled(() => void active!.txAction('commit'));
-    if (key === 'r' && s !== 'none') return handled(() => void active!.txAction('rollback'));
-  }
+  const c = commands.forKey(e);
+  if (!c) return;
+  const state = CommandRegistry.state(c);
+  if (state === false) return;
+  e.preventDefault();
+  e.stopPropagation();
+  void runIfAllowed(c);
 }, true);
-
-// F5 runs the statement from anywhere on the page. Never let it reload the page (it would drop every session); when
-// an editor has focus it handles F5 itself and this never sees the key.
-window.addEventListener('keydown', (e) => {
-  if (e.key !== 'F5') return;
-  e.preventDefault(); // never a page reload, dialog or not
-  if (dialogOpen()) return;
-  // Ctrl+Shift+F5 is a dry run (design section 14, F2): run, show what it changes, roll back.
-  if (e.ctrlKey && e.shiftKey) void active?.dryRunFromEditor();
-  else void active?.runFromEditor();
-});
 
 // The browser's own right-click menu has Refresh (and Back), which reload the page and drop every session: it showed
 // wherever SiftDB has no menu of its own, e.g. the schema tree. Text boxes keep it, since there it is the
@@ -824,4 +980,5 @@ void Promise.all([catalog.load(), settings.load()]).then(async () => {
   }
   void whatsNewAtStartup(); // over the restored sheets
 });
+void bridge.request({ type: 'recent' }).then((r) => { if (r.type === 'recent') recentCommands = r.commands as string[]; });
 setInterval(() => active?.tick(), 250);

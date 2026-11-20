@@ -2,6 +2,7 @@ import type { Bridge, DatabaseSchema } from './bridge';
 import { CompletionResponse, QueryMode, RunHow, RunTarget, SheetAnalysis, SqlEditor } from './editor';
 import { ResultTab, ResultView, ResultsContext, plural } from './results';
 import { PlanContext, PlanView } from './plan';
+import { commands, shortcutOf } from './commands';
 import { applyIcons, spinner } from './icons';
 import { showMenu } from './menu';
 import { revealSelectedTab, scrollTabsWithWheel } from './tabs';
@@ -205,11 +206,12 @@ export class Sheet {
     // The ▾ beside Run: the other ways to run the same statement (design section 14, F2), so a dry run is in plain sight.
     this.el.runMore.onclick = () => {
       const r = this.el.runMore.getBoundingClientRect();
+      const key = (id: string) => { const c = commands.get(id); return c ? shortcutOf(c) : undefined; };
       showMenu(r.left, r.bottom + 2, [
-        { label: 'Run', shortcut: 'F5', action: () => void this.runFromEditor() },
-        { label: 'Dry run: run, show what changes, roll back', shortcut: 'Ctrl+Shift+F5', action: () => void this.dryRunFromEditor() },
-        { label: 'Explain: show the plan, nothing runs', shortcut: 'Ctrl+E', action: () => void this.explainFromEditor(false) },
-        { label: 'Explain analyze: run, time each step, roll back', shortcut: 'Ctrl+Shift+E', action: () => void this.explainFromEditor(true) },
+        { label: 'Run', shortcut: key('run'), action: () => void this.runFromEditor() },
+        { label: 'Dry run: run, show what changes, roll back', shortcut: key('dryRun'), action: () => void this.dryRunFromEditor() },
+        { label: 'Explain: show the plan, nothing runs', shortcut: key('explain'), action: () => void this.explainFromEditor(false) },
+        { label: 'Explain analyze: run, time each step, roll back', shortcut: key('explainAnalyze'), action: () => void this.explainFromEditor(true) },
       ], 'Ways to run');
     };
     this.el.cancel.onclick = () => this.cancel();
@@ -362,6 +364,33 @@ export class Sheet {
 
   /** This sheet's editor actions, for the command palette (design section 14, F12). */
   editorActions() { return this.editor.actions(); }
+
+  /** Assisted mode's greyed quotes become real text (the palette's "Accept all identifier corrections"). */
+  acceptAllCorrections() { this.editor.acceptAllCorrections(); }
+
+  // ---- the result tabs, for the command palette (design section 14, F12) --------------------------------------------
+
+  /** The result on screen: rows, a plan, or null when there is none. */
+  get currentResult(): ResultTab | null { return this.activeResult; }
+
+  /** The grid of the result on screen, when it is rows (not a plan). */
+  get currentGrid() { return this.activeResult instanceof ResultView ? this.activeResult.grid : null; }
+
+  get resultCount(): number { return this.results.length; }
+
+  /** Pins the result on screen (the next run opens a new tab), or unpins it. */
+  togglePin() {
+    if (!this.activeResult) return;
+    this.activeResult.pinned = !this.activeResult.pinned;
+    this.renderResultTabs();
+  }
+
+  closeCurrentResult() { if (this.activeResult) this.closeResult(this.activeResult); }
+
+  /** Every result tab but a running one, which keeps going in its tab. `pinned`: pinned ones too. */
+  closeResults(pinned: boolean) {
+    for (const r of [...this.results]) if (r !== this.running && (pinned || !r.pinned)) this.closeResult(r);
+  }
 
   /** "Script as" from the schema tree (design section 14, F13): into the sheet at the cursor, never run. */
   insertScript(sql: string) {

@@ -1,3 +1,4 @@
+import { commands, parseKey, shortcutOf } from './commands';
 import { showMenu } from './menu';
 import { monaco } from './monaco';
 
@@ -107,9 +108,50 @@ const editors = new Map<string, SqlEditor>();
 let providersRegistered = false;
 let editorCounter = 0;
 
+/** A shortcut from the command registry ("Ctrl+Shift+F5") as a Monaco keybinding, or null for a key it has no name for. */
+function monacoKey(spec: string): number | null {
+  const { KeyCode, KeyMod } = monaco;
+  const k = parseKey(spec);
+  const named: Record<string, number> = { Enter: KeyCode.Enter, Tab: KeyCode.Tab, Escape: KeyCode.Escape, '.': KeyCode.Period, ',': KeyCode.Comma };
+  const code = named[k.key]
+    ?? (/^[a-z0-9]$/i.test(k.key) ? (KeyCode as unknown as Record<string, number>)[/\d/.test(k.key) ? `Digit${k.key}` : `Key${k.key.toUpperCase()}`] : undefined)
+    ?? (/^F\d{1,2}$/.test(k.key) ? (KeyCode as unknown as Record<string, number>)[k.key] : undefined);
+  if (code === undefined) return null;
+  return code | (k.ctrl ? KeyMod.CtrlCmd : 0) | (k.shift ? KeyMod.Shift : 0) | (k.alt ? KeyMod.Alt : 0);
+}
+
+/**
+ * A registry command as one of this editor's Monaco actions (design section 14, F12): its label and shortcuts come from
+ * the registry, so the right-click menu and Monaco's keybindings say the same as the palette.
+ */
+function registryAction(commandId: string, menu: { group: string; order?: number } | null, precondition: string, run: () => void) {
+  const c = commands.get(commandId);
+  const keybindings = [...(c?.localKeys ?? []), ...(c?.keys ?? [])].map(monacoKey).filter((k): k is number => k !== null);
+  return {
+    id: `siftdb.${commandId}`,
+    label: c?.label ?? commandId,
+    keybindings,
+    ...(menu ? { contextMenuGroupId: menu.group, contextMenuOrder: menu.order ?? 0 } : {}),
+    precondition,
+    run,
+  };
+}
+
+/**
+ * The editor's right-click "Command Palette" (and Monaco's F1, should a key ever reach it) opens the app's palette rather
+ * than Monaco's in-editor one: a later registration of a command id wins over Monaco's own.
+ */
+let paletteCommandTaken = false;
+function takeOverPaletteCommand() {
+  if (paletteCommandTaken) return;
+  paletteCommandTaken = true;
+  monaco.editor.registerCommand('editor.action.quickCommand', () => void commands.get('commandPalette')?.run());
+}
+
 function ensureProviders() {
   if (providersRegistered) return;
   providersRegistered = true;
+  takeOverPaletteCommand();
 
   const Kind = monaco.languages.CompletionItemKind;
   const kinds = { schema: Kind.Module, table: Kind.Class, view: Kind.Interface, column: Kind.Field, alias: Kind.Variable };
@@ -234,69 +276,24 @@ export class SqlEditor {
     // removing its default) rather than wrapping it means the hover's "Quick Fix... (Alt+Enter)" label tells the truth.
     monaco.editor.addKeybindingRule({ keybinding: KeyMod.CtrlCmd | KeyCode.Period, command: '-editor.action.quickFix' });
     monaco.editor.addKeybindingRule({ keybinding: KeyMod.Alt | KeyCode.Enter, command: 'editor.action.quickFix', when: `editorTextFocus && ${mine}` });
-    this.editor.addAction({
-      id: 'siftdb.acceptAll',
-      label: 'Accept all identifier corrections',
-      keybindings: [KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyQ],
-      contextMenuGroupId: 'modification',
-      precondition: mine,
-      run: () => this.acceptAll(),
-    });
+    // SiftDB's editor actions (design section 14, F12): label and shortcuts from the command registry, so this menu, Monaco's
+    // keybindings and the palette agree. Accept all corrections is Monaco's to bind (Ctrl+Alt+Q, in the editor only); the run
+    // keys are the window's, bound here too so the right-click menu shows them.
+    this.editor.addAction(registryAction('acceptAll', { group: 'modification' }, mine, () => this.acceptAll()));
 
     this.editor.onDidChangeModelContent(() => this.schedule());
     this.editor.onDidChangeCursorSelection(() => this.schedule());
-    // Dry run (design section 14, F2): an action rather than a bare command, so it is in the editor's right-click menu and
-    // the F1 palette with its shortcut shown.
-    this.editor.addAction({
-      id: 'siftdb.dryRun',
-      label: 'Dry run statement (run it, show what it changes, roll back)',
-      keybindings: [KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.F5],
-      contextMenuGroupId: 'navigation',
-      contextMenuOrder: 0,
-      precondition: mine,
-      run: () => cb.dryRun(),
-    });
-
-    // Visual EXPLAIN (design section 14, F6): Ctrl+E estimates only (nothing runs), Ctrl+Shift+E runs it and times it.
-    this.editor.addAction({
-      id: 'siftdb.explain',
-      label: 'Explain statement (show its plan, nothing runs)',
-      keybindings: [KeyMod.CtrlCmd | KeyCode.KeyE],
-      contextMenuGroupId: 'navigation',
-      contextMenuOrder: 1,
-      precondition: mine,
-      run: () => cb.explain(false),
-    });
-    this.editor.addAction({
-      id: 'siftdb.explainAnalyze',
-      label: 'Explain analyze statement (run it, time each step, roll back)',
-      keybindings: [KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyE],
-      contextMenuGroupId: 'navigation',
-      contextMenuOrder: 2,
-      precondition: mine,
-      run: () => cb.explain(true),
-    });
+    // Dry run (design section 14, F2) and Visual EXPLAIN (F6): Ctrl+E estimates only (nothing runs), Ctrl+Shift+E runs it and
+    // times it.
+    this.editor.addAction(registryAction('dryRun', { group: 'navigation', order: 0 }, mine, () => cb.dryRun()));
+    this.editor.addAction(registryAction('explain', { group: 'navigation', order: 1 }, mine, () => cb.explain(false)));
+    this.editor.addAction(registryAction('explainAnalyze', { group: 'navigation', order: 2 }, mine, () => cb.explain(true)));
 
     // Format SQL (design section 14, F7). Shift+Alt+F is Monaco's own Format Document, which does nothing here (there is no
     // formatter registered with Monaco): it is taken off and given to SiftDB's, which the engine does.
     monaco.editor.addKeybindingRule({ keybinding: KeyMod.Shift | KeyMod.Alt | KeyCode.KeyF, command: '-editor.action.formatDocument' });
-    this.editor.addAction({
-      id: 'siftdb.format',
-      label: 'Format SQL (the statement, or the selection)',
-      keybindings: [KeyMod.Shift | KeyMod.Alt | KeyCode.KeyF],
-      contextMenuGroupId: '1_modification',
-      contextMenuOrder: 0,
-      precondition: mine,
-      run: () => cb.format(false),
-    });
-    this.editor.addAction({
-      id: 'siftdb.formatSheet',
-      label: 'Format sheet (every statement)',
-      contextMenuGroupId: '1_modification',
-      contextMenuOrder: 1,
-      precondition: mine,
-      run: () => cb.format(true),
-    });
+    this.editor.addAction(registryAction('format', { group: '1_modification', order: 0 }, mine, () => cb.format(false)));
+    this.editor.addAction(registryAction('formatSheet', { group: '1_modification', order: 1 }, mine, () => cb.format(true)));
 
     this.editor.onMouseDown((e) => {
       if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position && e.event.leftButton) {
@@ -310,10 +307,11 @@ export class SqlEditor {
       if (!this.model.getLineDecorations(line).some((d) => d.options.glyphMarginClassName === 'run-glyph')) return; // no ▶ here
       const { posx, posy } = e.event;
       showMenu(posx, posy, [
-        { label: 'Run statement', shortcut: 'F5', action: () => void this.runStatementOnLine(line) },
-        { label: 'Dry run statement', shortcut: 'Ctrl+Shift+F5', action: () => void this.runStatementOnLine(line, 'dry') },
-        { label: 'Explain statement', shortcut: 'Ctrl+E', action: () => void this.runStatementOnLine(line, 'explain') },
-        { label: 'Explain analyze statement', shortcut: 'Ctrl+Shift+E', action: () => void this.runStatementOnLine(line, 'analyze') },
+        // The same ways to run as the registry's commands, for this statement rather than the cursor's.
+        ...([['run', 'run'], ['dryRun', 'dry'], ['explain', 'explain'], ['explainAnalyze', 'analyze']] as const).map(([id, how]) => {
+          const c = commands.get(id);
+          return { label: c?.label ?? id, shortcut: c ? shortcutOf(c) : undefined, action: () => void this.runStatementOnLine(line, how) };
+        }),
       ], 'Statement actions');
     });
   }
@@ -397,6 +395,9 @@ export class SqlEditor {
   }
 
   /** Applies every automatic correction as real text ("Accept all", design section 3). */
+  /** The palette's "Accept all identifier corrections" (design section 14, F12). */
+  acceptAllCorrections() { this.acceptAll(); }
+
   private acceptAll() {
     const edits = [...this.corrections].sort((x, y) => y.start - x.start).map((c) => {
       const a = this.model.getPositionAt(c.start);

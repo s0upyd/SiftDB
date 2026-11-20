@@ -108,6 +108,12 @@ public sealed partial class EngineHost : IAsyncDisposable
                 case "saveSettings":
                     SaveSettings(id, root);
                     break;
+                case "recent":
+                    Recent(id);
+                    break;
+                case "rememberCommand":
+                    RememberCommand(id, root.GetProperty("commandId").GetString()!);
+                    break;
                 case "parseConnectionString":
                     ParseConnectionString(id, root.GetProperty("provider").GetString()!, root.GetProperty("connectionString").GetString()!);
                     break;

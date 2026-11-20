@@ -119,6 +119,38 @@ public sealed partial class EngineHost
         }),
     };
 
+    // ---- recently used, for the command palette (design section 14, F12) ----------------------------------------------
+    // Kept in the settings file, so they survive a restart, but never part of the settings editor: its saves leave them be.
+
+    /// <summary>"recent": the recently used commands, and the recent files that still exist, newest first.</summary>
+    private void Recent(int id)
+    {
+        var s = CurrentSettings;
+        Event(new { type = "recent", replyTo = id, commands = s.RecentCommands, files = s.RecentFiles.Where(File.Exists) });
+    }
+
+    /// <summary>"rememberCommand": a command was run from the palette. Answered like "recent".</summary>
+    private void RememberCommand(int id, string commandId)
+    {
+        Remember(s => s with { RecentCommands = UserSettings.Remember(s.RecentCommands, commandId, UserSettings.MaxRecentCommands, ignoreCase: false) });
+        Recent(id);
+    }
+
+    /// <summary>A sheet file was opened or saved. Not being able to record it never fails the open or the save.</summary>
+    private void RememberFile(string path)
+    {
+        var full = Path.GetFullPath(path);
+        Remember(s => s with { RecentFiles = UserSettings.Remember(s.RecentFiles, full, UserSettings.MaxRecentFiles, ignoreCase: true) });
+    }
+
+    private void Remember(Func<UserSettings, UserSettings> change)
+    {
+        if (_settings is not { LoadError: null }) return; // no store, or a file that must not be overwritten
+        try { _settings.Save(change(_settings.Get())); }
+        catch (IOException) { /* best effort: the list is a convenience */ }
+        catch (UnauthorizedAccessException) { }
+    }
+
     /// <summary>
     /// "whatsNew" (design section 14, F17), at startup with the running version: what to show (the window, a notice, or
     /// nothing), with the releases since the version last seen, which then becomes this one, so it never shows twice. With
