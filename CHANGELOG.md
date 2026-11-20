@@ -2,6 +2,26 @@
 
 What changed in each SiftDB release. Generated from the commit messages by git-cliff (see cliff.toml); do not edit it by hand.
 
+## 0.3.0 - 2026-11-20
+
+### Highlights
+
+- See a statement's plan as a graph, with Ctrl+E (estimates) and Ctrl+Shift+E (timed) ([Try it](command:explain))
+- Command palette with every SiftDB command, from anywhere (F1 or Ctrl+Shift+P) ([Try it](command:commandPalette))
+- See a statement's tables and joins in a query map, with a warning for a table that is not joined ([Try it](command:toggleMiniMap))
+- See who holds the lock your statement waits for, and cancel or end their session
+- Read 1 to 5 rows down the page with Grid | Record, and see which columns differ
+
+### Improvements
+
+- Pick the database from the server's list when adding a connection
+- Check for updates by hand, from Settings › About or the palette ([Try it](command:checkForUpdates))
+- A tab with uncommitted changes, or a failed transaction, is tinted amber or red
+
+### Fixes
+
+- Closing SiftDB no longer hangs while a sheet waits for a lock
+
 ## 0.2.1 - 2026-11-18
 
 ### Fixes
