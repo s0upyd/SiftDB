@@ -5,6 +5,8 @@ import { Cell, CellRange, CompareView, Grid, GridTheme, darkTheme, lightTheme } 
 import { MenuItem, showMenu } from './menu';
 import { setIcon, spinner } from './icons';
 import { ResultStore, cellText, decodeBatch } from './store';
+import { MAX_RECORD_ROWS, RecordSource, RecordView } from './record';
+import { stylersFor } from './styles';
 
 /** The format and file of the last export in this run: the next export starts from them. */
 let lastFormat: ExportFormat = 'csv';
@@ -77,6 +79,12 @@ export interface ResultsContext {
   runForReal(sql: string): void;
   /** Following a foreign key (design section 14, F4): put this statement at the end of the sheet and run it in a new result tab. */
   openQuery(sql: string): void;
+  /**
+   * The record view (design section 14, F8) was last chosen on this sheet: a later result of 1 to 5 rows opens in it too,
+   * until Grid is chosen. Remembered per sheet, for this run of the app.
+   */
+  recordPreferred(): boolean;
+  setRecordPreferred(on: boolean): void;
 }
 
 /** A foreign key whose columns are all in the result (design section 14, F4): its columns' places, and what it points at. */
@@ -131,8 +139,18 @@ export class ResultView implements ResultTab {
   readonly grid: Grid;
   get tabClass() { return this.dry ? 'dryrun' : ''; }
   shown() { this.grid.invalidate(); }
-  restyle() { this.grid.invalidate(); }
+  restyle() { this.grid.invalidate(); if (this.recordShown) this.record.refresh(this.recordSource()); }
   label = '';
+
+  // ---- the record view (design section 14, F8) ---------------------------------------------------------------------
+  /** The Grid | Record switch on the status bar, and the record view itself (in place of the grid while it is shown). */
+  private readonly viewEl = document.createElement('span');
+  private readonly gridBtn = document.createElement('button');
+  private readonly recordBtn = document.createElement('button');
+  private readonly record = new RecordView(() => this.showGrid());
+  private recordShown = false;
+  /** The result's columns, as the engine described them. */
+  private columns: Column[] = [];
   /** A pinned result survives the next run; an unpinned one is replaced by it. */
   pinned = false;
   queryId = 0;
@@ -232,12 +250,25 @@ export class ResultView implements ResultTab {
     this.realBtn.title = 'Run the statement now, for real. Nothing from the dry run is reused.';
     this.realBtn.onclick = () => this.ctx.runForReal(this.sql);
     this.dryEl.append(modes, info, this.realBtn);
-    main.append(this.iconEl, text, this.dryEl, this.exportEl, this.toggleEl);
+    // Grid | Record (design section 14, F8), styled like Assisted | Strict: both always visible, the current one pressed.
+    this.viewEl.className = 'modes viewswitch';
+    this.viewEl.setAttribute('role', 'group');
+    this.viewEl.setAttribute('aria-label', 'Show the rows as');
+    this.gridBtn.textContent = 'Grid';
+    this.gridBtn.title = 'One line per row (Space switches)';
+    this.recordBtn.textContent = 'Record';
+    this.gridBtn.onclick = () => this.showGrid();
+    this.recordBtn.onclick = () => this.showRecord();
+    this.viewEl.append(this.gridBtn, this.recordBtn);
+    main.append(this.iconEl, text, this.dryEl, this.viewEl, this.exportEl, this.toggleEl);
     this.detailsEl.className = 'details';
     this.statusEl.append(main, this.detailsEl);
 
-    this.panel.append(this.statusEl, this.gridEl);
+    this.record.el.hidden = true;
+    this.panel.append(this.statusEl, this.gridEl, this.record.el);
     this.grid = new Grid(this.gridEl);
+    this.grid.onSelect = () => this.updateViewSwitch();
+    this.grid.onSpace = () => this.toggleRecord();
     this.setTheme(dark);
     this.grid.onViewChange = () => this.pump();
     this.grid.onExport = (range) => void this.export(range);
@@ -314,6 +345,8 @@ export class ResultView implements ResultTab {
     this.done = false;
     this.stale = false;
     this.state = 'running';
+    this.columns = [];
+    this.showGrid(false); // a new statement starts on the grid; the sheet's choice comes back when it is complete
     this.grid.setStore(this.store, []);
     this.refreshStats();
 
@@ -349,6 +382,7 @@ export class ResultView implements ResultTab {
       this.grid.setStore(this.store, columns.slice(this.dryBase('after'), this.dryBase('after') + this.dry.width), this.compareView());
     } else {
       this.columnCount = columns.length;
+      this.columns = columns;
       this.grid.setStore(this.store, columns);
       this.links = (r.links as Link[] | undefined) ?? [];
       this.keys = (r.keys as RowKeyInfo[] | undefined) ?? [];
@@ -410,6 +444,8 @@ export class ResultView implements ResultTab {
       this.rowsAffected = e.rowsAffected ?? null; // set by INSERT, UPDATE, DELETE; null for a SELECT
       this.grid.setRowHint(e.totalRows);
       this.setState('complete');
+      // Record was chosen last on this sheet, and the whole result qualifies: it opens in Record (design section 14, F8).
+      if (this.ctx.recordPreferred() && this.wholeResultRows()) this.showRecord(false);
       this.finish();
     } else if (e.type === 'cancelled') {
       this.outstanding--;
@@ -510,6 +546,14 @@ export class ResultView implements ResultTab {
   /** The grid menu's link items: open the row a link points at, and list what references this row. */
   private linkMenu(cell: Cell, x: number, y: number): MenuItem[] {
     const items: MenuItem[] = [];
+    // The record view of the selected rows (design section 14, F8), first: it is about the rows, the links about one cell.
+    if (!this.dry && this.columns.length) {
+      const rows = this.recordRows();
+      items.push({
+        label: rows && rows.length > 1 ? `Record view of ${rows.length} rows` : 'Record view', shortcut: 'Space', disabled: !rows,
+        action: () => this.showRecord(),
+      });
+    }
     const link = this.linkAt(cell);
     if (link && this.valuesAt(cell.row, link.columns)) {
       items.push({ label: `Open referenced row (${link.table})`, shortcut: 'Ctrl+click', action: () => void this.openLink(cell) });
@@ -545,6 +589,93 @@ export class ResultView implements ResultTab {
       disabled: ref.count === 0,
       action: () => this.ctx.openQuery(ref.sql),
     })), `Rows that reference this ${key.table}`);
+  }
+
+  // ---- the record view (design section 14, F8) ---------------------------------------------------------------------
+
+  private static rowsFrom(first: number, count: number): number[] { return Array.from({ length: count }, (_, i) => first + i); }
+
+  /** The whole result, when it is complete and has 1 to 5 rows: what Record shows with no selection to go by. */
+  private wholeResultRows(): number[] | null {
+    const total = this.store.loadedRows;
+    return this.state === 'complete' && total >= 1 && total <= MAX_RECORD_ROWS ? ResultView.rowsFrom(0, total) : null;
+  }
+
+  /**
+   * The rows Record would show: the selected rows, when the selection covers 1 to 5 loaded rows (whole rows, whatever
+   * columns are selected), else the whole result when it has 1 to 5. Null when neither: then the switch is disabled. Not
+   * for a dry run (its rows are halves of a comparison of their own) or a statement without columns.
+   */
+  private recordRows(): number[] | null {
+    if (this.dry || !this.columns.length) return null;
+    const r = this.grid.selection;
+    if (r) {
+      const n = r.r1 - r.r0 + 1;
+      if (n >= 1 && n <= MAX_RECORD_ROWS && r.r1 < this.store.loadedRows) return ResultView.rowsFrom(r.r0, n);
+    }
+    return this.wholeResultRows();
+  }
+
+  /** Space, the switch, the grid's menu and the palette: Record when it is off and can show something, Grid when it is on. */
+  get canToggleRecord(): boolean { return this.recordShown || !!this.recordRows(); }
+
+  toggleRecord() { if (this.recordShown) this.showGrid(); else this.showRecord(); }
+
+  private recordSource(): RecordSource {
+    const store = this.store;
+    const linkCols = new Set(this.links.flatMap((l) => l.columns));
+    const refCols = new Set(this.keys.flatMap((k) => k.columns));
+    return {
+      columns: this.columns,
+      stylers: stylersFor(this.columns),
+      rowCount: store.loadedRows,
+      value: (row, col) => { const b = store.batchFor(row); return b ? cellText(b, col, row - b.startRow) : undefined; },
+      isLink: (col) => linkCols.has(col),
+      isRef: (col) => refCols.has(col),
+      peek: (cell) => this.peek(cell),
+      open: (cell) => void this.openLink(cell),
+      refs: (cell, x, y) => this.grid.onRefsOpen?.(cell, x, y),
+    };
+  }
+
+  /** `remember`: the user chose it, so later results on this sheet open in it too; not when it is that choice coming back. */
+  private showRecord(remember = true) {
+    const rows = this.recordRows();
+    if (!rows) return;
+    this.record.show(this.recordSource(), rows);
+    this.recordShown = true;
+    this.gridEl.hidden = true;
+    this.record.el.hidden = false;
+    if (remember) this.ctx.setRecordPreferred(true);
+    this.updateViewSwitch();
+    this.record.focus();
+  }
+
+  private showGrid(remember = true) {
+    const was = this.recordShown;
+    this.recordShown = false;
+    this.record.el.hidden = true;
+    this.gridEl.hidden = false;
+    if (remember) this.ctx.setRecordPreferred(false);
+    this.updateViewSwitch();
+    if (was) { this.grid.invalidate(); if (remember) this.gridEl.focus({ preventScroll: true }); }
+  }
+
+  /** The switch: on the bar for a result with columns (not a dry run's), Record enabled when there is something for it to show. */
+  private updateViewSwitch() {
+    const rows = this.recordShown ? this.record.shownRows : this.recordRows();
+    this.viewEl.hidden = !!this.dry || !this.columns.length;
+    this.gridBtn.setAttribute('aria-pressed', String(!this.recordShown));
+    this.recordBtn.setAttribute('aria-pressed', String(this.recordShown));
+    this.recordBtn.disabled = !this.recordShown && !rows;
+    const which = rows ? (rows.length === 1 ? `row ${rows[0] + 1}` : `rows ${rows[0] + 1}–${rows[rows.length - 1] + 1}`) : '';
+    this.recordBtn.title = this.recordShown
+      ? 'Down the page: one column per row (Space switches)'
+      : rows
+        ? `Show ${which} down the page, one column per row (Space)`
+        : this.state === 'running'
+          ? 'Record view: select 1 to 5 rows, or wait for a result of 1 to 5 rows to finish'
+          : `Record view: select 1 to 5 rows to see them down the page (this result has ${plural(this.store.loadedRows, 'row')})`;
   }
 
   /** Where the shown half starts among the result's columns. */
@@ -608,6 +739,7 @@ export class ResultView implements ResultTab {
 
   /** Redraws the status bar. Cheap; called a few times a second for the visible result, and on every state change. */
   refreshStats() {
+    this.updateViewSwitch();
     const { headline, extra } = this.describe();
     this.statusEl.dataset.state = this.state;
     this.statusEl.hidden = this.state === 'idle';
@@ -726,6 +858,7 @@ export class ResultView implements ResultTab {
     this.cancel();
     if (this.queryId) this.ctx.unregisterQuery(this.queryId);
     this.queryId = 0;
+    this.record.dispose();
     this.panel.remove();
   }
 }

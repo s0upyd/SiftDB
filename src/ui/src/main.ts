@@ -806,6 +806,13 @@ commands.add(
   copy('copyCsv', 'Copy selection as CSV', 'csv'),
   copy('copyJson', 'Copy selection as JSON', 'json'),
   {
+    // The record view (design section 14, F8): the selected rows, or a result of 1 to 5 rows, down the page.
+    id: 'recordView', label: 'Show or hide record view', group: 'Results', localKeys: ['Space'],
+    description: 'Grid | Record: 1 to 5 rows down the page, one column per row',
+    when: () => !active?.currentGrid ? false : active.canToggleRecordView || 'Select 1 to 5 rows in the result first.',
+    run: () => active?.toggleRecordView(),
+  },
+  {
     id: 'exportResult', label: 'Export result…', group: 'Results',
     when: () => !grid() ? false : grid()!.canExport() || 'Nothing to export yet.', run: () => grid()?.onExport(null),
   },

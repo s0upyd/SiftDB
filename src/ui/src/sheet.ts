@@ -184,6 +184,9 @@ export class Sheet {
         void this.startRun(sql, false, true);
       },
       onFinished: (v) => this.runFinished(v),
+      // The record view (design section 14, F8): chosen once, it stays this sheet's view for results that qualify.
+      recordPreferred: () => this.recordPreferred,
+      setRecordPreferred: (on) => { this.recordPreferred = on; },
     };
     // Plans (design section 14, F6) link their steps to the table references in the editor.
     this.planCtx = {
@@ -405,6 +408,14 @@ export class Sheet {
   get currentGrid() { return this.activeResult instanceof ResultView ? this.activeResult.grid : null; }
 
   get resultCount(): number { return this.results.length; }
+
+  /** Record was the last view chosen on this sheet (design section 14, F8). For this run of the app. */
+  private recordPreferred = false;
+
+  /** The result on screen can switch between Grid and Record now (the palette's command). */
+  get canToggleRecordView(): boolean { return this.activeResult instanceof ResultView && this.activeResult.canToggleRecord; }
+
+  toggleRecordView() { if (this.activeResult instanceof ResultView) this.activeResult.toggleRecord(); }
 
   /** Pins the result on screen (the next run opens a new tab), or unpins it. */
   togglePin() {

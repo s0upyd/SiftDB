@@ -191,6 +191,10 @@ export class Grid {
   onExport: (range: CellRange | null) => void = () => {};
   /** Whether Export can be offered now (the statement has finished). */
   canExport: () => boolean = () => false;
+  /** The selection changed (the record view's switch follows it: design section 14, F8). */
+  onSelect: () => void = () => {};
+  /** Space in the grid: the record view of the selected rows (design section 14, F8). */
+  onSpace: (() => void) | null = null;
 
   constructor(private wrap: HTMLElement) {
     wrap.style.position = 'relative';
@@ -374,6 +378,7 @@ export class Grid {
     this.scrollIntoView(this.sel.focus, mode);
     this.invalidate();
     this.describeSelection();
+    this.onSelect();
   }
 
   selectAll() {
@@ -382,6 +387,7 @@ export class Grid {
     this.sel = { anchor: { row: 0, col: 0 }, focus, mode: 'all' };
     this.invalidate();
     this.describeSelection();
+    this.onSelect();
   }
 
   /** For screen readers: the cell that has focus, or how much is selected. */
@@ -542,6 +548,7 @@ export class Grid {
       this.onLinkOpen(this.sel.focus);
       return;
     }
+    if (e.key === ' ' && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && this.onSpace) { done(); this.onSpace(); return; }
     if (e.key === 'Enter' && !e.ctrlKey && !e.altKey && !e.shiftKey) {
       if (this.sel) { done(); void this.openValue(this.sel.focus); }
       return;
