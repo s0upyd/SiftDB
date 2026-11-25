@@ -26,7 +26,7 @@ The aim is to take the pain out of everyday SQL work: identifier casing and quot
 
 ## 2. Providers (plugins)
 
-Each provider is a separate assembly loaded with `AssemblyLoadContext`, built against a versioned contract (`IDatabaseProvider` v1, v2…).
+Each provider is a separate assembly built against a versioned contract (`IDatabaseProvider` v1, v2…). Today the host references the Postgres provider directly. Loading each provider into its own `AssemblyLoadContext` from a `providers\` folder, so its dependencies stay out of the app, is planned as feature 18 (§14).
 
 Each provider supplies:
 - **Connection:** building a connection string, testing it, opening it
@@ -37,9 +37,9 @@ Each provider supplies:
 - **Parser:** statement splitting, token positions, alias resolution
 - **Transactions:** `ITransactionMonitor` (see §7)
 
-The first provider is **Postgres**: Npgsql, plus libpg_query (Postgres's own parser) through a .NET binding or a small P/Invoke wrapper. A later SQL Server provider would use ScriptDom.
+The first provider is **Postgres**: Npgsql, plus libpg_query (Postgres's own parser) through a .NET binding or a small P/Invoke wrapper. The second is planned to be **DynamoDB**, through PartiQL (feature 19). A later SQL Server provider would use ScriptDom.
 
-The app checks the contract version when loading a provider and refuses incompatible ones instead of crashing.
+The app checks the contract version when loading a provider and should refuse incompatible ones instead of crashing. Today a mismatch throws in the `EngineHost` constructor and stops the app; feature 18 replaces that with skipping the provider and saying why.
 
 ---
 
@@ -222,7 +222,7 @@ There is no "production" flag or environment concept, and no per-connection defa
 - **Velopack** handles the installer, background delta updates and stable/beta channels. Releases are hosted on the public repository's GitHub Releases, published by a GitHub Actions workflow started by hand (*Actions › Release › Run workflow*), which works out the version and writes the release notes from the commit messages (F17).
 - **Checking for updates:** an installed copy checks by itself 10 s after start and every 4 hours, downloads a newer release quietly, then offers *Restart to update* in the toolbar (or applies it at the next start). **By hand:** *Check for updates* in Settings › About and in the palette (`checkForUpdates`), a host command that waits for a check already running and answers how it went: up to date, downloaded (with *Restart to update* beside it, and the toolbar's button), failed (the reason; often offline), or a copy run from a build folder, which never updates. About shows the download's progress ("Downloading SiftDB 0.3.0… 45%") and an update already waiting as soon as it opens; the palette says the outcome in the sheet's message bar.
 - **Code signing** with Azure Trusted Signing, to avoid SmartScreen warnings. Deferred until the signing account is approved; until then the installer is unsigned and SmartScreen warns.
-- Third-party providers go in a plugins folder (possibly NuGet-format packages) and are checked against the contract version.
+- **Providers ship inside the app's package**, each in its own folder under `providers\` (feature 18), so Velopack updates them with the app and a bundled provider can never fall out of step with it. Providers delivered separately (third-party, or updated on their own) come later, through feature 16's repositories with code signing added.
 
 ---
 
@@ -371,7 +371,7 @@ Reading: first rows and scrolling pass comfortably. The bridge and UI add about 
 
 ## 14. Planned features
 
-Agreed 2026-11-17, merged here 2026-11-18. Seventeen features, in suggested build order. Each follows the existing rules: the **engine** decides and the UI only draws, **providers** supply anything specific to one database (new optional capabilities in the provider contract), and anything not implemented degrades quietly. References like "feature 9" or "(12)" mean the features below; `§` numbers mean the sections of this document.
+Agreed 2026-11-17, merged here 2026-11-18; F18 and F19 added 2026-11-25. Nineteen features, in suggested build order. Each follows the existing rules: the **engine** decides and the UI only draws, **providers** supply anything specific to one database (new optional capabilities in the provider contract), and anything not implemented degrades quietly. References like "feature 9" or "(12)" mean the features below; `§` numbers mean the sections of this document.
 
 **Tracking:** the Status column is the list of what is left to build. When a feature (or part of one) is built, set its status here, and record what was built and decided in §11 the way earlier features are, with a "Not yet:" list for the rest.
 
@@ -394,6 +394,8 @@ Agreed 2026-11-17, merged here 2026-11-18. Seventeen features, in suggested buil
 | F15 | Link templates (open a URL with values from a result) | Command registry (F12), result styling's column matching, host | Not started |
 | F16 | Extension packs, code-free (**low priority**) | F14 and F15, settings store | Not started |
 | F17 | Release notes and a What's New tab | Velopack, GitHub Actions release (§9), settings store, tabs, command registry | **Built** (§11), as a window; AI polish later |
+| F18 | Providers as plugins (own load context, safe load failure) | Provider contract (§2), `EngineHost`, Velopack package (§9), settings | Not started |
+| F19 | DynamoDB provider (PartiQL) | F18, connection form (§8), contract v13 (provider's own secret), F1 | Not started |
 
 Features F7–F12 are small and independent, so they can be slotted in at any point, e.g. as quick wins between the bigger ones.
 
@@ -856,6 +858,95 @@ On a release run, the workflow:
 #### Extension packs
 Pack updates (feature 16) use the same layout: a pack's `CHANGELOG.md` is shown in the same tab style from *What's new* on its Extensions page.
 
+### F18. Providers as plugins
+
+**What:** each provider loads from its own folder into its own `AssemblyLoadContext`, so its dependencies (Npgsql and libpg_query, the AWS SDK) stay out of the host and the engine. The engine and host reference only `SiftDB.Abstractions`. A provider that doesn't fit this app is skipped with a reason, never a crash. This comes before feature 19, so DynamoDB is the first provider built this way.
+
+#### Layout and shipping
+```
+SiftDB\
+  SiftDB.exe, SiftDB.Engine.dll, SiftDB.Abstractions.dll …
+  providers\
+    postgres\  siftdb-provider.json, SiftDB.Providers.Postgres.dll, Npgsql.dll, pg_query …
+    dynamodb\  siftdb-provider.json, SiftDB.Providers.DynamoDB.dll, AWSSDK.*.dll
+```
+- **First-party providers ship in the app's own Velopack package** (§9). One update moves everything together, so there is no second installer, no separate updates and no version skew for them.
+- **Providers delivered separately** (third-party, or updated on their own) are **later**. They would come through feature 16's repositories, checks and rollback. Feature 16 is code-free on purpose, so this step also needs code signing and publisher pinning, and waits for a real need.
+
+#### The manifest
+`siftdb-provider.json`, read **before any of the provider's code is loaded**, so an incompatible provider is reported without running it:
+```json
+{
+  "id": "dynamodb",
+  "name": "Amazon DynamoDB",
+  "version": "0.4.0",
+  "entry": "SiftDB.Providers.DynamoDB.dll",
+  "contract": { "min": 13, "built": 13 }
+}
+```
+`built` is the contract version it was compiled against; `min` is the oldest it works with.
+
+#### Contract range, not an exact version
+- The exact `ContractVersion == CurrentVersion` check is replaced by a range. The engine loads a provider when `built >= ProviderContract.MinimumVersion`, and when its `min <= ProviderContract.CurrentVersion`.
+- That works because of one rule, written into `ProviderContract`'s doc comment: **Abstractions only grows.** New members get default ("not supported") implementations; existing members are never changed or removed. A breaking change raises `MinimumVersion` on purpose, and is a `!` commit.
+- First-party providers are built with the app, so for them the range always holds. It matters for the providers that come later.
+
+#### Loading
+- One `AssemblyLoadContext` per provider, resolving through `AssemblyDependencyResolver` on the provider's entry assembly, which also finds native libraries (libpg_query) in its folder.
+- **`SiftDB.Abstractions` (and the framework) come from the default context**, never the provider's folder. Otherwise `IDatabaseProvider` would exist twice and the cast would fail.
+- The entry assembly must hold exactly one public `IDatabaseProvider` with a parameterless constructor. Its `Id` must match the manifest's.
+- Tests (CI runs on Linux) load providers from the build output the same way, so the loader is tested too.
+
+#### Failing safely
+- A provider that is **incompatible** (contract range), **broken** (bad manifest, missing entry, an exception while loading or constructing) or a **duplicate** (an id already loaded) is left out, and the reason is kept. The rest of the app starts as normal.
+- **Settings › Providers** lists every provider found: name, version, contract, and *Loaded*, *Incompatible: needs contract v14 or later* or *Failed: …* with the error.
+- **Saved connections of a provider that didn't load stay in the store**, untouched. The picker shows them greyed out ("Needs the DynamoDB provider, which didn't load: …"), and they can't be opened or edited until it does. They are never deleted or rewritten.
+- **Calls into a provider are caught at the engine's command boundary**, `MissingMethodException` and `TypeLoadException` (a provider built against a different Abstractions) included. They fail that command with a message naming the provider, and the session and the app carry on. Most commands already report errors this way; the build checks every provider call site.
+
+#### To check before building
+- Whether the self-contained publish **trims**: trimming removes code that is only reached by dynamic loading, so the provider folders and Abstractions would be kept whole.
+- That libpg_query's native DLL resolves from `providers\postgres\`, both installed and from a build folder.
+- That Velopack's delta updates handle the extra folders (they should: it packages the whole publish folder).
+
+### F19. DynamoDB provider (PartiQL)
+
+**What:** a second provider, for Amazon DynamoDB, for users in general. Our own local development uses DynamoDB and Postgres side by side. Sheets run **PartiQL** through `ExecuteStatement` (`SELECT * FROM "Orders" WHERE pk = 'c#42'`, plus `INSERT`, `UPDATE` and `DELETE`). That fits the sheet model unchanged: type a statement, run it, rows stream back page by page. A visual Query/Scan builder is out of scope for now. Needs feature 18, so the AWS SDK lives only in `providers\dynamodb\`.
+
+#### Connection form
+The form is drawn from the provider's fields (§8), so it needs no DynamoDB knowledge.
+- **Auth** (choice): *AWS profile* (default; covers SSO and the CLI's `~/.aws` files), *Access keys*, *Default credential chain* (environment variables, instance roles).
+- **Profile** (enabled for *AWS profile*), **Access key ID** (enabled for *Access keys*), **Region** (required), **Endpoint URL** (optional; for DynamoDB Local and LocalStack, which are also what the tests run against).
+- One saved connection is **one account and region**, as one Postgres connection is one database. There is no database to pick, so there is no `Database` field and no `ListDatabasesAsync`.
+- DynamoDB has no connection string. `BuildConnectionString` writes the fields as `Region=…;Profile=…;Endpoint=…` and `ParseConnectionString` reads that back, so the store and *Save as…* work as they are.
+- **Contract v13: the provider describes its own secret.** Today the form and the prompt have exactly one secret, called "Password". The provider now says whether it has a secret, what it's called, and when it's needed: DynamoDB's is the *Secret access key*, needed only when Auth is *Access keys*, and with a profile there is none. Postgres keeps "Password", always. Storage is unchanged (DPAPI, sent from the UI once, never sent back). A refused key raises `ConnectionAuthenticationException`, so the prompt asks again as it does for a password.
+
+#### Results
+- Items don't share a fixed set of columns. **Columns are inferred from the first page**: the key attributes first (partition, then sort), then the other attributes in the order first seen. Attributes that first appear on later pages go into one trailing **`…other`** column as JSON, because a reader's columns can't change once it has started.
+- Maps and lists show as JSON; sets as JSON arrays; binary as base64. `GenericTypeOf` maps the attribute types: `S` text, `N` number, `BOOL` boolean, the rest text.
+- The provider's own `DbDataReader` wraps the `ExecuteStatement` pages and fetches the next page (`NextToken`) only when the grid has read the last one, so rows stream as §1 requires.
+
+#### Schema
+- `ListTables` plus `DescribeTable` per table, as one schema (named after the region). The partition and sort keys become `PrimaryKey`; GSIs and LSIs become `Indexes`; the key attributes are the only columns declared.
+- Later: sampling a few items to suggest other attribute names for autocomplete, marked as inferred.
+
+#### Dialect and parser
+- There is no libpg_query for PartiQL, so the provider has a small lexer and statement splitter of its own. That is enough for running statements, the read-only check and the scan warning. Formatting (F7), the mini-map (F5), Expand `*` (F10) and the other parse-tree features stay off; they already degrade quietly when a provider doesn't offer them.
+- Identifiers are case-sensitive, in double quotes; strings are in single quotes. The resolver (§3) quotes names as stored.
+
+#### Transactions and read-only
+- There are no sessions: every statement commits on its own. `ITransactionMonitor` always reports auto-commit, so the tab never goes amber, and auto-transaction (§7) is hidden for these connections. `ExecuteTransaction` batches are later.
+- Read-only is `ReadOnlyEnforcement.Client`: on a read-only connection, the app refuses anything that isn't a `SELECT`. The help text says real protection is an IAM policy, as it says a database role is for Postgres.
+
+#### The scan warning (F1 for DynamoDB)
+A `SELECT` whose `WHERE` doesn't fix the partition key with `=` (whether an `IN` list avoids the scan is to be checked against DynamoDB Local) runs as a **full table Scan**, which reads every item, uses read capacity and costs money on large tables. Before it runs, the sheet warns about it the same way the missing-WHERE alarm does, naming the table and its approximate item count from `DescribeTable`. An `UPDATE` or `DELETE` without the full key is refused by DynamoDB itself, so there is no all-rows warning to give.
+
+#### Order of work
+1. Feature 18, with Postgres moved to `providers\postgres\` and no change in behaviour.
+2. Contract v13 (the provider's own secret), with the form and the prompt using it.
+3. The provider: all three auth methods, endpoint override, `SELECT` with inferred columns, tables, keys and indexes in the tree, tested against DynamoDB Local.
+4. The scan warning, then writes with client-side read-only.
+5. Later: inferred attributes for autocomplete, `ExecuteTransaction`, showing the read capacity a statement used.
+
 
 ### Provider contract summary (all optional, with default "not supported" implementations)
 
@@ -869,6 +960,8 @@ Pack updates (feature 16) use the same layout: a pack's `CHANGELOG.md` is shown 
 | `ILockInspector` | 3 |
 | `IProviderConnection.ColumnOrigins`, `PeekRowAsync`, `CountRowsAsync` (built, v8; origins from the row description, not the driver's column schema) | 4 |
 | `IPlanProvider` + `PlanNode` model | 6 |
+| `ProviderContract.MinimumVersion` + manifest contract range, replacing the exact version check | 18 |
+| The provider's own secret: whether it has one, its label, when it's needed (v13) | 19 |
 
 ### Decisions (2026-11-17)
 
