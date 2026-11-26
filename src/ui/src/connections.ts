@@ -361,7 +361,8 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
       password.focus();
     };
   } else if (existing && existing.rememberPassword) {
-    password.placeholder = 'none saved';
+    // Not "missing": a server that trusts this machine (pg_hba "trust") needs none, and connecting still works.
+    password.placeholder = 'none saved (fine if the server doesn’t ask for one)';
   }
   const remember = check('Remember password', existing?.rememberPassword ?? true,
     'Saved encrypted for your Windows account. Otherwise SiftDB asks when the server wants one (a server that needs none never asks).');
