@@ -364,7 +364,7 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
     password.placeholder = 'none saved';
   }
   const remember = check('Remember password', existing?.rememberPassword ?? true,
-    'Saved encrypted for your Windows account. Otherwise SiftDB asks when connecting.');
+    'Saved encrypted for your Windows account. Otherwise SiftDB asks when the server wants one (a server that needs none never asks).');
   const secretRow = row('Password', passwordBox);
   const secretLabel = secretRow.querySelector('label')!;
   const rememberLabel = remember.wrap.querySelector('span')!;

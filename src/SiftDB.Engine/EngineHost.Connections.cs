@@ -23,8 +23,8 @@ public sealed partial class EngineHost
 
     /// <summary>
     /// Opens a saved connection. The password is the one just typed, else the saved one, else one typed earlier in this
-    /// run. When none is known and the connection does not remember its password, or the server turns the password down,
-    /// the reply is "passwordNeeded": the UI asks, then connects again with what was typed.
+    /// run; with none of those it tries without one. When the server wants one, or turns it down, the reply is
+    /// "passwordNeeded" (<c>retry</c> true when one was tried): the UI asks, then connects again with what was typed.
     /// </summary>
     private async Task ConnectSavedAsync(int id, string savedId, string? typed)
     {
@@ -37,11 +37,9 @@ public sealed partial class EngineHost
         var password = !needed ? null
             : typed ?? (saved.RememberPassword ? Store.GetPassword(savedId) : null) ?? _promptedPasswords.GetValueOrDefault(savedId);
         var label = p.Secret?.Label ?? "Password";
-        if (needed && password is null && !saved.RememberPassword)
-        {
-            Event(new { type = "passwordNeeded", replyTo = id, savedId, name = saved.Name, retry = false, label });
-            return;
-        }
+        // With no password known, try without one first, and ask only when the server says it wants one: a server that
+        // trusts this machine (pg_hba "trust", a .pgpass file) then needs no saved password and no prompt. Postgres gives
+        // up before sending anything, so the server sees no failed password.
 
         try
         {

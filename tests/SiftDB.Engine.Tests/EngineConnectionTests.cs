@@ -43,7 +43,8 @@ public sealed class EngineConnectionTests : IAsyncLifetime
         public Task<IProviderConnection> OpenAsync(string cs, ConnectionOptions options, CancellationToken ct)
         {
             Opened.Enqueue((cs, options));
-            if (!cs.EndsWith("password=right", StringComparison.Ordinal))
+            // The host "trusting" lets anyone in (pg_hba "trust"); the others want the password "right".
+            if (!cs.EndsWith("password=right", StringComparison.Ordinal) && !cs.StartsWith("host=trusting;", StringComparison.Ordinal))
                 throw new ConnectionAuthenticationException("password authentication failed", new Exception());
             return Task.FromResult<IProviderConnection>(new Conn());
         }
@@ -167,11 +168,20 @@ public sealed class EngineConnectionTests : IAsyncLifetime
         var first = await Send(new { type = "connect", savedId = id });
         Assert.Equal("passwordNeeded", Type(first));
         Assert.False(first.GetProperty("retry").GetBoolean());
-        Assert.Empty(_provider.Opened); // nothing was tried without one
+        Assert.Equal("host=h;password=", Assert.Single(_provider.Opened).ConnectionString); // tried without one first
 
         Assert.Equal("connected", Type(await Send(new { type = "connect", savedId = id, password = "right" })));
         Assert.Empty(_secrets.Values); // not remembered on disk…
         Assert.Equal("connected", Type(await Send(new { type = "connect", savedId = id }))); // …but a second sheet does not ask
+    }
+
+    [Fact]
+    public async Task A_server_that_needs_no_password_connects_without_remember_ticked_and_never_asks()
+    {
+        var connection = new { name = "local", provider = "fake", fields = new { host = "trusting" }, rememberPassword = false, readOnly = false };
+        var id = (await Send(new { type = "saveConnection", connection })).GetProperty("savedId").GetString()!;
+        Assert.Equal("connected", Type(await Send(new { type = "connect", savedId = id })));
+        Assert.Equal("host=trusting;password=", Assert.Single(_provider.Opened).ConnectionString);
     }
 
     [Fact]

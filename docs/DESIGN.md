@@ -192,7 +192,7 @@ A **saved connection** is **one database** (not a whole server; a second databas
 **Storage**
 - The **engine** owns the store, so a future TUI gets the same connections. A JSON file in `%APPDATA%\SiftDB` holds the connections; **secrets never go in that file**. Passwords are kept separately, encrypted with DPAPI (CurrentUser), so the connection file could later be shared or committed without leaking anything.
 - A password travels **from the UI to the engine once** (typed into the edit form or the connect prompt) and is **never sent back**. Editing a connection shows *saved password* with a Change button, never the value.
-- **Remember password** is a per-connection checkbox. Without a saved password, connecting asks for it.
+- **Remember password** is a per-connection checkbox. Without a saved password, connecting first tries without one and asks only when the server wants one, so a server that needs none (pg_hba `trust`, a `.pgpass` file) never asks and needs no saved password (2026-11-26). Postgres gives up before sending anything, so the server never sees a failed password; a provider must fail the same way, with `ConnectionAuthenticationException` and no request, when its secret is needed and missing (DynamoDB with access keys and no key).
 
 **Identity**
 - Connections have a stable internal **id**; sheet files refer to them by **name** (`connection=dev-pg`), matched when a file is opened, so files move between machines and renames don't break the store. Names are unique.
