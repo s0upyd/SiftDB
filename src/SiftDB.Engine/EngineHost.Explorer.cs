@@ -55,6 +55,8 @@ public sealed partial class EngineHost
     /// are the provider's (they are the database's own DDL); SELECT is written here from the schema cache and laid out like
     /// Format SQL (F7), with every column named.
     /// </summary>
+    private const int TopRows = 100;
+
     private async Task ScriptObjectAsync(int id, int connectionId, JsonElement root)
     {
         if (!_connections.TryGetValue(connectionId, out var state)) { Error(id, "Unknown connection"); return; }
@@ -62,13 +64,17 @@ public sealed partial class EngineHost
         var obj = new ObjectRef(kind, root.GetProperty("schema").GetString()!, root.GetProperty("name").GetString()!, OptionalString(root, "arguments"));
         var what = OptionalString(root, "script") ?? "create";
         string? sql;
-        if (what == "select")
+        if (what is "select" or "top")
         {
             var rel = state.Schema is { } schema && kind == ObjectKind.Relation ? Relation(schema, obj.Schema, obj.Name) : null;
             if (rel is null) { Error(id, "That table is not in the schema cache. Refresh the schema and try again."); return; }
             var policy = state.Provider.Identifiers;
             var table = (obj.Schema == "public" ? "" : policy.Quote(obj.Schema) + ".") + policy.Quote(rel.Name);
-            var plain = $"select {string.Join(", ", rel.Columns.Select(c => policy.Quote(c.Name)))} from {table}";
+            // "Select top 100 rows": a quick look at what a table holds. LIMIT is Postgres's way to say it (the only
+            // provider so far); a dialect that writes it otherwise (TOP, FETCH FIRST) will need a say here.
+            var plain = what == "top"
+                ? $"select * from {table} limit {TopRows}"
+                : $"select {string.Join(", ", rel.Columns.Select(c => policy.Quote(c.Name)))} from {table}";
             sql = SqlFormatter.Format(plain, state.Provider.Parser.Tokenize(plain), CurrentSettings.Format) + ";";
         }
         else sql = await state.Connection.ScriptAsync(obj, create: what == "create", CancellationToken.None);

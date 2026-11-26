@@ -276,4 +276,12 @@ public class SchemaExplorerTests : IAsyncLifetime
         Require();
         Assert.Equal($"select id, email, name\nfrom {_s}.\"Customer\";", await Script("relation", "Customer", "select"));
     }
+
+    [SkippableFact]
+    public async Task Select_top_rows_is_a_quick_look_at_a_table()
+    {
+        Require();
+        Assert.Equal($"select *\nfrom {_s}.\"Customer\"\nlimit 100;", await Script("relation", "Customer", "top"));
+        Assert.Equal($"select *\nfrom {_s}.big_orders\nlimit 100;", await Script("relation", "big_orders", "top")); // a view too
+    }
 }

@@ -288,9 +288,12 @@ export class SchemaTree {
     const items: MenuItem[] = [];
     if (n) {
       const name = this.dragText(key)!;
-      items.push({ label: 'Copy name', action: () => void this.copy(name, 'Copied the name') });
+      // A quick look at what a table holds, first in its menu: written into the sheet, never run.
+      if (n.kind === 'relation')
+        items.push({ label: 'Select top 100 rows', action: () => void this.script(n.root, { kind: 'relation', schema: n.schema, name: n.name, script: 'top' }) });
+      items.push({ label: 'Copy name', separatorBefore: n.kind === 'relation', action: () => void this.copy(name, 'Copied the name') });
       if (n.kind === 'item' && n.definition) items.push({ label: 'Copy definition', action: () => void this.copy(n.definition!, 'Copied the definition') });
-      const script = (what: 'create' | 'drop' | 'select', label: string, separatorBefore = false) => {
+      const script = (what: 'create' | 'drop' | 'select' | 'top', label: string, separatorBefore = false) => {
         if (n.kind !== 'relation' && n.kind !== 'object') return;
         const kind = n.kind === 'relation' ? 'relation' : n.objectKind;
         items.push({
