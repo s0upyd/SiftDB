@@ -12,3 +12,13 @@ public readonly record struct WholeTableChange(WholeTableAction Action, string? 
 /// <param name="Temporary">A temporary table (only this session sees it): no warning.</param>
 /// <param name="EstimatedRows">The database's own estimate, with no scan, or null when it has none.</param>
 public sealed record TableFacts(bool Temporary, long? EstimatedRows);
+
+/// <summary>
+/// A statement that reads a whole table to answer (design section 14, F19 step 4): DynamoDB runs a SELECT whose WHERE
+/// doesn't fix the partition key as a full Scan, which reads every item and uses (and bills) read capacity for all of
+/// them, however few match.
+/// </summary>
+/// <param name="Index">The index it reads through, or null for the table itself.</param>
+/// <param name="PartitionKey">The key whose <c>=</c> or <c>IN</c> condition would have avoided the scan.</param>
+/// <param name="EstimatedItems">The table's item count as the database last worked it out (no read), or null.</param>
+public sealed record FullScan(string Table, string? Index, string PartitionKey, long? EstimatedItems);

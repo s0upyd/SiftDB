@@ -27,7 +27,37 @@ public sealed partial class EngineHost
         }
         // With a warning, the bar also offers a dry run when this statement can have one (not a TRUNCATE, say).
         var dryRun = warning is not null && DryRunRefusal(state, sql, out _) is null;
+        // The scan warning (F19 step 4) is asked of the connection whether or not a statement is running: it only
+        // describes tables. It shares the bar, after the missing-WHERE warning when there are both.
+        if (await ScanWarningAsync(state, sql) is { } scan) warning = warning is null ? scan : warning + " " + scan;
         Event(new { type = "runCheck", replyTo = id, allRows = warning, dryRun });
+    }
+
+    /// <summary>
+    /// The scan warning (design section 14, F19 step 4): a SELECT that reads a whole table to answer (DynamoDB without
+    /// the partition key in its WHERE). Also on a read-only connection, where it costs just the same. The provider
+    /// applies its own threshold; a failure to ask is no warning (the run will report the same failure).
+    /// </summary>
+    private static async Task<string?> ScanWarningAsync(ConnectionState state, string sql)
+    {
+        IReadOnlyList<FullScan> scans;
+        try { scans = await state.Connection.FullScansAsync(sql, CancellationToken.None); }
+        catch (Exception) { return null; }
+        return scans.Count == 0 ? null : ScanMessage(scans);
+    }
+
+    internal static string ScanMessage(IReadOnlyList<FullScan> scans)
+    {
+        static string About(long? items) => items is long n && n > 0 ? $" (about {FormatRows(n)} item{(n == 1 ? "" : "s")})" : "";
+        static string What(FullScan s) => s.Index is null ? s.Table : $"the index {s.Index} of {s.Table}";
+        if (scans.Count == 1)
+        {
+            var s = scans[0];
+            return $"This SELECT doesn't fix the partition key of {What(s)} ({s.PartitionKey}) with = or IN, so it reads every item in " +
+                   $"{(s.Index is null ? s.Table : "the index")}{About(s.EstimatedItems)} to answer, and uses read capacity for all of them.";
+        }
+        return $"These SELECTs read every item of {string.Join(", ", scans.Select(s => What(s) + About(s.EstimatedItems)))}, " +
+               "and use read capacity for all of them: their WHERE doesn't fix the partition key with = or IN.";
     }
 
     /// <summary>

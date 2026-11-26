@@ -11,6 +11,11 @@ namespace SiftDB.Providers.DynamoDB;
 public sealed class DynamoProvider : IDatabaseProvider
 {
     private readonly PartiqlParser _parser = new();
+    private readonly DynamoSettings _settings = new();
+
+    /// <summary>When the scan warning asks (F19 step 4).</summary>
+    public IReadOnlyList<ProviderSetting> Settings => DynamoSettings.All;
+    public void ApplySettings(IReadOnlyDictionary<string, string> values) => _settings.Apply(values);
 
     public string Id => "dynamodb";
     public string DisplayName => "Amazon DynamoDB";
@@ -48,5 +53,5 @@ public sealed class DynamoProvider : IDatabaseProvider
     };
 
     public async Task<IProviderConnection> OpenAsync(string connectionString, ConnectionOptions options, CancellationToken ct) =>
-        await DynamoConnection.OpenAsync(connectionString, _parser, ct);
+        await DynamoConnection.OpenAsync(connectionString, _parser, _settings, ct);
 }

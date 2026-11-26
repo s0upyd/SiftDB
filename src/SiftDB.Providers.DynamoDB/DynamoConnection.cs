@@ -19,14 +19,16 @@ internal sealed class DynamoConnection : IProviderConnection
     private readonly AmazonDynamoDBClient _client;
     private readonly string _region;
     private readonly PartiqlParser _parser;
+    private readonly DynamoSettings _settings;
     /// <summary>Each table's partition and sort key, from the schema load or asked once; for putting them first.</summary>
     private readonly ConcurrentDictionary<string, string[]> _keys = new(StringComparer.Ordinal);
 
-    private DynamoConnection(AmazonDynamoDBClient client, string region, PartiqlParser parser)
+    private DynamoConnection(AmazonDynamoDBClient client, string region, PartiqlParser parser, DynamoSettings settings)
     {
         _client = client;
         _region = region;
         _parser = parser;
+        _settings = settings;
     }
 
     public ITransactionMonitor Transactions { get; } = new AutoCommit();
@@ -35,7 +37,7 @@ internal sealed class DynamoConnection : IProviderConnection
     /// Signs in the way the connection says, then proves it with a one-table ListTables, so a bad key or an expired SSO
     /// session is reported on connecting, not at the first statement.
     /// </summary>
-    public static async Task<DynamoConnection> OpenAsync(string connectionString, PartiqlParser parser, CancellationToken ct)
+    public static async Task<DynamoConnection> OpenAsync(string connectionString, PartiqlParser parser, DynamoSettings settings, CancellationToken ct)
     {
         var s = DynamoConnectionFields.Read(connectionString);
         var config = new AmazonDynamoDBConfig { RegionEndpoint = RegionEndpoint.GetBySystemName(s.Region) };
@@ -72,7 +74,7 @@ internal sealed class DynamoConnection : IProviderConnection
             client.Dispose();
             throw;
         }
-        return new DynamoConnection(client, s.Region, parser);
+        return new DynamoConnection(client, s.Region, parser, settings);
     }
 
     /// <summary>
@@ -190,6 +192,56 @@ internal sealed class DynamoConnection : IProviderConnection
 
     private static string[] KeyNames(List<KeySchemaElement>? schema) =>
         (schema ?? []).OrderBy(k => k.KeyType == KeyType.HASH ? 0 : 1).Select(k => k.AttributeName).ToArray();
+
+    // ---- the scan warning (F19 step 4) -------------------------------------------------------------------------
+
+    /// <summary>Table descriptions for the scan check, kept a minute: it is asked before every run.</summary>
+    private readonly ConcurrentDictionary<string, (TableDescription Table, DateTime At)> _described = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Each SELECT in <paramref name="sql"/> that DynamoDB would answer with a full scan (<see cref="ScanRules"/>), with
+    /// the item count of what it reads, when the scan-warning setting thinks it's worth asking. A table it can't
+    /// describe (a typo) gives none: DynamoDB will say so when it runs.
+    /// </summary>
+    public async Task<IReadOnlyList<FullScan>> FullScansAsync(string sql, CancellationToken ct)
+    {
+        var scans = new List<FullScan>();
+        foreach (var range in _parser.Split(sql))
+        {
+            if (ScanRules.SelectTarget(sql.Substring(range.Start, range.Length), _parser) is not { } target) continue;
+            if (await DescribedAsync(target.Table, ct) is not { } d) continue;
+            string[] keys;
+            long? items;
+            if (target.Index is { } name)
+            {
+                var gsi = d.GlobalSecondaryIndexes?.FirstOrDefault(i => i.IndexName == name);
+                var lsi = d.LocalSecondaryIndexes?.FirstOrDefault(i => i.IndexName == name);
+                if (gsi is null && lsi is null) continue; // no such index: DynamoDB will say so
+                keys = KeyNames(gsi?.KeySchema ?? lsi!.KeySchema);
+                items = gsi?.ItemCount ?? lsi?.ItemCount;
+            }
+            else
+            {
+                keys = KeyNames(d.KeySchema);
+                items = d.ItemCount;
+            }
+            if (keys.Length == 0 || ScanRules.FixesPartitionKey(target, keys[0]) || !_settings.WarnsFor(items)) continue;
+            scans.Add(new FullScan(target.Table, target.Index, keys[0], items));
+        }
+        return scans;
+    }
+
+    private async Task<TableDescription?> DescribedAsync(string table, CancellationToken ct)
+    {
+        if (_described.TryGetValue(table, out var kept) && DateTime.UtcNow - kept.At < TimeSpan.FromMinutes(1)) return kept.Table;
+        try
+        {
+            var d = (await _client.DescribeTableAsync(table, ct)).Table;
+            _described[table] = (d, DateTime.UtcNow);
+            return d;
+        }
+        catch (ResourceNotFoundException) { return null; }
+    }
 
     // ---- the schema ----------------------------------------------------------------------------------------------
 

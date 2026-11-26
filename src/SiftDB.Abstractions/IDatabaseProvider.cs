@@ -14,9 +14,10 @@ public static class ProviderContract
     /// (Visual EXPLAIN); v12 added IProviderConnection.Locks (who's blocking me); v13 added
     /// ColumnDetail.MaxLength and LengthCheck (a length check shown on its column); v14 added IDatabaseProvider.Secret
     /// (the provider names its own secret, and says when it is needed); v15 added WritesSchemaNames, RowLimitClause and
-    /// HasTransactions (a database without schemas, LIMIT or transactions: DynamoDB).
+    /// HasTransactions (a database without schemas, LIMIT or transactions: DynamoDB); v16 added
+    /// IProviderConnection.FullScansAsync (the scan warning).
     /// </summary>
-    public const int CurrentVersion = 15;
+    public const int CurrentVersion = 16;
 
     /// <summary>
     /// The oldest contract a provider can be built against and still load (design section 14, F18). It holds because of
@@ -213,4 +214,12 @@ public interface IProviderConnection : IAsyncDisposable
     /// "Script as" (it is put into the sheet, never run). Null when the provider cannot script that object.
     /// </summary>
     Task<string?> ScriptAsync(ObjectRef obj, bool create, CancellationToken ct) => Task.FromResult<string?>(null);
+
+    /// <summary>
+    /// The tables (or indexes) <paramref name="sql"/> would read in full, for the scan warning (design section 14, F19):
+    /// a DynamoDB SELECT whose WHERE doesn't fix the partition key with <c>=</c> or <c>IN</c>. The provider applies its
+    /// own threshold (a scan of a small table is not worth a question). Asked before every run, so it must be quick: it
+    /// may describe a table, but never reads items. None by default.
+    /// </summary>
+    Task<IReadOnlyList<FullScan>> FullScansAsync(string sql, CancellationToken ct) => Task.FromResult<IReadOnlyList<FullScan>>([]);
 }

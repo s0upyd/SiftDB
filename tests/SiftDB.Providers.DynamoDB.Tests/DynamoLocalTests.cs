@@ -239,6 +239,96 @@ public sealed class DynamoLocalTests : IAsyncLifetime
         Assert.Null(await conn.DescribeRelationAsync(Region, "no_such_table_" + Guid.NewGuid().ToString("N"), CancellationToken.None));
     }
 
+    private void WarnAboutScans(string when) => _p.ApplySettings(new Dictionary<string, string> { [DynamoSettings.ScanWarningKey] = when });
+
+    [SkippableFact]
+    public async Task A_select_without_the_partition_key_is_a_full_scan_with_the_tables_item_count()
+    {
+        Require();
+        WarnAboutScans(DynamoSettings.Always); // the test table is small
+        await using var conn = await Open();
+        var scan = Assert.Single(await conn.FullScansAsync($"select * from \"{_orders}\" where customer = 'ann'", CancellationToken.None));
+        Assert.Equal(_orders, scan.Table);
+        Assert.Null(scan.Index);
+        Assert.Equal("pk", scan.PartitionKey);
+        Assert.Equal(3, scan.EstimatedItems);
+        Assert.Empty(await conn.FullScansAsync($"select * from \"{_orders}\" where pk = 'c#1'", CancellationToken.None));
+        Assert.Empty(await conn.FullScansAsync($"update \"{_orders}\" set total = 1 where pk = 'c#1' and sk = 1", CancellationToken.None));
+        Assert.Empty(await conn.FullScansAsync("select * from no_such_table_here", CancellationToken.None)); // DynamoDB will say
+    }
+
+    [SkippableFact]
+    public async Task Through_an_index_it_is_the_indexs_partition_key()
+    {
+        Require();
+        WarnAboutScans(DynamoSettings.Always);
+        await using var conn = await Open();
+        Assert.Empty(await conn.FullScansAsync($"select * from \"{_orders}\".\"ByCustomer\" where customer = 'ann'", CancellationToken.None));
+        var scan = Assert.Single(await conn.FullScansAsync($"select * from \"{_orders}\".\"ByCustomer\" where pk = 'c#1'", CancellationToken.None));
+        Assert.Equal("ByCustomer", scan.Index);
+        Assert.Equal("customer", scan.PartitionKey);
+    }
+
+    [SkippableFact]
+    public async Task A_small_table_is_not_worth_a_question_by_default()
+    {
+        Require();
+        await using var conn = await Open(); // the default: over 1,000 items
+        Assert.Empty(await conn.FullScansAsync($"select * from \"{_orders}\"", CancellationToken.None));
+        WarnAboutScans(DynamoSettings.Never);
+        Assert.Empty(await conn.FullScansAsync($"select * from \"{_orders}\"", CancellationToken.None));
+    }
+
+    [SkippableFact]
+    public async Task Through_the_engine_a_scan_asks_first_and_is_refused_unconfirmed()
+    {
+        Require();
+        var events = new List<string>();
+        await using var engine = new EngineHost([_p], new Output(events));
+        WarnAboutScans(DynamoSettings.Always); // after the engine has applied the (default) settings
+        await engine.HandleCommandAsync(System.Text.Json.JsonSerializer.Serialize(new { type = "connect", id = 1, provider = "dynamodb", connectionString = ConnectionString() }));
+        var conn = Reply(events, 1).GetProperty("connectionId").GetInt32();
+        var sql = $"select * from \"{_orders}\" where customer = 'ann'";
+
+        await engine.HandleCommandAsync(System.Text.Json.JsonSerializer.Serialize(new { type = "checkRun", id = 2, connectionId = conn, sql }));
+        var check = Reply(events, 2);
+        Assert.Equal($"This SELECT doesn't fix the partition key of {_orders} (pk) with = or IN, so it reads every item in {_orders} (about 3 items) to answer, " +
+            "and uses read capacity for all of them.", check.GetProperty("allRows").GetString());
+        Assert.False(check.GetProperty("dryRun").GetBoolean());
+
+        // Sent without asking first, it is refused before anything runs.
+        await engine.HandleCommandAsync(System.Text.Json.JsonSerializer.Serialize(new { type = "execute", id = 3, connectionId = conn, sql }));
+        Assert.StartsWith("Not run: This SELECT doesn't fix", Reply(events, 3).GetProperty("message").GetString());
+
+        // A query by key needs no question.
+        await engine.HandleCommandAsync(System.Text.Json.JsonSerializer.Serialize(new { type = "checkRun", id = 4, connectionId = conn, sql = $"select * from \"{_orders}\" where pk = 'c#1'" }));
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, Reply(events, 4).GetProperty("allRows").ValueKind);
+    }
+
+    [SkippableFact]
+    public async Task On_a_read_only_connection_a_scan_still_asks()
+    {
+        Require();
+        var events = new List<string>();
+        var dir = Directory.CreateTempSubdirectory("siftdb-dynamo-ro-");
+        try
+        {
+            var store = new ConnectionStore(Path.Combine(dir.FullName, "connections.json"), new MemorySecrets());
+            await using var engine = new EngineHost([_p], new Output(events), store);
+            WarnAboutScans(DynamoSettings.Always); // after the engine has applied the (default) settings
+            await engine.HandleCommandAsync(System.Text.Json.JsonSerializer.Serialize(new
+            {
+                type = "saveConnection", id = 1, password = "local",
+                connection = new { name = "ro", provider = "dynamodb", fields = new { auth = "keys", accessKeyId = "local", region = Region, endpoint = _endpoint }, rememberPassword = true, readOnly = true },
+            }));
+            await engine.HandleCommandAsync($$"""{"type":"connect","id":2,"savedId":"{{Reply(events, 1).GetProperty("savedId").GetString()}}"}""");
+            var conn = Reply(events, 2).GetProperty("connectionId").GetInt32();
+            await engine.HandleCommandAsync(System.Text.Json.JsonSerializer.Serialize(new { type = "checkRun", id = 3, connectionId = conn, sql = $"select * from \"{_orders}\"" }));
+            Assert.Contains("reads every item", Reply(events, 3).GetProperty("allRows").GetString());
+        }
+        finally { dir.Delete(true); }
+    }
+
     [SkippableFact]
     public async Task Loaded_as_a_plugin_it_connects_and_reads()
     {

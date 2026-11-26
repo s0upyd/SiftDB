@@ -390,6 +390,7 @@ public sealed partial class EngineHost : IAsyncDisposable
             finally { if (idle) state.SessionLock.Release(); }
             if (warning is not null) { Error(id, $"Not run: {warning} Confirm it before it runs."); return; }
         }
+        if (!allRowsChecked && await ScanWarningAsync(state, sql) is { } scan) { Error(id, $"Not run: {scan} Confirm it before it runs."); return; }
         CancelCurrent(state); // a new statement replaces the running one; this lets it wind down and free the session
         await state.SessionLock.WaitAsync();
         var handedOver = false;
