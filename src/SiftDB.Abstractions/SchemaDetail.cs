@@ -26,7 +26,12 @@ public sealed record RelationDetail(
 
 /// <param name="Identity">"always" or "by default" for an identity column, else null.</param>
 /// <param name="Generated">The expression of a generated column, else null.</param>
-public sealed record ColumnDetail(string Name, string? Comment, string? Identity, string? Generated);
+/// <param name="MaxLength">
+/// The most characters a check constraint lets the column hold (Postgres: <c>check (length(name) &lt;= 100)</c>), so a
+/// text column limited that way reads like one whose type carries the length; null when no check limits it.
+/// </param>
+/// <param name="LengthCheck">The name of the check that sets <paramref name="MaxLength"/>.</param>
+public sealed record ColumnDetail(string Name, string? Comment, string? Identity, string? Generated, int? MaxLength = null, string? LengthCheck = null);
 
 /// <summary>The primary key or a unique constraint.</summary>
 public sealed record KeyConstraint(string Name, bool Primary, IReadOnlyList<string> Columns, string Definition);

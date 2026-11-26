@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using Npgsql;
 using SiftDB.Abstractions;
 
@@ -92,6 +94,14 @@ internal static class PostgresDetail
                 }
             }
         keys.Sort((a, b) => a.Primary == b.Primary ? string.CompareOrdinal(a.Name, b.Name) : a.Primary ? -1 : 1);
+        for (var i = 0; i < columns.Count; i++)
+        {
+            var col = columns[i];
+            foreach (var ck in checks)
+                if (!ck.Exclusion && LengthLimits(ck.Definition).TryGetValue(col.Name, out var max) && (col.MaxLength is null || max < col.MaxLength))
+                    col = col with { MaxLength = max, LengthCheck = ck.Name };
+            columns[i] = col;
+        }
 
         var indexes = new List<IndexDetail>();
         await using (var cmd = Command(conn, $"""
@@ -158,6 +168,30 @@ internal static class PostgresDetail
             else if (e[i] == ')' && --depth == 0 && i < e.Length - 1) return e; // "(a) and (b)": the first pair closes early
         }
         return e[1..^1];
+    }
+
+    private const string LengthOf = @"\b(?:char_length|character_length|length)\((?<col>""(?:[^""]|"""")+""|\w+)(?:::[\w ]+)?\)";
+    private static readonly Regex AtMost = new($@"{LengthOf}\s*(?<op><=|<)\s*(?<n>\d+)\b", RegexOptions.CultureInvariant);
+    private static readonly Regex AtMostReversed = new($@"(?<!\w)(?<n>\d+)\s*(?<op>>=|>)\s*{LengthOf}", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// The most characters a check allows each column, from Postgres's text for it: <c>length(a) &lt;= 100</c>,
+    /// <c>char_length(a) &lt; 50</c>, <c>100 &gt;= length(a)</c>, a BETWEEN's upper end, and several ANDed together. A check
+    /// with OR or NOT in it may not limit the column at all, so it gives none.
+    /// </summary>
+    internal static Dictionary<string, int> LengthLimits(string definition)
+    {
+        var limits = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (Regex.IsMatch(definition, @"\b(?:OR|NOT)\b")) return limits;
+        foreach (var m in AtMost.Matches(definition).Concat(AtMostReversed.Matches(definition)))
+        {
+            if (!int.TryParse(m.Groups["n"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var n)) continue;
+            var max = m.Groups["op"].Value is "<" or ">" ? n - 1 : n;
+            var col = m.Groups["col"].Value;
+            if (col.StartsWith('"')) col = col[1..^1].Replace("\"\"", "\"");
+            if (max >= 0 && (!limits.TryGetValue(col, out var was) || max < was)) limits[col] = max;
+        }
+        return limits;
     }
 
     /// <summary>"cascade", "set null"… for an action other than the default; null for "no action".</summary>

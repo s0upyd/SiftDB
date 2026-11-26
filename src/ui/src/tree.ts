@@ -17,7 +17,11 @@ const MAX_IN_GROUP = 500;
 
 // ---- what the engine sends (mirrors SiftDB.Abstractions SchemaDetail.cs) ------------------------------------------
 
-interface ColumnDetail { name: string; comment: string | null; identity: string | null; generated: string | null }
+interface ColumnDetail {
+  name: string; comment: string | null; identity: string | null; generated: string | null;
+  /** The most characters a check constraint allows (`lengthCheck` names it), shown beside the type. */
+  maxLength?: number | null; lengthCheck?: string | null;
+}
 interface KeyConstraint { name: string; primary: boolean; columns: string[]; definition: string }
 interface ForeignKeyDetail {
   name: string; columns: string[]; referencedSchema: string; referencedRelation: string; referencedColumns: string[];
@@ -475,14 +479,15 @@ export class SchemaTree {
   private columnRow(rootId: string, schema: string, r: RelationInfo, c: RelationInfo['columns'][number], d: ColumnDetail | null, depth: number) {
     const pk = r.primaryKey.includes(c.name);
     const fk = r.foreignKeys.find((k) => k.columns.includes(c.name));
-    const parts: Node[] = [this.text(c.name), this.dim(c.dataType + (c.isNullable ? '' : ' not null'))];
+    const max = d?.maxLength ?? null;
+    const parts: Node[] = [this.text(c.name), this.dim(c.dataType + (max !== null ? ` (max ${max})` : '') + (c.isNullable ? '' : ' not null'))];
     if (pk) parts.push(this.badge('PK', 'Primary key'));
     if (fk) parts.push(this.badge('FK', `Foreign key → ${fk.referencedSchema}.${fk.referencedRelation}(${fk.referencedColumns.join(', ')})`));
     if (d?.identity) parts.push(this.badge('ID', `Identity: generated ${d.identity}`));
     if (d?.generated) parts.push(this.badge('GEN', `Generated: ${d.generated}`));
     else if (c.default && !d?.identity) parts.push(this.dim(`= ${c.default.length > 40 ? c.default.slice(0, 40) + '…' : c.default}`));
     const key = `c:${rootId}:${schema}.${r.name}.${c.name}`;
-    const tip = [c.default ? `Default: ${c.default}` : '', d?.generated ? `Generated: ${d.generated}` : '', d?.comment ?? ''].filter(Boolean).join('\n');
+    const tip = [max !== null ? `At most ${max} characters (check ${d?.lengthCheck})` : '', c.default ? `Default: ${c.default}` : '', d?.generated ? `Generated: ${d.generated}` : '', d?.comment ?? ''].filter(Boolean).join('\n');
     const row = this.row(key, depth, null, parts, tip);
     row.draggable = true;
     if (this.highlight.has(key)) row.classList.add('jumped');

@@ -11,9 +11,10 @@ public static class ProviderContract
     /// IProviderConnection.DryRun; v7 added SameMeaning (Format SQL); v8 added ColumnOrigins, PeekRowAsync and CountRowsAsync
     /// (following foreign keys); v9 added DescribeRelationAsync, DescribeSchemaObjectsAsync and ScriptAsync (the schema explorer); v10 added ListDatabasesAsync and
     /// ConnectionFieldKind.Database (picking the database in the connection form); v11 added IProviderConnection.Plans
-    /// (Visual EXPLAIN); v12 added IProviderConnection.Locks (who's blocking me).
+    /// (Visual EXPLAIN); v12 added IProviderConnection.Locks (who's blocking me); v13 added
+    /// ColumnDetail.MaxLength and LengthCheck (a length check shown on its column).
     /// </summary>
-    public const int CurrentVersion = 12;
+    public const int CurrentVersion = 13;
 }
 
 public interface IDatabaseProvider

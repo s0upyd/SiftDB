@@ -54,6 +54,12 @@ public class SchemaExplorerTests : IAsyncLifetime
             create function touch() returns trigger language plpgsql as $$ begin return new; end $$;
             create trigger orders_touch before insert or update on orders for each row execute function touch();
             create table invoices (id int primary key, customer_email text references "Customer" (email) deferrable);
+            create table notes (
+                title text not null check (char_length(title) between 1 and 80),
+                "Body" text constraint body_len check (length("Body") < 2000),
+                tag varchar check (length(tag) <= 20 or tag is null),
+                plain text
+            );
             create table events (at date not null, what text) partition by range (at);
             create table events_2026 partition of events for values from ('2026-01-01') to ('2027-01-01');
             create view big_orders as select id, total from orders where total > 100;
@@ -120,6 +126,41 @@ public class SchemaExplorerTests : IAsyncLifetime
         var quoted = (await Send(new { type = "relationDetail", connectionId = _conn, schema = _s, name = "Customer" })).GetProperty("quoted");
         Assert.Equal("\"Customer_pkey\"", quoted.GetProperty("Customer_pkey").GetString()); // mixed case: quoted to drag
     }
+
+    [SkippableFact]
+    public async Task A_length_check_shows_on_its_column()
+    {
+        Require();
+        var cols = Arr(await Detail("notes"), "columns").ToDictionary(c => c.GetProperty("name").GetString()!);
+        Assert.Equal(80, cols["title"].GetProperty("maxLength").GetInt32());
+        Assert.Equal(1999, cols["Body"].GetProperty("maxLength").GetInt32());          // < 2000, a quoted name
+        Assert.Equal("body_len", cols["Body"].GetProperty("lengthCheck").GetString());
+        Assert.Equal(JsonValueKind.Null, cols["tag"].GetProperty("maxLength").ValueKind); // OR: not read as a limit
+        Assert.Equal(JsonValueKind.Null, cols["plain"].GetProperty("maxLength").ValueKind);
+    }
+
+    [Theory]
+    [InlineData("CHECK (length(a) <= 100)", "a", 100)]
+    [InlineData("CHECK (char_length(a) < 50)", "a", 49)]
+    [InlineData("CHECK (length(a::text) <= 20)", "a", 20)]
+    [InlineData("CHECK (character_length(a) <= 5)", "a", 5)]
+    [InlineData("CHECK (100 >= length(a))", "a", 100)]
+    [InlineData("CHECK (length(a) >= 1 AND length(a) <= 30)", "a", 30)]
+    [InlineData("CHECK (char_length(a) <= 10 AND a <> ''::text)", "a", 10)]
+    [InlineData("CHECK (length(\"My \"\"Col\"\"\") <= 7)", "My \"Col\"", 7)]
+    public void Length_limits_are_read_from_a_check(string definition, string column, int max) =>
+        Assert.Equal(max, PostgresDetail.LengthLimits(definition)[column]);
+
+    [Theory]
+    [InlineData("CHECK (length(a) <= 10 OR a IS NULL)")]
+    [InlineData("CHECK (NOT length(a) <= 10)")]
+    [InlineData("CHECK (length(a) >= 3)")]
+    [InlineData("CHECK (a > 0)")]
+    public void Checks_that_do_not_cap_the_length_give_none(string definition) => Assert.Empty(PostgresDetail.LengthLimits(definition));
+
+    [Fact]
+    public void Each_column_of_a_check_gets_its_own_limit() =>
+        Assert.Equal(new Dictionary<string, int> { ["g"] = 7, ["h"] = 8 }, PostgresDetail.LengthLimits("CHECK (length(g) <= 7 AND length(h) <= 8)"));
 
     [SkippableFact]
     public async Task Constraints_indexes_triggers_and_generated_columns_are_described()
