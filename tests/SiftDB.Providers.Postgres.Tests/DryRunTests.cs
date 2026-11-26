@@ -51,7 +51,34 @@ public class DryRunTests : IAsyncLifetime
         await using var c = new Npgsql.NpgsqlConnection(_cs);
         await c.OpenAsync();
         await using var cmd = new Npgsql.NpgsqlCommand(sql, c);
-        await cmd.ExecuteNonQueryAsync();
+        try { await cmd.ExecuteNonQueryAsync(); }
+        catch (Npgsql.NpgsqlException ex) when (ex.InnerException is TimeoutException)
+        {
+            // This setup has timed out now and then (design section 15): a plain CREATE TABLE waiting 30 s on something.
+            // Say what every session was doing at that moment, and who blocked whom, so the next failure names it.
+            throw new TimeoutException($"Timed out: {sql}\nSessions at the time:\n{await Sessions()}", ex);
+        }
+    }
+
+    private async Task<string> Sessions()
+    {
+        try
+        {
+            await using var c = new Npgsql.NpgsqlConnection(_cs);
+            await c.OpenAsync();
+            await using var cmd = new Npgsql.NpgsqlCommand("""
+                select pid, state, coalesce(wait_event_type || '/' || wait_event, '-'), pg_blocking_pids(pid)::text,
+                       coalesce(application_name, ''), left(regexp_replace(query, '\s+', ' ', 'g'), 160)
+                from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid()
+                order by pid
+                """, c);
+            await using var r = await cmd.ExecuteReaderAsync();
+            var lines = new List<string>();
+            while (await r.ReadAsync())
+                lines.Add($"  pid {r.GetInt32(0)} {r.GetValue(1)} wait {r.GetString(2)} blocked by {r.GetString(3)} [{r.GetString(4)}] {r.GetString(5)}");
+            return string.Join('\n', lines);
+        }
+        catch (Exception e) { return $"  (could not ask: {e.Message})"; }
     }
 
     private async Task<string> Table()
