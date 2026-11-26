@@ -205,10 +205,27 @@ public class CompletionTests
     public void Ambiguous_columns_are_qualified_and_unique_ones_are_not()
     {
         var items = Run("select | from \"Person\" p, \"Email\" e").Result.Items;
-        var personIds = items.Where(i => i.Label == "PersonId").Select(i => i.InsertText).OrderBy(x => x).ToArray();
-        Assert.Equal(["e.\"PersonId\"", "p.\"PersonId\""], personIds);
-        Assert.Equal("\"FirstName\"", items.Single(i => i.Label == "FirstName").InsertText);
-        Assert.Equal("\"EmailAddress\"", items.Single(i => i.Label == "EmailAddress").InsertText);
+        Assert.Equal("p.\"PersonId\"", items.Single(i => i.Label == "Person.PersonId").InsertText);
+        Assert.Equal("e.\"PersonId\"", items.Single(i => i.Label == "Email.PersonId").InsertText);
+        Assert.Equal("\"FirstName\"", items.Single(i => i.Label == "Person.FirstName").InsertText);
+        Assert.Equal("\"EmailAddress\"", items.Single(i => i.Label == "Email.EmailAddress").InsertText);
+    }
+
+    [Fact]
+    public void With_several_tables_each_column_says_its_table_and_typing_still_matches_the_column()
+    {
+        var item = Run("select * from \"Person\" p join \"Email\" e on e.\"PersonId\" = p.\"PersonId\" where Ema|").Result.Items
+            .Single(i => i.Label == "Email.EmailAddress");
+        Assert.Equal("EmailAddress", item.FilterText);
+        Assert.Equal(["PersonId", "FirstName", "LastName"], Labels("select p.| from \"Person\" p, \"Email\" e")); // after "p.": just p's
+    }
+
+    [Fact]
+    public void A_table_joined_to_itself_is_told_apart_by_its_aliases()
+    {
+        var labels = Labels("select | from \"Person\" a join \"Person\" b on a.\"PersonId\" = b.\"PersonId\"");
+        Assert.Contains("a.FirstName", labels);
+        Assert.Contains("b.FirstName", labels);
     }
 
     [Fact]

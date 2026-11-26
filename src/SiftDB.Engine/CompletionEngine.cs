@@ -238,7 +238,11 @@ public static class CompletionEngine
         {
             // The alias (or table name) goes in exactly as the user wrote it, quotes and all.
             var q = resolved.Count > 1 ? s.Display : null;
-            AddColumns(policy, s.Rel!, s.Display, q, prefix, quoted, items, name => counts[name] > 1);
+            // With several tables, the list reads "Email.EmailAddress", so which table a column is from shows without
+            // moving to it. The table's own name, unless it is in the statement twice (a self join): then its alias.
+            var label = resolved.Count == 1 ? null
+                : resolved.Count(o => Eq(o.NameId.Name, s.NameId.Name)) > 1 ? s.Display : s.NameId.Name;
+            AddColumns(policy, s.Rel!, s.Display, q, prefix, quoted, items, name => counts[name] > 1, label);
 
             if (MatchGroup(s.Display, prefix) >= 0)
                 items.Add(new CompletionItem(s.Display, s.Display, Filter(s.Display, quoted), CompletionKind.Alias,
@@ -247,8 +251,9 @@ public static class CompletionEngine
     }
 
     /// <param name="qualifier">The alias, as written, to put in front when <paramref name="mustQualify"/> says the name is ambiguous.</param>
+    /// <param name="labelOwner">Shown in front of each column's name in the list ("Email.EmailAddress"); typing still matches the column alone.</param>
     private static void AddColumns(IIdentifierPolicy policy, RelationInfo rel, string owner, string? qualifier, string prefix, bool quoted,
-        List<CompletionItem> items, Func<string, bool>? mustQualify = null)
+        List<CompletionItem> items, Func<string, bool>? mustQualify = null, string? labelOwner = null)
     {
         var pk = new HashSet<string>(rel.PrimaryKey, StringComparer.Ordinal);
         for (var i = 0; i < rel.Columns.Count; i++)
@@ -260,7 +265,7 @@ public static class CompletionEngine
                 ? qualifier + "." + policy.Quote(col.Name)
                 : policy.Quote(col.Name);
             var detail = col.DataType + (col.IsNullable ? "" : " not null") + (pk.Contains(col.Name) ? " · PK" : "") + " · " + owner;
-            items.Add(new CompletionItem(col.Name, insert, Filter(col.Name, quoted), CompletionKind.Column, detail, $"{group}1{i:D4}"));
+            items.Add(new CompletionItem(labelOwner is null ? col.Name : $"{labelOwner}.{col.Name}", insert, Filter(col.Name, quoted), CompletionKind.Column, detail, $"{group}1{i:D4}"));
         }
     }
 
