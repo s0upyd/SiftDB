@@ -374,7 +374,7 @@ Reading: first rows and scrolling pass comfortably. The bridge and UI add about 
 
 ## 14. Planned features
 
-Agreed 2026-11-17, merged here 2026-11-18; F18 and F19 added 2026-11-25. Nineteen features, in suggested build order. Each follows the existing rules: the **engine** decides and the UI only draws, **providers** supply anything specific to one database (new optional capabilities in the provider contract), and anything not implemented degrades quietly. References like "feature 9" or "(12)" mean the features below; `§` numbers mean the sections of this document.
+Agreed 2026-11-17, merged here 2026-11-18; F18 and F19 added 2026-11-25, F20 2026-11-26. Twenty features, in suggested build order. Each follows the existing rules: the **engine** decides and the UI only draws, **providers** supply anything specific to one database (new optional capabilities in the provider contract), and anything not implemented degrades quietly. References like "feature 9" or "(12)" mean the features below; `§` numbers mean the sections of this document.
 
 **Tracking:** the Status column is the list of what is left to build. When a feature (or part of one) is built, set its status here, and record what was built and decided in §11 the way earlier features are, with a "Not yet:" list for the rest.
 
@@ -399,6 +399,7 @@ Agreed 2026-11-17, merged here 2026-11-18; F18 and F19 added 2026-11-25. Ninetee
 | F17 | Release notes and a What's New tab | Velopack, GitHub Actions release (§9), settings store, tabs, command registry | **Built** (§11), as a window; AI polish later |
 | F18 | Providers as plugins (own load context, safe load failure) | Provider contract (§2), `EngineHost`, Velopack package (§9), settings | **Built** (§11); Postgres is the first provider loaded this way |
 | F19 | DynamoDB provider (PartiQL) | F18, connection form (§8), contracts v14 (provider's own secret) and v15 (no schemas, LIMIT or transactions), F1 | **Steps 1–3 built** (§11): the provider reads and writes, tested against DynamoDB Local; the scan warning is next |
+| F20 | JSON viewer (a cell's JSON as a tree) | Value viewer (§11, grid), result grid menu, DynamoDB's maps and lists (F19), Postgres `json`/`jsonb` | Not started |
 
 Features F7–F12 are small and independent, so they can be slotted in at any point, e.g. as quick wins between the bigger ones.
 
@@ -950,6 +951,21 @@ A `SELECT` whose `WHERE` doesn't fix the partition key with `=` (whether an `IN`
 3. ~~The provider: all three auth methods, endpoint override, `SELECT` with inferred columns, tables, keys and indexes in the tree, tested against DynamoDB Local.~~ Built (2026-11-26), with writes and the client-side read-only check too, since they cost little more.
 4. The scan warning (writes and read-only came with step 3).
 5. Later: inferred attributes for autocomplete, `ExecuteTransaction`, showing the read capacity a statement used.
+
+### F20. JSON viewer (a cell's JSON as a tree)
+
+**What:** right-click a result cell that holds JSON and choose *Open in JSON viewer* to see it as a tree that opens and closes, instead of a block of text. Asked for on 2026-11-26, once DynamoDB's maps and lists started showing as JSON (F19); Postgres `json` and `jsonb` columns, and text columns holding JSON, gain the same.
+
+**Where it fits:** the grid already has a **value viewer** (§11: double-click, Enter or *Show whole value*), with *Format JSON* for a JSON object or array, but only as text. The JSON viewer is a second view of the same modal, a **Tree | Text** switch, rather than another window: a cell opens on the tree when its value is a JSON object or array, else on the text as today. The grid menu gains *Open in JSON viewer*, offered only for such a value.
+
+**The tree:**
+- One row per member: its key (or index, in a list), then its value, or for an object or list a summary such as `{3 keys}` or `[12 items]`. Values are coloured by kind (string, number, boolean, null), and never by colour alone: strings in quotes, null as `null`.
+- The first two levels open at the start; keyboard as the schema tree (arrows open and close, `*` opens everything below); *Expand all* and *Collapse all*.
+- **Search** within the value: matching keys and values highlighted, the path to each opened.
+- **Copy:** a node's value (as JSON), its key, or its **path** (`lines[0].sku`, `address.city`), written so it can go straight into a statement where the dialect has paths (DynamoDB: `"address".city`, `lines[0]`; Postgres: `col->'address'->>'city'`, from the provider).
+- Large values: children drawn as they are opened, a list over 500 items shows the first 500 with "show more", and a value over a few MB opens as text with a note rather than freezing the page.
+
+**Not in the first version:** editing values, comparing two cells, and opening a JSON viewer for a whole result set (that is the JSON export).
 
 
 ### Provider contract summary (all optional, with default "not supported" implementations)
