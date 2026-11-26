@@ -2,6 +2,25 @@
 
 What changed in each SiftDB release. Generated from the commit messages by git-cliff (see cliff.toml); do not edit it by hand.
 
+## 0.4.0 - 2026-11-26
+
+### Highlights
+
+- Database providers load as plugins, and Settings › Providers shows which loaded ([Try it](command:settings))
+- Connect to Amazon DynamoDB and run PartiQL in a sheet ([Try it](command:newConnection))
+
+### Improvements
+
+- See a text column's length limit in the schema tree
+- The query map gets its own resizable panel beside the editor, at full size
+- Right-click a table to select its top 100 rows
+- Autocomplete shows each column's table when a statement has several
+- The connection form no longer implies a password is missing when none is needed
+
+### Fixes
+
+- Connecting tries without a password first, so a server that needs none never asks
+
 ## 0.3.0 - 2026-11-20
 
 ### Highlights
