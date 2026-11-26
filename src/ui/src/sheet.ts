@@ -874,6 +874,7 @@ export class Sheet {
     if (!this.connected) return;
     const r = await this.ctx.bridge.request({ type: 'transaction', connectionId: this.connectionId, action });
     if (r.type === 'error') this.setMessage(`${action} failed: ${r.message}`, 'error');
+    else if (typeof r.note === 'string' && r.note) this.setMessage(r.note); // what a commit did (DynamoDB: statements, capacity)
   }
 
   // ---- small things ---------------------------------------------------------------------------------------------

@@ -257,6 +257,8 @@ public sealed partial class EngineHost : IAsyncDisposable
         // Auto-transaction is for writable sessions: on a read-only one there is nothing to roll back.
         var auto = autoTransaction && !options.ReadOnly && p.HasTransactions; // none where every statement commits on its own
         var state = new ConnectionState(connId, p, conn) { SavedId = savedId, ReadOnly = options.ReadOnly, AutoTransaction = auto };
+        // Columns learnt from rows (contract v17, DynamoDB): the UI loads the schema again for this session.
+        conn.SchemaChanged += () => Event(new { type = "schemaChanged", connectionId = connId });
         _connections[connId] = state;
         if (conn.Locks is not null) EnsureLockWatch(); // who's blocking me (design section 14, F3)
         Event(new { type = "connected", replyTo = id, connectionId = connId, savedId, readOnly = options.ReadOnly, autoTransaction = auto, transactions = p.HasTransactions });
@@ -299,6 +301,8 @@ public sealed partial class EngineHost : IAsyncDisposable
             };
         }
         var prepared = pick.Range is { } r ? RunPreparer.Prepare(text, r, resolved, mode) : null;
+        // A hint for a provider that learns columns from rows (contract v17): the tables of the statement being written.
+        if (pick.Range is { } inView) try { state.Connection.StatementInView(text.Substring(inView.Start, inView.Length)); } catch { /* only a hint */ }
         if (prepared is not null && missingSemicolon is not null) prepared = prepared with { Blocked = missingSemicolon };
         if (prepared is { Blocked: null } && state.ReadOnly && state.Provider.CheckReadOnly(prepared.Sql) is { } readOnlyReason)
             prepared = prepared with { Blocked = readOnlyReason };
@@ -499,7 +503,8 @@ public sealed partial class EngineHost : IAsyncDisposable
                     case "rollback": await monitor.RollbackAsync(CancellationToken.None); break;
                     default: Error(id, $"Unknown transaction action '{action}'"); return;
                 }
-                Event(new { type = "ok", replyTo = id });
+                // A commit can have something to say (contract v17): what DynamoDB wrote, and the capacity it used.
+                Event(new { type = "ok", replyTo = id, note = action == "commit" && monitor is IResultNote n ? n.NoteDetail : null });
             }
             catch (Exception ex)
             {
@@ -584,6 +589,7 @@ public sealed partial class EngineHost : IAsyncDisposable
             Event(new
             {
                 type = "complete", queryId, totalRows = s.TotalRows, rowsAffected = s.RecordsAffected < 0 ? (long?)null : s.RecordsAffected,
+                noteHeadline = s.NoteHeadline, noteDetail = s.NoteDetail,
                 engineFirstBatchMs = s.FirstBatchMs, engineTotalMs = s.TotalMs,
                 engineReadMs = b.ReadMs, engineAppendMs = b.AppendMs, engineWriteWaitMs = b.WriteWaitMs,
             });

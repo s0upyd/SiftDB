@@ -47,3 +47,18 @@ public interface ITransactionMonitor
     /// </summary>
     Task<bool> AfterStatementAsync(bool failed, CancellationToken ct) => Task.FromResult(false);
 }
+
+/// <summary>
+/// What a finished statement (its reader) or a commit (the transaction monitor) has to say beyond rows and time
+/// (contract v17): the read capacity a DynamoDB statement used, or that a write was queued for the transaction rather
+/// than run. A reader or monitor that implements it is asked once it is done; the result's status line (or the
+/// sheet's message, for a commit) shows it.
+/// </summary>
+public interface IResultNote
+{
+    /// <summary>Replaces the status line's headline ("3 rows", "Done"): "Queued". Null keeps it.</summary>
+    string? NoteHeadline { get; }
+
+    /// <summary>Added after the time: "4.5 read units", "statement 2 of the transaction, runs at Commit". Null adds nothing.</summary>
+    string? NoteDetail { get; }
+}

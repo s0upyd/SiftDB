@@ -15,9 +15,11 @@ public static class ProviderContract
     /// ColumnDetail.MaxLength and LengthCheck (a length check shown on its column); v14 added IDatabaseProvider.Secret
     /// (the provider names its own secret, and says when it is needed); v15 added WritesSchemaNames, RowLimitClause and
     /// HasTransactions (a database without schemas, LIMIT or transactions: DynamoDB); v16 added
-    /// IProviderConnection.FullScansAsync (the scan warning).
+    /// IProviderConnection.FullScansAsync (the scan warning); v17 added DialectRules.KnownColumnsOnly,
+    /// IProviderConnection.StatementInView and SchemaChanged (columns learnt from rows), and IResultNote (read capacity,
+    /// queued writes).
     /// </summary>
-    public const int CurrentVersion = 16;
+    public const int CurrentVersion = 17;
 
     /// <summary>
     /// The oldest contract a provider can be built against and still load (design section 14, F18). It holds because of
@@ -222,4 +224,17 @@ public interface IProviderConnection : IAsyncDisposable
     /// may describe a table, but never reads items. None by default.
     /// </summary>
     Task<IReadOnlyList<FullScan>> FullScansAsync(string sql, CancellationToken ct) => Task.FromResult<IReadOnlyList<FullScan>>([]);
+
+    /// <summary>
+    /// A hint: the statement at the cursor, as it is being written (sent with each sheet analysis). A provider that
+    /// learns a table's columns from its rows (DynamoDB) can start on the tables it names, in the background, and say so
+    /// with <see cref="SchemaChanged"/>. Called often, so it must return at once. Nothing by default.
+    /// </summary>
+    void StatementInView(string sql) { }
+
+    /// <summary>
+    /// Raised (on any thread) when what <see cref="IntrospectAsync"/> would return has grown: columns learnt from rows.
+    /// The engine then loads the schema again, for completion, the resolver and the tree. Never raised by default.
+    /// </summary>
+    event Action? SchemaChanged { add { } remove { } }
 }

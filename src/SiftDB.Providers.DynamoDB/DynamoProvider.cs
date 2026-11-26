@@ -29,8 +29,23 @@ public sealed class DynamoProvider : IDatabaseProvider
     public bool WritesSchemaNames => false;
     /// <summary>PartiQL has no LIMIT: "Select top 100 rows" is a plain SELECT, read page by page as the grid shows it.</summary>
     public string? RowLimitClause(int rows) => null;
-    /// <summary>Every statement commits on its own: no Begin, no auto-transaction. (ExecuteTransaction batches come later.)</summary>
-    public bool HasTransactions => false;
+    /// <summary>
+    /// Transactions as SiftDB holds them for DynamoDB: writes queued after Begin, sent at Commit in one ExecuteTransaction
+    /// (all or none). See DynamoConnection.QueuedTransaction.
+    /// </summary>
+    public bool HasTransactions => true;
+
+    /// <summary>Any item can carry any attribute: a name the schema doesn't list is not a mistake (contract v17).</summary>
+    public DialectRules Dialect { get; } = DialectRules.Permissive with { KnownColumnsOnly = false };
+
+    /// <summary>
+    /// What has been learnt about each account and region, shared by every sheet on it: attributes seen, tables sampled, the
+    /// last schema load. Keyed by where the connection goes and as whom (never the secret).
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DynamoAccount> _accounts = new();
+
+    private DynamoAccount AccountOf(DynamoConnectionFields.Settings s) =>
+        _accounts.GetOrAdd(string.Join("|", s.Region, s.Endpoint, s.Auth, s.Profile, s.AccessKeyId), _ => new DynamoAccount());
 
     public string BuildConnectionString(IReadOnlyDictionary<string, string> fields, string? password) => DynamoConnectionFields.Build(fields, password);
     public ParsedConnection ParseConnectionString(string connectionString) => DynamoConnectionFields.Parse(connectionString);
@@ -53,5 +68,5 @@ public sealed class DynamoProvider : IDatabaseProvider
     };
 
     public async Task<IProviderConnection> OpenAsync(string connectionString, ConnectionOptions options, CancellationToken ct) =>
-        await DynamoConnection.OpenAsync(connectionString, _parser, _settings, ct);
+        await DynamoConnection.OpenAsync(connectionString, _parser, _settings, AccountOf, ct);
 }

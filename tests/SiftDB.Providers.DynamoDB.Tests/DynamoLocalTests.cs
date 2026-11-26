@@ -155,15 +155,6 @@ public sealed class DynamoLocalTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task There_are_no_transactions_to_begin()
-    {
-        Require();
-        await using var conn = await Open();
-        var ex = await Assert.ThrowsAsync<NotSupportedException>(() => conn.Transactions.BeginAsync(CancellationToken.None));
-        Assert.Contains("commits it straight away", ex.Message);
-    }
-
-    [SkippableFact]
     public async Task Rows_stream_page_by_page_and_later_attributes_go_into_other()
     {
         Require();
@@ -372,15 +363,14 @@ public sealed class DynamoLocalTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Through_the_engine_names_are_written_without_the_region_and_there_are_no_transactions()
+    public async Task Through_the_engine_names_are_written_without_the_region()
     {
         Require();
         var events = new List<string>();
         await using var engine = new EngineHost([_p], new Output(events));
         await engine.HandleCommandAsync(System.Text.Json.JsonSerializer.Serialize(new { type = "connect", id = 1, provider = "dynamodb", connectionString = ConnectionString() }));
         var connected = Reply(events, 1);
-        Assert.False(connected.GetProperty("transactions").GetBoolean());
-        Assert.False(connected.GetProperty("autoTransaction").GetBoolean());
+        Assert.True(connected.GetProperty("transactions").GetBoolean()); // queued writes, sent at Commit
         var conn = connected.GetProperty("connectionId").GetInt32();
 
         await engine.HandleCommandAsync($$"""{"type":"introspect","id":2,"connectionId":{{conn}}}""");
@@ -409,10 +399,6 @@ public sealed class DynamoLocalTests : IAsyncLifetime
         var issue = Assert.Single(analysis.GetProperty("issues").EnumerateArray());
         Assert.Contains("differs in case", issue.GetProperty("message").GetString());
         Assert.Equal(_orders, issue.GetProperty("fixText").GetString());
-
-        // Begin is refused with the reason.
-        await engine.HandleCommandAsync($$"""{"type":"transaction","id":5,"connectionId":{{conn}},"action":"begin"}""");
-        Assert.Contains("no transaction to begin", Reply(events, 5).GetProperty("message").GetString());
     }
 
     private static System.Text.Json.JsonElement Reply(List<string> events, int id) =>

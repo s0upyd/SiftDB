@@ -193,6 +193,9 @@ export class ResultView implements ResultTab {
   private store = new ResultStore();
   private columnCount = 0;
   private rowsAffected: number | null = null;
+  /** What the provider said about the finished statement (contract v17): "Queued", "4.5 read units". */
+  private noteHeadline: string | null = null;
+  private noteDetail: string | null = null;
   private errorExtra = '';
   private connectionId = 0;
   private outstanding = 0;
@@ -339,6 +342,8 @@ export class ResultView implements ResultTab {
     this.store = new ResultStore();
     this.columnCount = 0;
     this.rowsAffected = null;
+    this.noteHeadline = null;
+    this.noteDetail = null;
     this.errorHeadline = '';
     this.errorExtra = '';
     this.outstanding = 0;
@@ -442,6 +447,8 @@ export class ResultView implements ResultTab {
       this.m.engineSplit =
         `read ${e.engineReadMs.toFixed(0)} ms · encode ${e.engineAppendMs.toFixed(0)} ms · blocked on UI ${e.engineWriteWaitMs.toFixed(0)} ms`;
       this.rowsAffected = e.rowsAffected ?? null; // set by INSERT, UPDATE, DELETE; null for a SELECT
+      this.noteHeadline = typeof e.noteHeadline === 'string' ? e.noteHeadline : null;
+      this.noteDetail = typeof e.noteDetail === 'string' ? e.noteDetail : null;
       this.grid.setRowHint(e.totalRows);
       this.setState('complete');
       // Record was chosen last on this sheet, and the whole result qualifies: it opens in Record (design section 14, F8).
@@ -723,11 +730,14 @@ export class ResultView implements ResultTab {
     switch (this.state) {
       case 'running':
         return { headline: 'Running…', extra: `${plural(this.store.loadedRows, 'row')} so far · ${took}` };
-      case 'complete':
-        // A statement with no result set (INSERT, UPDATE, DELETE) says what it did instead of "0 rows".
-        return this.columnCount === 0 && this.rowsAffected !== null
-          ? { headline: `${plural(this.rowsAffected, 'row')} affected`, extra: took }
-          : { headline: plural(this.m.rows, 'row'), extra: took };
+      case 'complete': {
+        // A statement with no result set (INSERT, UPDATE, DELETE) says what it did instead of "0 rows"; "Done" when the
+        // database doesn't say how many rows (DynamoDB). The provider's note can replace the headline ("Queued") and adds
+        // its detail after the time ("4.5 read units").
+        const headline = this.noteHeadline
+          ?? (this.columnCount === 0 ? (this.rowsAffected !== null ? `${plural(this.rowsAffected, 'row')} affected` : 'Done') : plural(this.m.rows, 'row'));
+        return { headline, extra: this.noteDetail ? `${took} · ${this.noteDetail}` : took };
+      }
       case 'cancelled':
         return { headline: 'Cancelled', extra: `after ${took}` };
       case 'error':

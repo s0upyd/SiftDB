@@ -84,6 +84,9 @@ const ctx: SheetContext = {
 
 // ---- events from the engine --------------------------------------------------------------------------------------
 
+/** Schema reloads waiting to happen, by tree root (see "schemaChanged"). */
+const schemaReloads = new Map<string, ReturnType<typeof setTimeout>>();
+
 function onEvent(e: BridgeEvent) {
   switch (e.type) {
     case 'init':
@@ -124,6 +127,16 @@ function onEvent(e: BridgeEvent) {
     case 'transactionUnknown':
       connections.get(e.connectionId)?.setMessage(`transaction state unavailable: ${e.message}`, 'warning');
       return;
+    case 'schemaChanged': {
+      // Columns learnt from rows (DynamoDB, contract v17): load that connection's schema again, once things settle,
+      // so completion, the resolver and the tree know them. Several tables learnt at once make one reload.
+      const target = connections.get(e.connectionId)?.target;
+      const id = target ? entries.get(targetKey(target))?.id : undefined;
+      if (!id) return;
+      clearTimeout(schemaReloads.get(id));
+      schemaReloads.set(id, setTimeout(() => { schemaReloads.delete(id); void refreshSchema(id); }, 400));
+      return;
+    }
   }
   if (e.queryId !== undefined) queries.get(e.queryId)?.onEvent(e);
 }

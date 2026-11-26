@@ -12,7 +12,7 @@
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <!-- The contract this provider is built against; ProviderLoadingTests checks it matches ProviderContract.CurrentVersion.
          SiftDBContractMin, the oldest contract it works with, defaults to the same. -->
-    <SiftDBContractVersion>16</SiftDBContractVersion>
+    <SiftDBContractVersion>17</SiftDBContractVersion>
     <SiftDBContractMin Condition="'$(SiftDBContractMin)' == ''">$(SiftDBContractVersion)</SiftDBContractMin>
   </PropertyGroup>
 

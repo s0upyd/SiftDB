@@ -103,7 +103,7 @@ public static class IdentifierResolver
                     Check(t, id, c.Name, policy, text, corrections, issues, afterDot: true);
                     CheckBooleanNumber(st, i, text, owner.Rel!, c.Name, policy, rules, issues);
                 }
-                else if (CanReportUnknown(st, i, text, mixedScope, checkClause: false)) ReportUnknown(t, id, [owner], policy, issues);
+                else if (rules.Dialect.KnownColumnsOnly && CanReportUnknown(st, i, text, mixedScope, checkClause: false)) ReportUnknown(t, id, [owner], policy, issues);
                 continue;
             }
             // The left side of "x." is a qualifier, not a column.
@@ -145,7 +145,7 @@ public static class IdentifierResolver
             // A name that is no column of any table in the statement. "select p from Person p" (the whole row) is fine.
             var meaning = id.Meaning(policy);
             var namesATable = scope.Entries.Any(e => (e.AliasId ?? e.NameId).Meaning(policy) == meaning || e.NameId.Meaning(policy) == meaning);
-            if (!namesATable && CanReportUnknown(st, i, text, mixedScope, checkClause: true)) ReportUnknown(t, id, resolved, policy, issues);
+            if (!namesATable && rules.Dialect.KnownColumnsOnly && CanReportUnknown(st, i, text, mixedScope, checkClause: true)) ReportUnknown(t, id, resolved, policy, issues);
         }
     }
 

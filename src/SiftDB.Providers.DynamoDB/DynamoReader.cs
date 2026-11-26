@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Data.Common;
 using Amazon.DynamoDBv2.Model;
+using SiftDB.Abstractions;
 
 namespace SiftDB.Providers.DynamoDB;
 
@@ -11,12 +12,12 @@ namespace SiftDB.Providers.DynamoDB;
 /// started, so attributes first seen on a later page go into one trailing "…other" column, as JSON. The next page is
 /// fetched only when the grid has read the last row of this one, so rows stream (design section 1).
 /// </summary>
-internal sealed class DynamoReader : DbDataReader
+internal sealed class DynamoReader : DbDataReader, IResultNote
 {
     public const string OtherColumn = "…other";
 
     /// <summary>Fetches the page after <c>token</c>: its items and the token for the one after it (null at the end).</summary>
-    public delegate Task<(List<Dictionary<string, AttributeValue>> Items, string? Next)> PageFetcher(string token, CancellationToken ct);
+    public delegate Task<(List<Dictionary<string, AttributeValue>> Items, string? Next, double? Units)> PageFetcher(string token, CancellationToken ct);
 
     private readonly string[] _names;
     private readonly string[] _types;
@@ -30,10 +31,22 @@ internal sealed class DynamoReader : DbDataReader
     /// <summary>The attributes that have a column of their own (the rest go into "…other").</summary>
     private readonly HashSet<string> _known;
     private bool _closed;
+    private double? _units;
+    private readonly string _unitWord;
+    private readonly string? _headline, _detail;
 
     /// <param name="names">The attribute columns, in order; the "…other" column is added after them when <paramref name="other"/>.</param>
-    public DynamoReader(IReadOnlyList<string> names, bool other, List<Dictionary<string, AttributeValue>> firstPage, string? next, PageFetcher fetch)
+    /// <param name="units">The capacity the first page used (null: not reported, as by DynamoDB Local).</param>
+    /// <param name="unitWord">"read" or "write": what the capacity was used for.</param>
+    /// <param name="headline">Replaces the status line's headline ("Queued"), or null.</param>
+    /// <param name="detail">Said before the capacity ("outside the transaction"), or null.</param>
+    public DynamoReader(IReadOnlyList<string> names, bool other, List<Dictionary<string, AttributeValue>> firstPage, string? next, PageFetcher fetch,
+        double? units = null, string unitWord = "read", string? headline = null, string? detail = null)
     {
+        _units = units;
+        _unitWord = unitWord;
+        _headline = headline;
+        _detail = detail;
         _hasOther = other;
         _names = other ? [.. names, OtherColumn] : [.. names];
         _ordinal = _names.Select((n, i) => (n, i)).GroupBy(x => x.n).ToDictionary(g => g.Key, g => g.First().i);
@@ -53,8 +66,10 @@ internal sealed class DynamoReader : DbDataReader
         if (_closed) return false;
         while (++_index >= _page.Count)
         {
-            if (_next is null) { _index = _page.Count; return false; }
-            (_page, _next) = await _fetch(_next, ct);
+            if (_next is not { } token) { _index = _page.Count; return false; }
+            double? more;
+            (_page, _next, more) = await _fetch(token, ct);
+            if (more is { } u) _units = (_units ?? 0) + u;
             _index = -1;
         }
         Fill(_page[_index]);
@@ -94,6 +109,12 @@ internal sealed class DynamoReader : DbDataReader
     public override object this[int ordinal] => GetValue(ordinal);
     public override object this[string name] => GetValue(GetOrdinal(name));
 
+    /// <summary>The status line's headline instead of "3 rows" or "Done": "Queued" for a write held for the transaction.</summary>
+    public string? NoteHeadline => _headline;
+
+    /// <summary>What the connection had to say, then the capacity all the pages used: "4.5 read units" (contract v17).</summary>
+    public string? NoteDetail => string.Join(" · ", new[] { _detail, Capacity.Describe(_units, _unitWord) }.Where(s => !string.IsNullOrEmpty(s))) is { Length: > 0 } s ? s : null;
+
     public override bool HasRows => _page.Count > 0 || _next is not null;
     public override bool IsClosed => _closed;
     /// <summary>DynamoDB doesn't say how many items a write touched.</summary>
@@ -117,4 +138,13 @@ internal sealed class DynamoReader : DbDataReader
     public override short GetInt16(int ordinal) => short.Parse(GetString(ordinal), System.Globalization.CultureInfo.InvariantCulture);
     public override int GetInt32(int ordinal) => int.Parse(GetString(ordinal), System.Globalization.CultureInfo.InvariantCulture);
     public override long GetInt64(int ordinal) => long.Parse(GetString(ordinal), System.Globalization.CultureInfo.InvariantCulture);
+}
+
+/// <summary>Read and write capacity as the status line says it.</summary>
+internal static class Capacity
+{
+    /// <summary>"4.5 read units", "1 write unit"; null when DynamoDB didn't say (DynamoDB Local never does).</summary>
+    public static string? Describe(double? units, string word) => units is { } u
+        ? $"{u.ToString(u % 1 == 0 ? "0" : "0.#", System.Globalization.CultureInfo.InvariantCulture)} {word} unit{(u == 1 ? "" : "s")}"
+        : null;
 }

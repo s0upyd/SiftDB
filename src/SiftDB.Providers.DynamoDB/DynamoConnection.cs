@@ -11,8 +11,9 @@ namespace SiftDB.Providers.DynamoDB;
 
 /// <summary>
 /// One sheet's "session" with DynamoDB (design section 14, F19). There is no session on the server: every statement is
-/// one ExecuteStatement call and commits on its own, so this is just a signed-in client and what it has learnt about
-/// the tables' keys.
+/// one ExecuteStatement call and commits on its own, unless a transaction is open here, which holds the writes until
+/// Commit sends them all in one ExecuteTransaction. Besides the signed-in client it keeps what it has learnt about the
+/// tables (their keys here; their other attributes in the <see cref="DynamoAccount"/> every sheet on it shares).
 /// </summary>
 internal sealed class DynamoConnection : IProviderConnection
 {
@@ -20,24 +21,30 @@ internal sealed class DynamoConnection : IProviderConnection
     private readonly string _region;
     private readonly PartiqlParser _parser;
     private readonly DynamoSettings _settings;
+    private readonly DynamoAccount _account;
+    private readonly DynamoIdentifiers _names = new();
+    private readonly QueuedTransaction _transaction;
     /// <summary>Each table's partition and sort key, from the schema load or asked once; for putting them first.</summary>
     private readonly ConcurrentDictionary<string, string[]> _keys = new(StringComparer.Ordinal);
 
-    private DynamoConnection(AmazonDynamoDBClient client, string region, PartiqlParser parser, DynamoSettings settings)
+    private DynamoConnection(AmazonDynamoDBClient client, string region, PartiqlParser parser, DynamoSettings settings, DynamoAccount account)
     {
         _client = client;
         _region = region;
         _parser = parser;
         _settings = settings;
+        _account = account;
+        _transaction = new QueuedTransaction(client);
     }
 
-    public ITransactionMonitor Transactions { get; } = new AutoCommit();
+    public ITransactionMonitor Transactions => _transaction;
 
     /// <summary>
     /// Signs in the way the connection says, then proves it with a one-table ListTables, so a bad key or an expired SSO
     /// session is reported on connecting, not at the first statement.
     /// </summary>
-    public static async Task<DynamoConnection> OpenAsync(string connectionString, PartiqlParser parser, DynamoSettings settings, CancellationToken ct)
+    public static async Task<DynamoConnection> OpenAsync(string connectionString, PartiqlParser parser, DynamoSettings settings,
+        Func<DynamoConnectionFields.Settings, DynamoAccount> account, CancellationToken ct)
     {
         var s = DynamoConnectionFields.Read(connectionString);
         var config = new AmazonDynamoDBConfig { RegionEndpoint = RegionEndpoint.GetBySystemName(s.Region) };
@@ -74,7 +81,7 @@ internal sealed class DynamoConnection : IProviderConnection
             client.Dispose();
             throw;
         }
-        return new DynamoConnection(client, s.Region, parser, settings);
+        return new DynamoConnection(client, s.Region, parser, settings, account(s));
     }
 
     /// <summary>
@@ -107,15 +114,35 @@ internal sealed class DynamoConnection : IProviderConnection
         _ => null,
     };
 
+    // ---- running statements ------------------------------------------------------------------------------------
+
     public async Task<DbDataReader> ExecuteReaderAsync(string sql, CancellationToken ct)
     {
         var statement = sql.Trim().TrimEnd(';').TrimEnd();
-        var (items, next) = await PageAsync(statement, null, ct);
+        var verb = _parser.Verb(statement);
+
+        // In a transaction, writes (and EXISTS conditions) wait for Commit: nothing is sent now.
+        if (_transaction.IsOpen && verb is "insert" or "update" or "delete" or "exists")
+        {
+            var position = _transaction.Queue(statement);
+            return new DynamoReader([], false, [], null, (_, _) => throw new InvalidOperationException("Nothing to read."),
+                headline: "Queued", detail: $"statement {position} of the transaction: it runs when you commit");
+        }
+
+        var (items, next, units) = await PageAsync(statement, null, ct);
         // A filtered scan can return empty pages before it finds anything: read on to the first item (or the end), so
         // the columns can be worked out. Cancelling stops it.
-        while (items.Count == 0 && next is not null) (items, next) = await PageAsync(statement, next, ct);
+        while (items.Count == 0 && next is not null)
+        {
+            double? more;
+            (items, next, more) = await PageAsync(statement, next, ct);
+            if (more is { } u) units = (units ?? 0) + u;
+        }
 
-        var verb = _parser.Verb(statement);
+        var table = verb == "select" ? TableOf(statement) : null;
+        // What the rows show is learnt for free (no extra reads): their attributes, for completion and the tree.
+        if (table is not null && items.Count > 0) Learn(table, items);
+
         List<string> names;
         bool other;
         if (verb == "select" && Projection(statement) is { } named)
@@ -126,25 +153,32 @@ internal sealed class DynamoConnection : IProviderConnection
         else if (items.Count == 0)
         {
             // Nothing came back: a write (no columns at all), or an empty SELECT (its table's keys, so the grid has headers).
-            names = verb == "select" && TableOf(statement) is { } t ? [.. await KeysOfAsync(t, ct)] : [];
+            names = table is not null ? [.. await KeysOfAsync(table, ct)] : [];
             other = false;
         }
         else
         {
-            names = verb == "select" && TableOf(statement) is { } t ? [.. await KeysOfAsync(t, ct)] : [];
+            names = table is not null ? [.. await KeysOfAsync(table, ct)] : [];
             var seen = names.ToHashSet(StringComparer.Ordinal);
             foreach (var item in items)
                 foreach (var name in item.Keys)
                     if (seen.Add(name)) names.Add(name);
             other = next is not null; // only a later page can bring an attribute this one didn't have
         }
-        return new DynamoReader(names, other, items, next, (token, c) => PageAsync(statement, token, c));
+        // A SELECT inside a transaction runs straight away and sees what is committed, not the writes queued for Commit.
+        var aside = verb == "select" && _transaction.Queued > 0 ? "outside the transaction: committed data only" : null;
+        return new DynamoReader(names, other, items, next, (token, c) => PageAsync(statement, token, c),
+            units, verb == "select" ? "read" : "write", detail: aside);
     }
 
-    private async Task<(List<Dictionary<string, AttributeValue>>, string?)> PageAsync(string statement, string? token, CancellationToken ct)
+    /// <summary>One page, with the capacity it used (null when not reported: DynamoDB Local never does).</summary>
+    private async Task<(List<Dictionary<string, AttributeValue>>, string?, double?)> PageAsync(string statement, string? token, CancellationToken ct)
     {
-        var r = await _client.ExecuteStatementAsync(new ExecuteStatementRequest { Statement = statement, NextToken = token }, ct);
-        return (r.Items ?? [], string.IsNullOrEmpty(r.NextToken) ? null : r.NextToken);
+        var r = await _client.ExecuteStatementAsync(new ExecuteStatementRequest
+        {
+            Statement = statement, NextToken = token, ReturnConsumedCapacity = ReturnConsumedCapacity.TOTAL,
+        }, ct);
+        return (r.Items ?? [], string.IsNullOrEmpty(r.NextToken) ? null : r.NextToken, r.ConsumedCapacity?.CapacityUnits);
     }
 
     /// <summary>The attributes a SELECT names, when it names only plain attributes (<c>select pk, "Total" from …</c>); else null.</summary>
@@ -173,6 +207,24 @@ internal sealed class DynamoConnection : IProviderConnection
             ? Unquote(statement, tokens[from + 1]) : null;
     }
 
+    /// <summary>
+    /// The tables a statement names: after FROM (a SELECT or DELETE), UPDATE, or INSERT INTO; an index's table is its
+    /// table (<c>from "Orders"."ByStatus"</c> is Orders).
+    /// </summary>
+    private List<string> TablesOf(string statement)
+    {
+        var tokens = _parser.Tokenize(statement).Where(t => t.Kind != SqlTokenKind.Comment).ToList();
+        var tables = new List<string>();
+        for (var i = 0; i + 1 < tokens.Count; i++)
+        {
+            if (tokens[i].Kind != SqlTokenKind.Keyword) continue;
+            var w = Word(statement, tokens[i]);
+            var name = w is "from" or "update" || (w == "into" && i > 0 && Word(statement, tokens[i - 1]) == "insert") ? tokens[i + 1] : (SqlToken?)null;
+            if (name is { Kind: SqlTokenKind.Identifier or SqlTokenKind.QuotedIdentifier } n) tables.Add(Unquote(statement, n));
+        }
+        return tables;
+    }
+
     private static string Word(string s, SqlToken t) => s[t.Start..t.End].ToLowerInvariant();
 
     private static string Unquote(string s, SqlToken t) =>
@@ -192,6 +244,42 @@ internal sealed class DynamoConnection : IProviderConnection
 
     private static string[] KeyNames(List<KeySchemaElement>? schema) =>
         (schema ?? []).OrderBy(k => k.KeyType == KeyType.HASH ? 0 : 1).Select(k => k.AttributeName).ToArray();
+
+    // ---- learning attributes (contract v17) -------------------------------------------------------------------
+
+    public event Action? SchemaChanged;
+
+    /// <summary>
+    /// The statement at the cursor (a hint from the sheet analysis): a table it names that is known and not sampled yet
+    /// gets a few of its items read in the background, once per account, so completion knows its attributes before the
+    /// first run. Off with the "only from results" setting. Returns at once.
+    /// </summary>
+    public void StatementInView(string sql)
+    {
+        if (!_settings.Samples) return;
+        foreach (var table in TablesOf(sql))
+        {
+            if (!_keys.ContainsKey(table) || !_account.Learning.ClaimSample(table)) continue; // unknown (a typo), or done
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var r = await _client.ExecuteStatementAsync(new ExecuteStatementRequest
+                        { Statement = $"select * from {_names.Quote(table)}", Limit = DynamoSettings.SampleSize });
+                    if (r.Items is { Count: > 0 } items) Learn(table, items);
+                }
+                catch (Exception) { /* only a hint: completion simply knows less */ }
+            });
+        }
+    }
+
+    /// <summary>Adds what these items show; when a new attribute turned up, the schema is loaded again (from the cache).</summary>
+    private void Learn(string table, List<Dictionary<string, AttributeValue>> items)
+    {
+        if (!_account.Learning.Learn(table, items)) return;
+        _account.ReuseUntil = DateTime.UtcNow.AddSeconds(10); // the reload this causes needs no calls
+        SchemaChanged?.Invoke();
+    }
 
     // ---- the scan warning (F19 step 4) -------------------------------------------------------------------------
 
@@ -246,12 +334,15 @@ internal sealed class DynamoConnection : IProviderConnection
     // ---- the schema ----------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Every table, as one schema named after the region: ListTables, then DescribeTable for each (a few at a time). The
-    /// keys are the only attributes a table declares, so they are its columns: the table's own keys first, then the
-    /// indexes' keys. The partition and sort key are the primary key; each index is an index.
+    /// Every table, as one schema named after the region: ListTables, then DescribeTable for each (a few at a time).
+    /// A table's columns are its keys (its own, then its indexes'), then the attributes learnt from its items. The
+    /// reload just after something was learnt is answered from the last load, with no calls.
     /// </summary>
     public async Task<DatabaseSchema> IntrospectAsync(CancellationToken ct)
     {
+        if (_account.Loaded is { } kept && DateTime.UtcNow < _account.ReuseUntil)
+            return Schema(kept.Names, kept.Tables);
+
         var names = new List<string>();
         string? start = null;
         do
@@ -261,17 +352,21 @@ internal sealed class DynamoConnection : IProviderConnection
             start = page.LastEvaluatedTableName;
         } while (!string.IsNullOrEmpty(start));
 
-        var relations = new RelationInfo?[names.Count];
+        var tables = new ConcurrentDictionary<string, TableDescription>(StringComparer.Ordinal);
         using var gate = new SemaphoreSlim(4);
-        await Task.WhenAll(names.Select(async (name, i) =>
+        await Task.WhenAll(names.Select(async name =>
         {
             await gate.WaitAsync(ct);
-            try { relations[i] = Relation((await _client.DescribeTableAsync(name, ct)).Table); }
+            try { tables[name] = (await _client.DescribeTableAsync(name, ct)).Table; }
             catch (ResourceNotFoundException) { /* dropped since it was listed */ }
             finally { gate.Release(); }
         }));
-        return new DatabaseSchema([new SchemaInfo(_region, relations.Where(r => r is not null).Select(r => r!).ToList())]);
+        _account.Loaded = (names, tables);
+        return Schema(names, tables);
     }
+
+    private DatabaseSchema Schema(List<string> names, ConcurrentDictionary<string, TableDescription> tables) =>
+        new([new SchemaInfo(_region, names.Where(tables.ContainsKey).Select(n => Relation(tables[n])).ToList())]);
 
     private RelationInfo Relation(TableDescription d)
     {
@@ -279,8 +374,11 @@ internal sealed class DynamoConnection : IProviderConnection
         _keys[d.TableName] = keys;
         var types = (d.AttributeDefinitions ?? []).ToDictionary(a => a.AttributeName, a => a.AttributeType.Value);
         var indexes = Indexes(d).Select(i => new IndexInfo(i.Name, i.Keys, false)).ToList();
-        var columns = keys.Concat(indexes.SelectMany(i => i.Columns)).Distinct()
-            .Select(a => new ColumnInfo(a, types.GetValueOrDefault(a) ?? "S", IsNullable: !keys.Contains(a), null)).ToList();
+        var declared = keys.Concat(indexes.SelectMany(i => i.Columns)).Distinct().ToList();
+        var columns = declared.Select(a => new ColumnInfo(a, types.GetValueOrDefault(a) ?? "S", IsNullable: !keys.Contains(a), null)).ToList();
+        // Then what the items have shown, the most common first: seen, not declared, so any item may lack it.
+        foreach (var a in _account.Learning.Attributes(d.TableName))
+            if (!declared.Contains(a.Name)) columns.Add(new ColumnInfo(a.Name, a.Type, IsNullable: true, null));
         return new RelationInfo(d.TableName, RelationKind.Table, columns, keys, [], indexes);
     }
 
@@ -298,7 +396,8 @@ internal sealed class DynamoConnection : IProviderConnection
 
     /// <summary>
     /// A table's details for the tree (F13): its approximate item count and size (DynamoDB updates them about every
-    /// six hours), its key, and its indexes with their keys and what they project.
+    /// six hours), its key, its indexes with their keys and what they project, and for each attribute learnt from items
+    /// how often it was seen.
     /// </summary>
     public async Task<RelationDetail?> DescribeRelationAsync(string schema, string relation, CancellationToken ct)
     {
@@ -310,8 +409,14 @@ internal sealed class DynamoConnection : IProviderConnection
             string.Join(", ", keys.Select((k, i) => $"{k} ({(i == 0 ? "partition" : "sort")} key)")));
         var indexes = Indexes(d).Select(i => new IndexDetail(i.Name, i.Kind, false, false, string.Join(", ", i.Keys), null, i.Bytes, null,
             $"{i.Kind} secondary index {i.Name} ({string.Join(", ", i.Keys)}), projecting {i.Projection}")).ToList();
+        var indexKeys = Indexes(d).SelectMany(i => i.Keys).ToHashSet(StringComparer.Ordinal);
+        var learnt = _account.Learning.Attributes(d.TableName).ToDictionary(a => a.Name);
         var columns = Relation(d).Columns.Select(c => new ColumnDetail(c.Name,
-            keys.Length > 0 && c.Name == keys[0] ? "Partition key" : keys.Length > 1 && c.Name == keys[1] ? "Sort key" : "Index key", null, null)).ToList();
+            keys.Length > 0 && c.Name == keys[0] ? "Partition key"
+            : keys.Length > 1 && c.Name == keys[1] ? "Sort key"
+            : indexKeys.Contains(c.Name) ? "Index key"
+            : learnt.TryGetValue(c.Name, out var a) ? $"Seen in {a.SeenIn} of the {a.Of} items read so far (not declared: DynamoDB only declares keys)"
+            : null, null, null)).ToList();
         return new RelationDetail($"Status {d.TableStatus?.Value?.ToLowerInvariant()}; billing {(d.BillingModeSummary?.BillingMode?.Value ?? "PROVISIONED").ToLowerInvariant().Replace('_', ' ')}",
             d.ItemCount, d.TableSizeBytes, columns, [key], [], indexes, [], [], [], null);
     }
@@ -323,16 +428,85 @@ internal sealed class DynamoConnection : IProviderConnection
     }
 
     /// <summary>
-    /// DynamoDB commits every statement on its own: the state is always "no transaction", so the tab never goes amber.
-    /// ExecuteTransaction batches come later (design section 14, F19).
+    /// A DynamoDB transaction, as SiftDB holds one (design section 14, F19): DynamoDB has no open transaction, only
+    /// ExecuteTransaction, which runs up to 100 statements at once, all or none. So after Begin, writes (and EXISTS
+    /// conditions) are queued here instead of sent; Commit sends them in one ExecuteTransaction, Rollback drops them.
+    /// The tab is amber while any are queued. A commit DynamoDB refuses writes nothing, and says which statement it
+    /// refused and why; either way the transaction is over.
     /// </summary>
-    private sealed class AutoCommit : ITransactionMonitor
+    private sealed class QueuedTransaction(AmazonDynamoDBClient client) : ITransactionMonitor, IResultNote
     {
-        private const string NoTransactions = "DynamoDB runs every statement on its own and commits it straight away: there is no transaction to begin, commit or roll back.";
+        public const int MaxStatements = 100;
+        private readonly List<string> _queued = [];
+        private string? _lastCommit;
+
+        public bool IsOpen { get; private set; }
+        public int Queued => _queued.Count;
         public bool CanDetectWrites => true;
-        public Task BeginAsync(CancellationToken ct) => throw new NotSupportedException(NoTransactions);
-        public Task CommitAsync(CancellationToken ct) => throw new NotSupportedException(NoTransactions);
-        public Task RollbackAsync(CancellationToken ct) => throw new NotSupportedException(NoTransactions);
-        public Task<TransactionSnapshot> GetStateAsync(CancellationToken ct) => Task.FromResult(new TransactionSnapshot(TransactionState.None, null));
+
+        /// <summary>Adds a statement for Commit; its position in the transaction (1-based).</summary>
+        public int Queue(string statement)
+        {
+            if (_queued.Count >= MaxStatements)
+                throw new InvalidOperationException($"A DynamoDB transaction holds at most {MaxStatements} statements. Commit these first, or roll back.");
+            _queued.Add(statement);
+            return _queued.Count;
+        }
+
+        public Task BeginAsync(CancellationToken ct)
+        {
+            if (IsOpen) throw new InvalidOperationException("A transaction is already open.");
+            IsOpen = true;
+            _lastCommit = null;
+            return Task.CompletedTask;
+        }
+
+        public async Task CommitAsync(CancellationToken ct)
+        {
+            if (!IsOpen) throw new InvalidOperationException("No transaction is open.");
+            var statements = _queued.ToList();
+            _queued.Clear();
+            IsOpen = false;
+            if (statements.Count == 0) { _lastCommit = "Nothing was queued, so nothing was written."; return; }
+            try
+            {
+                var r = await client.ExecuteTransactionAsync(new ExecuteTransactionRequest
+                {
+                    TransactStatements = statements.Select(s => new ParameterizedStatement { Statement = s }).ToList(),
+                    ReturnConsumedCapacity = ReturnConsumedCapacity.TOTAL,
+                }, ct);
+                var units = r.ConsumedCapacity?.Sum(c => c.CapacityUnits ?? 0) is { } u and > 0 ? u : (double?)null;
+                _lastCommit = $"Committed {statements.Count} statement{(statements.Count == 1 ? "" : "s")}" +
+                    (Capacity.Describe(units, "write") is { } said ? $", using {said}." : ".");
+            }
+            catch (TransactionCanceledException ex)
+            {
+                // One reason per statement, in order; "None" for those that were fine.
+                var refused = (ex.CancellationReasons ?? []).Select((reason, i) => (reason, i))
+                    .Where(x => x.reason.Code is { } code && code != "None")
+                    .Select(x => $"statement {x.i + 1} ({Short(statements.ElementAtOrDefault(x.i))}): {x.reason.Code}{(string.IsNullOrEmpty(x.reason.Message) ? "" : $", {x.reason.Message}")}")
+                    .ToList();
+                throw new InvalidOperationException("DynamoDB refused the transaction, so nothing was written" +
+                    (refused.Count > 0 ? ": " + string.Join("; ", refused) + "." : $". ({ex.Message})"), ex);
+            }
+        }
+
+        public Task RollbackAsync(CancellationToken ct)
+        {
+            if (!IsOpen) throw new InvalidOperationException("No transaction is open.");
+            _lastCommit = null;
+            _queued.Clear();
+            IsOpen = false;
+            return Task.CompletedTask;
+        }
+
+        public Task<TransactionSnapshot> GetStateAsync(CancellationToken ct) => Task.FromResult(new TransactionSnapshot(
+            !IsOpen ? TransactionState.None : _queued.Count > 0 ? TransactionState.Changed : TransactionState.Open, null));
+
+        public string? NoteHeadline => null;
+        /// <summary>What the last commit did, for the sheet's message.</summary>
+        public string? NoteDetail => _lastCommit;
+
+        private static string Short(string? s) => s is null ? "?" : s.Length <= 60 ? s : s[..57] + "…";
     }
 }

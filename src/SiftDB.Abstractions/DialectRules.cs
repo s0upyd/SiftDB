@@ -15,4 +15,11 @@ namespace SiftDB.Abstractions;
 public sealed record DialectRules(bool QualifiedSetColumns = true, bool NumbersAsBooleans = true)
 {
     public static readonly DialectRules Permissive = new();
+
+    /// <summary>
+    /// A table's columns are all known, so a name that is none of them is worth a warning ("No column x in t"). False
+    /// where any row can carry any attribute (DynamoDB): the schema then lists only what is known so far. True by
+    /// default. (Contract v17; an init property, so the constructor is unchanged.)
+    /// </summary>
+    public bool KnownColumnsOnly { get; init; } = true;
 }

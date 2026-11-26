@@ -1,6 +1,7 @@
 using System.Data.Common;
 using System.Diagnostics;
 using System.Threading.Channels;
+using SiftDB.Abstractions;
 using SiftDB.Bridge;
 
 namespace SiftDB.Engine;
@@ -37,6 +38,10 @@ internal sealed class QuerySession
 
     /// <summary>Rows an INSERT/UPDATE/DELETE reported, or a negative number for a statement that has no such count.</summary>
     public long RecordsAffected { get; private set; } = -1;
+
+    /// <summary>The reader's own note, when it has one (<see cref="IResultNote"/>): set once the last row is read.</summary>
+    public string? NoteHeadline { get; private set; }
+    public string? NoteDetail { get; private set; }
     public double FirstBatchMs => _firstBatchTicks < 0 ? -1 : _firstBatchTicks * 1000.0 / Stopwatch.Frequency;
     public double TotalMs { get; private set; }
 
@@ -114,6 +119,8 @@ internal sealed class QuerySession
             }
             if (_writer.RowCount > 0) await FlushAsync();
             RecordsAffected = _reader.RecordsAffected;
+            // What the provider has to say once it is done (contract v17): read capacity used, a write queued for later.
+            if (_reader is IResultNote note) { NoteHeadline = note.NoteHeadline; NoteDetail = note.NoteDetail; }
             TotalMs = _sw.Elapsed.TotalMilliseconds;
             Channel.Writer.TryComplete();
         }
