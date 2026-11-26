@@ -206,7 +206,8 @@ public class DryRunTests : IAsyncLifetime
     {
         Require();
         var r = await Send(new { type = "dryRun", connectionId = _conn, sql });
-        Assert.Equal("error", r.GetProperty("type").GetString());
-        Assert.Contains(why, r.GetProperty("message").GetString());
+        // It fails now and then, rarely and not on demand (design section 15): on a failure, say the whole reply.
+        Assert.True(r.GetProperty("type").GetString() == "error" && r.GetProperty("message").GetString()!.Contains(why),
+            $"Expected an error saying \"{why}\"; the engine answered: {r}");
     }
 }
