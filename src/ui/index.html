@@ -549,6 +549,33 @@
     textarea.valuetext { width: 100%; height: min(420px, calc(100vh - 220px)); resize: vertical; padding: 8px;
                          font: 13px Consolas, "Cascadia Mono", monospace; }
     .nullvalue { font: italic 14px Consolas, "Cascadia Mono", monospace; color: var(--dim); }
+    /* The JSON viewer (design section 14, F20): the value viewer's Tree view. Values are coloured by kind, but never by
+       colour alone: strings keep their quotes, null reads null, objects and lists say {n keys} and [n items]. */
+    :root { --jt-string: #0a7d3e; --jt-number: #0550ae; --jt-boolean: #8250df; }
+    :root[data-theme="dark"] { --jt-string: #7ee787; --jt-number: #79c0ff; --jt-boolean: #d2a8ff; }
+    .jt-head { display: flex; align-items: center; gap: 12px; }
+    .jt-head > p { flex: 1; margin: 0; }
+    .jt-views { margin: 8px 0; }
+    .jt-view[hidden], .valuetext[hidden] { display: none; }
+    .jt-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .jt-search { width: 220px; padding: 3px 6px; }
+    .jsontree { height: min(420px, calc(100vh - 260px)); overflow: auto; border: 1px solid var(--line); border-radius: 4px; padding: 4px 0;
+                font: 13px Consolas, "Cascadia Mono", monospace; background: var(--bg); }
+    .jt-row { display: flex; align-items: baseline; white-space: pre; padding: 1px 8px 1px 4px; cursor: default; min-width: max-content; }
+    .jt-row:hover { background: var(--panel); }
+    .jt-row:focus { outline: none; background: color-mix(in srgb, var(--accent) 14%, var(--bg)); box-shadow: inset 2px 0 0 var(--accent); }
+    .jt-row.hit { background: color-mix(in srgb, var(--tx-changed) 18%, var(--bg)); }
+    .jt-row.current { box-shadow: inset 2px 0 0 var(--tx-changed); }
+    .jt-row mark { background: color-mix(in srgb, var(--tx-changed) 45%, transparent); color: inherit; border-radius: 2px; }
+    .jt-toggle { display: inline-block; width: 16px; flex: none; color: var(--dim); text-align: center; cursor: pointer; }
+    .jt-key { color: var(--fg); font-weight: 600; }
+    .jt-index, .jt-colon, .jt-summary { color: var(--dim); }
+    .jt-string { color: var(--jt-string); }
+    .jt-number { color: var(--jt-number); }
+    .jt-boolean { color: var(--jt-boolean); }
+    .jt-null { color: var(--dim); font-style: italic; }
+    .jt-more { padding: 2px 0; }
+    .jt-note { padding: 6px 8px; color: var(--dim); font: italic 12px "Segoe UI", sans-serif; }
     label.check { display: inline-flex; align-items: center; gap: 6px; }
   </style>
 </head>

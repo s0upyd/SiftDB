@@ -4,7 +4,7 @@ import { ExportFormat, ExportSource, exportAll } from './export';
 import { MenuItem, showMenu } from './menu';
 import { ResultStore, cellText } from './store';
 import { CellStyler, rulesVersion, stylersFor } from './styles';
-import { showValue } from './value-viewer';
+import { jsonTreeValue, showValue } from './value-viewer';
 
 const ROW_H = 22;
 const HEADER_H = 28;
@@ -662,6 +662,9 @@ export class Grid {
         disabled: !focus || focus.row >= this.store.loadedRows,
         action: () => { if (focus) void this.openValue(focus); },
       },
+      // The JSON viewer (design section 14, F20): only for a cell holding a JSON object or array.
+      ...(focus && focus.row < this.store.loadedRows && jsonTreeValue(this.valueAt(focus.row, focus.col) ?? null) !== undefined
+        ? [{ label: 'Open in JSON viewer', action: () => void this.openValue(focus) }] : []),
       { label: 'Export result…', separatorBefore: true, disabled: !this.canExport(), action: () => this.onExport(null) },
       { label: 'Export selection…', disabled: !several || !this.canExport(), action: () => this.onExport(this.range()) },
       ...this.menuExtras(focus, x, y),
@@ -689,7 +692,9 @@ export class Grid {
     const value = this.valueAt(c.row, c.col);
     if (value === undefined) return;
     this.hideTip();
-    await showValue({ column: this.columns[c.col].name, row: c.row + 1, value });
+    // DynamoDB's "…other" column holds attributes themselves: paths into it start at their names, not at the column's.
+    const column = this.columns[c.col].name;
+    await showValue({ column, row: c.row + 1, value }, column === '…other' ? null : column);
     this.wrap.focus({ preventScroll: true });
   }
 

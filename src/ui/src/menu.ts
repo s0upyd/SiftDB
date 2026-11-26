@@ -68,7 +68,8 @@ export function showMenu(clientX: number, clientY: number, items: MenuItem[], la
     e.stopPropagation();
   });
 
-  document.body.append(menu);
+  // Inside an open modal dialog when there is one (the JSON viewer's): the dialog is in the top layer, above the body.
+  (document.querySelector('dialog:modal') ?? document.body).append(menu);
   // Keep it on screen: open up or left of the point when there is no room below or to the right.
   const r = menu.getBoundingClientRect();
   const x = clientX + r.width > window.innerWidth - 4 ? Math.max(4, clientX - r.width) : clientX;
