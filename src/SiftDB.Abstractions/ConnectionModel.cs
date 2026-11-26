@@ -24,6 +24,18 @@ public sealed record ConnectionChoice(string Value, string Label);
 public sealed record FieldCondition(string Key, IReadOnlyList<string> Values);
 
 /// <summary>
+/// The one secret a provider's connections can have (contract v14, design section 14, F19): what it is called, and
+/// when it is needed. It is never a field: it is stored apart, encrypted, sent from the UI once and never sent back, and
+/// reaches the provider as <see cref="IDatabaseProvider.BuildConnectionString"/>'s password.
+/// </summary>
+/// <param name="Label">What the form and the prompt call it: "Password", "Secret access key".</param>
+/// <param name="NeededWhen">
+/// Only needed when a field has one of these values (DynamoDB: Auth is Access keys); null, always. When it isn't needed,
+/// the form greys it out, connecting never asks for it, the provider gets none, and saving removes a saved one.
+/// </param>
+public sealed record SecretSpec(string Label, FieldCondition? NeededWhen = null, string? Help = null);
+
+/// <summary>
 /// One field of a saved connection (design section 8). The password is not a field: it is a secret, kept apart from the
 /// connection and handled by the engine's store.
 /// </summary>

@@ -21,7 +21,14 @@ export interface FieldInfo {
   enabledWhen: { key: string; values: string[] } | null;
 }
 
-export interface ProviderInfo { id: string; displayName: string; fields: FieldInfo[]; readOnlyEnforcement: 'server' | 'client' }
+/** A provider's connections' secret (contract v14): its name, and when it is needed (null: always). */
+export interface SecretInfo { label: string; neededWhen: { key: string; values: string[] } | null; help: string | null }
+
+export interface ProviderInfo {
+  id: string; displayName: string; fields: FieldInfo[]; readOnlyEnforcement: 'server' | 'client';
+  /** Null: its connections have no secret. */
+  secret: SecretInfo | null;
+}
 
 export interface SavedConnection {
   id: string;
@@ -204,28 +211,33 @@ function check(label: string, checked: boolean, help?: string) {
 
 // ---- the password prompt ----------------------------------------------------------------------------------------
 
+/** "password", "secret access key": a secret's label inside a sentence. */
+const inSentence = (label: string) => label.charAt(0).toLowerCase() + label.slice(1);
+
 /**
- * Asks for a connection's password. `retry` says the last one was turned down. Resolves to null if cancelled. Nothing
- * here keeps the value: it goes straight to the engine.
+ * Asks for a connection's secret, called what its provider calls it (`label`: "Password", "Secret access key").
+ * `retry` says the last one was turned down. Resolves to null if cancelled. Nothing here keeps the value: it goes
+ * straight to the engine.
  */
-export async function askPassword(name: string, retry: boolean, message?: string): Promise<string | null> {
+export async function askPassword(name: string, retry: boolean, message?: string, label = 'Password'): Promise<string | null> {
   const input = el('input', { type: 'password', autocomplete: 'off', spellcheck: false });
+  const word = inSentence(label);
   const note = retry
-    ? el('p', { className: 'fstatus', textContent: `The server turned that password down.${message ? ` ${message}` : ''}` })
-    : el('p', { className: 'dim', textContent: 'This connection does not remember its password. It is kept in memory until SiftDB closes.' });
+    ? el('p', { className: 'fstatus', textContent: `The server turned that ${word} down.${message ? ` ${message}` : ''}` })
+    : el('p', { className: 'dim', textContent: `This connection does not remember its ${word}. It is kept in memory until SiftDB closes.` });
   if (retry) { note.dataset.kind = 'error'; note.setAttribute('role', 'alert'); }
   let value: string | null = null;
   const form = el('form', { method: 'dialog' },
-    el('h2', { textContent: `Password for ${name}` }),
+    el('h2', { textContent: `${label} for ${name}` }),
     note,
-    row('Password', input),
+    row(label, input),
     el('div', { className: 'factions' },
       el('span', { className: 'grow' }),
       el('button', { type: 'button', textContent: 'Cancel', onclick: () => dialog.close() }),
       el('button', { type: 'submit', className: 'primary', textContent: 'Connect' })));
   form.onsubmit = () => { value = input.value; };
   const dialog = el('dialog', { className: 'modal small' }, form);
-  dialog.setAttribute('aria-label', `Password for ${name}`);
+  dialog.setAttribute('aria-label', `${label} for ${name}`);
   const done = showDialog(dialog);
   input.focus();
   await done;
@@ -280,6 +292,8 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
   const rows = new Map<string, HTMLElement>();
   const fresh = !existing && !start.fields;
 
+  // The secret's row follows the provider and its fields too (set up below, with the secret's controls).
+  let syncSecret = () => {};
   // Fields that only matter for some values of another (the CA file only when the certificate is verified).
   const applyConditions = () => {
     for (const f of provider.fields) {
@@ -288,6 +302,7 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
       controls.get(f.key)!.disabled = !on;
       rows.get(f.key)!.classList.toggle('off', !on);
     }
+    syncSecret();
   };
 
   /** Draws the provider's fields, grouped as it says. */
@@ -350,6 +365,29 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
   }
   const remember = check('Remember password', existing?.rememberPassword ?? true,
     'Saved encrypted for your Windows account. Otherwise SiftDB asks when connecting.');
+  const secretRow = row('Password', passwordBox);
+  const secretLabel = secretRow.querySelector('label')!;
+  const rememberLabel = remember.wrap.querySelector('span')!;
+  const secretHelp = el('div', { className: 'fhelp' });
+  secretRow.append(secretHelp);
+  // Called what the provider calls it, and only enabled when the connection uses it (DynamoDB: Access keys). A provider
+  // without a secret has no row at all. Not needed, it is not sent: saving then removes a saved one (the engine's rule).
+  syncSecret = () => {
+    const s = provider.secret;
+    secretRow.hidden = remember.wrap.hidden = !s;
+    if (!s) return;
+    secretLabel.textContent = s.label;
+    rememberLabel.textContent = `Remember ${inSentence(s.label)}`;
+    secretHelp.textContent = s.help ?? '';
+    secretHelp.hidden = !s.help;
+    const on = !s.neededWhen || s.neededWhen.values.includes(
+      controls.get(s.neededWhen.key)?.value || provider.fields.find((f) => f.key === s.neededWhen!.key)?.default || '');
+    password.disabled = !on || !passwordChanged;
+    change.disabled = !on;
+    remember.box.disabled = !on;
+    secretRow.classList.toggle('off', !on);
+    remember.wrap.classList.toggle('off', !on);
+  };
   const readOnlyHelp = () => provider.readOnlyEnforcement === 'server'
     ? 'The server refuses any change on this connection. To change data, save a second, writable connection.'
     : 'SiftDB refuses statements that change data. To change data, save a second, writable connection.';
@@ -462,7 +500,7 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
   const remove = el('button', { type: 'button', textContent: 'Delete…', className: 'danger' });
   remove.hidden = !existing;
   remove.onclick = async () => {
-    if (!existing || !window.confirm(`Delete the saved connection "${existing.name}"? Its saved password is removed too.`)) return;
+    if (!existing || !window.confirm(`Delete the saved connection "${existing.name}"? Its saved ${inSentence(provider.secret?.label ?? 'password')} is removed too.`)) return;
     const r = await bridge.request({ type: 'deleteConnection', savedId: existing.id });
     if (r.type === 'error') { setStatus(`Not deleted: ${r.message}`, 'error'); return; }
     result = { kind: 'deleted', id: existing.id };
@@ -475,7 +513,7 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
     existing ? el('p', { className: 'dim', textContent: 'Changes apply the next time a sheet connects.' }) : '',
     row('Database type', type, typeHelp),
     row('Name', name, 'Sheet files refer to the connection by this name, so it must be unique.'),
-    el('fieldset', {}, legend, serverFields, row('Password', passwordBox), remember.wrap, databaseFields),
+    el('fieldset', {}, legend, serverFields, secretRow, remember.wrap, databaseFields),
     securitySet,
     el('fieldset', {}, el('legend', { textContent: 'Safety' }), readOnly.wrap, auto.wrap),
     advanced,
@@ -486,6 +524,7 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
       save));
   // A password label is tied to the field itself, not the box around it.
   form.querySelector<HTMLLabelElement>(`label[for="${passwordBox.id}"]`)!.htmlFor = password.id = `f${++fieldSeq}`;
+  syncSecret();
 
   form.onsubmit = async (e) => {
     e.preventDefault(); // stay open until the engine has said yes

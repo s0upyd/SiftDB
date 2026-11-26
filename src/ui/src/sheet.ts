@@ -34,7 +34,7 @@ export interface SheetContext {
   /** The tab title or the transaction state changed: the tab strip and the window-close warning need refreshing. */
   changed(sheet: Sheet): void;
   /** Asks for a saved connection's password; null if the user cancelled. */
-  askPassword(name: string, retry: boolean, message?: string): Promise<string | null>;
+  askPassword(name: string, retry: boolean, message?: string, label?: string): Promise<string | null>;
   /** The text, the mode or the file changed: the session needs autosaving. */
   persist(sheet: Sheet): void;
   /** Another open sheet, by its engine connection id: its tab name, and bringing it to the front (design section 14, F3). */
@@ -318,9 +318,9 @@ export class Sheet {
         ? { type: 'connect', savedId: target.id, ...(password !== undefined ? { password } : {}) }
         : { type: 'connect', provider: 'postgres', connectionString: target.cs });
       if (r.type !== 'passwordNeeded') break;
-      const typed = await this.ctx.askPassword(r.name, r.retry, r.message);
+      const typed = await this.ctx.askPassword(r.name, r.retry, r.message, r.label);
       if (typed === null) {
-        this.setMessage('Not connected: no password was given.', 'warning');
+        this.setMessage(`Not connected: no ${String(r.label ?? 'password').toLowerCase()} was given.`, 'warning');
         return { ok: false, schema: null, cancelled: true };
       }
       password = typed;

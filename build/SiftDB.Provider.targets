@@ -10,9 +10,9 @@
   -->
   <PropertyGroup>
     <EnableDynamicLoading>true</EnableDynamicLoading>
-    <!-- The contract this provider is built against; ProviderBuildTests checks it matches ProviderContract.CurrentVersion.
+    <!-- The contract this provider is built against; ProviderLoadingTests checks it matches ProviderContract.CurrentVersion.
          SiftDBContractMin, the oldest contract it works with, defaults to the same. -->
-    <SiftDBContractVersion>13</SiftDBContractVersion>
+    <SiftDBContractVersion>14</SiftDBContractVersion>
     <SiftDBContractMin Condition="'$(SiftDBContractMin)' == ''">$(SiftDBContractVersion)</SiftDBContractMin>
   </PropertyGroup>
 

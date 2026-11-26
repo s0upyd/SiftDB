@@ -12,9 +12,10 @@ public static class ProviderContract
     /// (following foreign keys); v9 added DescribeRelationAsync, DescribeSchemaObjectsAsync and ScriptAsync (the schema explorer); v10 added ListDatabasesAsync and
     /// ConnectionFieldKind.Database (picking the database in the connection form); v11 added IProviderConnection.Plans
     /// (Visual EXPLAIN); v12 added IProviderConnection.Locks (who's blocking me); v13 added
-    /// ColumnDetail.MaxLength and LengthCheck (a length check shown on its column).
+    /// ColumnDetail.MaxLength and LengthCheck (a length check shown on its column); v14 added IDatabaseProvider.Secret
+    /// (the provider names its own secret, and says when it is needed).
     /// </summary>
-    public const int CurrentVersion = 13;
+    public const int CurrentVersion = 14;
 
     /// <summary>
     /// The oldest contract a provider can be built against and still load (design section 14, F18). It holds because of
@@ -48,6 +49,12 @@ public interface IDatabaseProvider
 
     /// <summary>What a saved connection holds for this provider, in form order.</summary>
     IReadOnlyList<ConnectionField> ConnectionFields { get; }
+
+    /// <summary>
+    /// The connections' secret: what it is called and when it is needed; null when they have none. A password, always
+    /// needed, by default.
+    /// </summary>
+    SecretSpec? Secret => new("Password");
 
     /// <summary>Builds a connection string from saved fields (by <see cref="ConnectionField.Key"/>) and a password.</summary>
     string BuildConnectionString(IReadOnlyDictionary<string, string> fields, string? password);

@@ -32,10 +32,14 @@ public sealed partial class EngineHost
         if (saved is null) { Error(id, "That connection is no longer saved. Pick another one."); return; }
         if (!_providers.TryGetValue(saved.Provider, out var p)) { Error(id, $"{saved.Name} can't be opened. {MissingProvider(saved.Provider)}"); return; }
 
-        var password = typed ?? (saved.RememberPassword ? Store.GetPassword(savedId) : null) ?? _promptedPasswords.GetValueOrDefault(savedId);
-        if (password is null && !saved.RememberPassword)
+        // No secret needed (DynamoDB with a profile): connect without one, and never ask.
+        var needed = NeedsSecret(p, saved.Fields);
+        var password = !needed ? null
+            : typed ?? (saved.RememberPassword ? Store.GetPassword(savedId) : null) ?? _promptedPasswords.GetValueOrDefault(savedId);
+        var label = p.Secret?.Label ?? "Password";
+        if (needed && password is null && !saved.RememberPassword)
         {
-            Event(new { type = "passwordNeeded", replyTo = id, savedId, name = saved.Name, retry = false });
+            Event(new { type = "passwordNeeded", replyTo = id, savedId, name = saved.Name, retry = false, label });
             return;
         }
 
@@ -47,12 +51,30 @@ public sealed partial class EngineHost
         catch (ConnectionAuthenticationException ex)
         {
             _promptedPasswords.TryRemove(savedId, out _); // it was wrong: do not offer it to the next sheet either
-            Event(new { type = "passwordNeeded", replyTo = id, savedId, name = saved.Name, retry = password is not null, message = ex.Message });
+            if (!needed) { Error(id, ex.Message); return; } // asking for a secret it doesn't use would not help
+            Event(new { type = "passwordNeeded", replyTo = id, savedId, name = saved.Name, retry = password is not null, message = ex.Message, label });
             return;
         }
         if (typed is not null && !saved.RememberPassword) _promptedPasswords[savedId] = typed;
         Store.SetLastUsed(savedId);
     }
+
+    /// <summary>
+    /// Whether a connection with these fields uses the provider's secret (contract v14): never when it has none, else
+    /// when its condition holds. A field left empty counts as its default.
+    /// </summary>
+    internal static bool NeedsSecret(IDatabaseProvider p, IReadOnlyDictionary<string, string> fields)
+    {
+        if (p.Secret is not { } spec) return false;
+        if (spec.NeededWhen is not { } when) return true;
+        var value = fields.GetValueOrDefault(when.Key) is { Length: > 0 } v ? v
+            : p.ConnectionFields.FirstOrDefault(f => f.Key == when.Key)?.Default ?? "";
+        return when.Values.Contains(value);
+    }
+
+    /// <summary>"password", "secret access key": the secret's name inside a sentence.</summary>
+    private static string SecretWord(IDatabaseProvider p) =>
+        p.Secret?.Label is { Length: > 0 } l ? char.ToLowerInvariant(l[0]) + l[1..] : "password";
 
     /// <summary>Why a saved connection of <paramref name="providerId"/> can't be used: its provider isn't there, or didn't load.</summary>
     private string MissingProvider(string providerId)
@@ -72,6 +94,7 @@ public sealed partial class EngineHost
             providers = _providers.Values.Select(p => new
             {
                 id = p.Id, displayName = p.DisplayName, fields = p.ConnectionFields, readOnlyEnforcement = p.ReadOnlyEnforcement,
+                secret = p.Secret,
             }),
             connections = store.List().Select(c => new
             {
@@ -93,7 +116,9 @@ public sealed partial class EngineHost
         var input = ReadConnection(root.GetProperty("connection"));
         if (!_providers.TryGetValue(input.Provider, out var p)) { Error(id, $"No provider '{input.Provider}'"); return; }
         p.BuildConnectionString(input.Fields, null); // a bad port or SSL mode is reported now, not at the next connect
-        var password = OptionalString(root, "password") ?? PasswordFrom(p, root);
+        // A connection that no longer uses the secret (switched to an AWS profile) has its saved one removed: an unused
+        // credential is not left on disk. Empty is the store's "remove".
+        var password = NeedsSecret(p, input.Fields) ? OptionalString(root, "password") ?? PasswordFrom(p, root) : "";
         var saved = Store.Save(input, password);
         if (password is not null || !saved.RememberPassword) _promptedPasswords.TryRemove(saved.Id, out _);
         Event(new { type = "connectionSaved", replyTo = id, savedId = saved.Id });
@@ -129,7 +154,7 @@ public sealed partial class EngineHost
         }
         catch (ConnectionAuthenticationException ex)
         {
-            Error(id, password is null ? $"The server wants a password. {ex.Message}" : $"The server turned the password down. {ex.Message}");
+            Error(id, AuthRefused(p, input.Fields, password, ex));
             return;
         }
         Event(new { type = "ok", replyTo = id, ms = sw.ElapsedMilliseconds });
@@ -151,13 +176,23 @@ public sealed partial class EngineHost
         }
         catch (ConnectionAuthenticationException ex)
         {
-            Error(id, password is null ? $"The server wants a password. {ex.Message}" : $"The server turned the password down. {ex.Message}");
+            Error(id, AuthRefused(p, input.Fields, password, ex));
         }
     }
 
-    /// <summary>The password for a test or a database list: typed, else the pasted string's, else the one saved or typed earlier.</summary>
+    /// <summary>A login turned down, in the secret's own words; without a secret in play, the server's reason alone.</summary>
+    private static string AuthRefused(IDatabaseProvider p, IReadOnlyDictionary<string, string> fields, string? secret, ConnectionAuthenticationException ex) =>
+        !NeedsSecret(p, fields) ? ex.Message
+        : secret is null ? $"The server wants a {SecretWord(p)}. {ex.Message}"
+        : $"The server turned the {SecretWord(p)} down. {ex.Message}";
+
+    /// <summary>
+    /// The secret for a test or a database list: typed, else the pasted string's, else the one saved or typed earlier;
+    /// none when the form's connection doesn't use one.
+    /// </summary>
     private string? FormPassword(IDatabaseProvider p, JsonElement root, SavedConnection input) =>
-        OptionalString(root, "password") ?? PasswordFrom(p, root)
+        !NeedsSecret(p, input.Fields) ? null
+        : OptionalString(root, "password") ?? PasswordFrom(p, root)
         ?? (input.Id.Length == 0 ? null : Store.GetPassword(input.Id) ?? _promptedPasswords.GetValueOrDefault(input.Id));
 
     /// <summary>Takes a pasted connection string apart for "Save as…". Its password stays here: only whether it has one goes back.</summary>
