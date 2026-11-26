@@ -2,6 +2,17 @@
 
 What changed in each SiftDB release. Generated from the commit messages by git-cliff (see cliff.toml); do not edit it by hand.
 
+## 0.5.0 - 2026-11-26
+
+### Highlights
+
+- DynamoDB asks before a SELECT that would scan a whole table ([Try it](command:settings))
+- DynamoDB learns attribute names, holds writes for Commit, and shows read capacity
+
+### Improvements
+
+- Open a JSON cell as a tree, with find, expand all, and copy of a value, key or path
+
 ## 0.4.0 - 2026-11-26
 
 ### Highlights
