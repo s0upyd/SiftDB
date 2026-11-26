@@ -276,7 +276,11 @@ export class SchemaTree {
     const n = this.nodes.get(key);
     if (!n) return null;
     switch (n.kind) {
-      case 'relation': case 'object': return `${this.quote(n.root, n.schema)}.${this.quote(n.root, n.name)}`;
+      case 'relation': case 'object': {
+        // A database without schemas (DynamoDB) names a table alone: its one schema only groups the tree.
+        const writes = this.roots.find((r) => r.id === n.root)?.schema?.writesSchemaNames !== false;
+        return writes ? `${this.quote(n.root, n.schema)}.${this.quote(n.root, n.name)}` : this.quote(n.root, n.name);
+      }
       case 'column': case 'item': return this.quote(n.root, n.name);
     }
   }

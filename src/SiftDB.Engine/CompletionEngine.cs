@@ -34,7 +34,7 @@ public static class CompletionEngine
     private enum Ctx { None, Relation, Column }
 
     public static CompletionResult Complete(
-        DatabaseSchema schema, ISqlParser parser, IIdentifierPolicy policy, string text, int offset)
+        DatabaseSchema schema, ISqlParser parser, IIdentifierPolicy policy, string text, int offset, bool writesSchemaNames = true)
     {
         offset = Math.Clamp(offset, 0, text.Length);
         var none = new CompletionResult(offset, offset, []);
@@ -75,7 +75,7 @@ public static class CompletionEngine
         {
             switch (Classify(prior, text))
             {
-                case Ctx.Relation: RelationItems(schema, policy, prefix, quotedTyped, items); break;
+                case Ctx.Relation: RelationItems(schema, policy, prefix, quotedTyped, items, writesSchemaNames); break;
                 case Ctx.Column: ColumnItems(policy, scope, prefix, quotedTyped, items); break;
             }
         }
@@ -159,11 +159,13 @@ public static class CompletionEngine
 
     // ---- building the items ---------------------------------------------------------------------------------
 
-    private static void RelationItems(DatabaseSchema schema, IIdentifierPolicy policy, string prefix, bool quoted, List<CompletionItem> items)
+    /// <param name="writesSchemaNames">False (DynamoDB): no schema is ever written, nor offered.</param>
+    private static void RelationItems(DatabaseSchema schema, IIdentifierPolicy policy, string prefix, bool quoted, List<CompletionItem> items,
+        bool writesSchemaNames)
     {
         foreach (var s in schema.Schemas)
         {
-            var isPublic = Eq(s.Name, "public");
+            var isPublic = !writesSchemaNames || Eq(s.Name, "public");
             var rank = isPublic ? "0" : "1";
             foreach (var r in s.Relations)
             {

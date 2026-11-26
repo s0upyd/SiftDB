@@ -774,7 +774,7 @@ commands.add(
   // is Monaco's "insert line above").
   {
     id: 'begin', label: 'Begin transaction', group: 'Transactions',
-    when: () => !!active?.connected && !active.readOnly && active.tx.state === 'none', run: () => active?.txAction('begin'),
+    when: () => !!active?.connected && !active.readOnly && active.hasTransactions && active.tx.state === 'none', run: () => active?.txAction('begin'),
   },
   {
     id: 'commit', label: 'Commit transaction', group: 'Transactions', keys: ['Ctrl+Shift+Enter'],

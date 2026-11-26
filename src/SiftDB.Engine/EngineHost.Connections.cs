@@ -93,6 +93,7 @@ public sealed partial class EngineHost
             {
                 id = p.Id, displayName = p.DisplayName, fields = p.ConnectionFields, readOnlyEnforcement = p.ReadOnlyEnforcement,
                 secret = p.Secret,
+                transactions = p.HasTransactions,
             }),
             connections = store.List().Select(c => new
             {

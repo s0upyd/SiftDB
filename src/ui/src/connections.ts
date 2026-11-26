@@ -28,6 +28,8 @@ export interface ProviderInfo {
   id: string; displayName: string; fields: FieldInfo[]; readOnlyEnforcement: 'server' | 'client';
   /** Null: its connections have no secret. */
   secret: SecretInfo | null;
+  /** False when every statement commits on its own (DynamoDB): no auto-transaction to offer. */
+  transactions?: boolean;
 }
 
 export interface SavedConnection {
@@ -67,8 +69,9 @@ export class ConnectionCatalog {
   byId(id: string) { return this.saved.find((c) => c.id === id); }
   provider(id: string) { return this.providers.find((p) => p.id === id); }
 
-  /** "host:port / database", for telling connections apart. */
+  /** "host:port / database", for telling connections apart; "region · endpoint" for one that has a region (DynamoDB). */
   describe(c: SavedConnection) {
+    if (c.fields.region) return c.fields.endpoint ? `${c.fields.region} · ${c.fields.endpoint}` : c.fields.region;
     const host = c.fields.host || 'localhost';
     return `${c.fields.port ? `${host}:${c.fields.port}` : host} / ${c.fields.database || '(default)'}`;
   }
@@ -374,6 +377,8 @@ export async function editConnection(bridge: Bridge, catalog: ConnectionCatalog,
   // Called what the provider calls it, and only enabled when the connection uses it (DynamoDB: Access keys). A provider
   // without a secret has no row at all. Not needed, it is not sent: saving then removes a saved one (the engine's rule).
   syncSecret = () => {
+    // No transactions (DynamoDB): no auto-transaction either. (Also drawn here, as it follows the type.)
+    auto.wrap.hidden = provider.transactions === false;
     const s = provider.secret;
     secretRow.hidden = remember.wrap.hidden = !s;
     if (!s) return;

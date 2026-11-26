@@ -27,6 +27,8 @@
          next to the exe by build/SiftDB.Providers.targets. -->
     <ProjectReference Include="..\SiftDB.Providers.Postgres\SiftDB.Providers.Postgres.csproj" ReferenceOutputAssembly="false" Private="false" />
     <SiftDBProvider Include="..\SiftDB.Providers.Postgres\SiftDB.Providers.Postgres.csproj" />
+    <ProjectReference Include="..\SiftDB.Providers.DynamoDB\SiftDB.Providers.DynamoDB.csproj" ReferenceOutputAssembly="false" Private="false" />
+    <SiftDBProvider Include="..\SiftDB.Providers.DynamoDB\SiftDB.Providers.DynamoDB.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -23,8 +23,13 @@ jobs:
         ports: ['5432:5432']
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+      # The DynamoDB provider's tests (design section 14, F19). In memory: each run starts empty.
+      dynamodb:
+        image: amazon/dynamodb-local:3.3.2 # the same version as the portable copy used in development
+        ports: ['8000:8000']
     env:
       SIFTDB_SPIKE_CONN: Host=localhost;Username=postgres;Password=postgres;Database=postgres
+      SIFTDB_DYNAMO_ENDPOINT: http://localhost:8000
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-dotnet@v5
@@ -34,6 +39,7 @@ jobs:
         run: |
           dotnet test tests/SiftDB.Engine.Tests
           dotnet test tests/SiftDB.Providers.Postgres.Tests
+          dotnet test tests/SiftDB.Providers.DynamoDB.Tests
 
   # The WPF host and the UI bundle (TypeScript type check included) build only on Windows.
   build-host:

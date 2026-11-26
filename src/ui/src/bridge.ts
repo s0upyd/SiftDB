@@ -20,7 +20,11 @@ export interface RelationInfo {
 }
 export interface SchemaInfo { name: string; relations: RelationInfo[] }
 /** `quoted`: the names that must be written differently from how they are stored (quoted), as the engine says (F13). */
-export interface DatabaseSchema { schemas: SchemaInfo[]; quoted?: Record<string, string> }
+export interface DatabaseSchema {
+  schemas: SchemaInfo[]; quoted?: Record<string, string>;
+  /** False for a database without schemas (DynamoDB): table names are written alone. */
+  writesSchemaNames?: boolean;
+}
 
 export interface BatchMeta {
   queryId: number;

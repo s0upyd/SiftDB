@@ -69,13 +69,17 @@ public sealed partial class EngineHost
             var rel = state.Schema is { } schema && kind == ObjectKind.Relation ? Relation(schema, obj.Schema, obj.Name) : null;
             if (rel is null) { Error(id, "That table is not in the schema cache. Refresh the schema and try again."); return; }
             var policy = state.Provider.Identifiers;
-            var table = (obj.Schema == "public" ? "" : policy.Quote(obj.Schema) + ".") + policy.Quote(rel.Name);
-            // "Select top 100 rows": a quick look at what a table holds. LIMIT is Postgres's way to say it (the only
-            // provider so far); a dialect that writes it otherwise (TOP, FETCH FIRST) will need a say here.
+            var table = (!state.Provider.WritesSchemaNames || obj.Schema == "public" ? "" : policy.Quote(obj.Schema) + ".") + policy.Quote(rel.Name);
+            // "Select top 100 rows": a quick look at what a table holds, limited the dialect's way (Postgres: LIMIT).
+            // Without such a clause (DynamoDB) the rows still come page by page, as the grid shows them.
+            var limit = what == "top" ? state.Provider.RowLimitClause(TopRows) : null;
             var plain = what == "top"
-                ? $"select * from {table} limit {TopRows}"
+                ? $"select * from {table}{(limit is null ? "" : " " + limit)}"
                 : $"select {string.Join(", ", rel.Columns.Select(c => policy.Quote(c.Name)))} from {table}";
-            sql = SqlFormatter.Format(plain, state.Provider.Parser.Tokenize(plain), CurrentSettings.Format) + ";";
+            // Format SQL's layout only where the provider can check it keeps the meaning (F7); otherwise one line.
+            sql = (state.Provider.SameMeaning(plain, plain) is true
+                ? SqlFormatter.Format(plain, state.Provider.Parser.Tokenize(plain), CurrentSettings.Format)
+                : plain) + ";";
         }
         else sql = await state.Connection.ScriptAsync(obj, create: what == "create", CancellationToken.None);
         if (sql is null) { Error(id, "This cannot be scripted."); return; }

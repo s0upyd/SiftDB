@@ -113,6 +113,8 @@ export class Sheet {
   target: Target | null = null;
   /** The session was opened read-only (from the saved connection's setting at the time). */
   readOnly = false;
+  /** The database has transactions (DynamoDB has none: every statement commits on its own, and there is no Begin). */
+  hasTransactions = true;
   /** What the connection picker showed for this sheet the last time it was visible: 'saved:<id>' or 'string'. */
   draftChoice = 'string';
   /** The connection string typed for this sheet, for when the picker is on "Connection string…". */
@@ -332,6 +334,7 @@ export class Sheet {
     this.connectionId = r.connectionId;
     this.target = target;
     this.readOnly = !!r.readOnly;
+    this.hasTransactions = r.transactions !== false;
     this.el.roChip.hidden = !this.readOnly;
     this.el.autoChip.hidden = !r.autoTransaction;
     this.ctx.registerConnection(this.connectionId, this);
@@ -361,6 +364,7 @@ export class Sheet {
     this.connectionId = 0;
     this.target = null;
     this.readOnly = false;
+    this.hasTransactions = true;
     this.el.roChip.hidden = true;
     this.el.autoChip.hidden = true;
     this.blockers.update([]);
@@ -894,8 +898,10 @@ export class Sheet {
     this.el.cancel.disabled = this.running === null;
     // Begin only means something on a writable session outside a transaction. When it is greyed, the tooltip says why.
     const begin = this.el.begin;
-    begin.disabled = !connected || this.readOnly || this.tx.state !== 'none';
+    begin.hidden = connected && !this.hasTransactions;
+    begin.disabled = !connected || this.readOnly || !this.hasTransactions || this.tx.state !== 'none';
     begin.title = !connected ? 'Connect first.'
+      : !this.hasTransactions ? 'This database commits every statement on its own: there are no transactions.'
       : this.readOnly ? 'Not on a read-only connection: nothing can change, so there is nothing to commit or roll back.'
       : this.tx.automatic ? 'Auto-transaction: this sheet is always inside a transaction.'
       : this.tx.state !== 'none' ? 'A transaction is already open.'
@@ -904,9 +910,10 @@ export class Sheet {
 }
 
 /** The schema from an engine "schema" event, with the names that must be quoted to write them (F13). */
-function schemaOf(e: { type: string; schema?: unknown; quoted?: unknown }): DatabaseSchema | null {
+function schemaOf(e: { type: string; schema?: unknown; quoted?: unknown; writesSchemaNames?: unknown }): DatabaseSchema | null {
   if (e.type !== 'schema') return null;
   const schema = e.schema as DatabaseSchema;
   schema.quoted = (e.quoted as Record<string, string> | undefined) ?? {};
+  schema.writesSchemaNames = e.writesSchemaNames !== false;
   return schema;
 }

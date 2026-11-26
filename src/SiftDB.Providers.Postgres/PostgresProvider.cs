@@ -36,6 +36,8 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     public GenericType GenericTypeOf(string dataTypeName) => PostgresTypes.GenericTypeOf(dataTypeName);
 
+    public string? RowLimitClause(int rows) => $"limit {rows}";
+
     private readonly PostgresSettings _settings = new();
 
     /// <summary>Postgres refuses <c>SET a.col</c> and <c>boolean = 1</c>, with messages that do not say why.</summary>

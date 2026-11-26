@@ -13,9 +13,10 @@ public static class ProviderContract
     /// ConnectionFieldKind.Database (picking the database in the connection form); v11 added IProviderConnection.Plans
     /// (Visual EXPLAIN); v12 added IProviderConnection.Locks (who's blocking me); v13 added
     /// ColumnDetail.MaxLength and LengthCheck (a length check shown on its column); v14 added IDatabaseProvider.Secret
-    /// (the provider names its own secret, and says when it is needed).
+    /// (the provider names its own secret, and says when it is needed); v15 added WritesSchemaNames, RowLimitClause and
+    /// HasTransactions (a database without schemas, LIMIT or transactions: DynamoDB).
     /// </summary>
-    public const int CurrentVersion = 14;
+    public const int CurrentVersion = 15;
 
     /// <summary>
     /// The oldest contract a provider can be built against and still load (design section 14, F18). It holds because of
@@ -55,6 +56,26 @@ public interface IDatabaseProvider
     /// needed, by default.
     /// </summary>
     SecretSpec? Secret => new("Password");
+
+    /// <summary>
+    /// Whether SQL names a table with its schema (<c>shop.orders</c>). False for a database without schemas (DynamoDB),
+    /// whose one schema only groups its tables in the tree and is never written. True by default; even then the schema
+    /// called <c>public</c> is left out where a name is written for the user.
+    /// </summary>
+    bool WritesSchemaNames => true;
+
+    /// <summary>
+    /// The clause that limits a SELECT to its first <paramref name="rows"/> rows, written at its end ("Select top 100
+    /// rows"), e.g. <c>limit 100</c>; null when the dialect has none (DynamoDB's PartiQL), and then the rows are only
+    /// fetched page by page as they are shown. None by default.
+    /// </summary>
+    string? RowLimitClause(int rows) => null;
+
+    /// <summary>
+    /// Whether a session can hold a transaction. False when every statement commits on its own (DynamoDB): there is
+    /// then no Begin, no auto-transaction, and the state is always "no transaction". True by default.
+    /// </summary>
+    bool HasTransactions => true;
 
     /// <summary>Builds a connection string from saved fields (by <see cref="ConnectionField.Key"/>) and a password.</summary>
     string BuildConnectionString(IReadOnlyDictionary<string, string> fields, string? password);

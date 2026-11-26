@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- A plugin (design section 14, F18/F19): loaded from providers\dynamodb\ into a load context of its own, so the
+         AWS SDK stays out of the app. -->
+    <SiftDBProviderId>dynamodb</SiftDBProviderId>
+    <SiftDBProviderName>Amazon DynamoDB</SiftDBProviderName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The app's own copy is used, never one next to the provider. -->
+    <ProjectReference Include="..\SiftDB.Abstractions\SiftDB.Abstractions.csproj" Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.DynamoDBv2" Version="4.1.0" />
+    <!-- Loaded by the SDK at run time for profiles that sign in with IAM Identity Center (SSO). -->
+    <PackageReference Include="AWSSDK.SSO" Version="4.1.0" />
+    <PackageReference Include="AWSSDK.SSOOIDC" Version="4.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SiftDB.Providers.DynamoDB.Tests" />
+  </ItemGroup>
+
+  <Import Project="..\..\build\SiftDB.Provider.targets" />
+
+</Project>

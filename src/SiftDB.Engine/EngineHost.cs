@@ -255,11 +255,11 @@ public sealed partial class EngineHost : IAsyncDisposable
         var conn = await p.OpenAsync(connectionString, options, CancellationToken.None);
         var connId = Interlocked.Increment(ref _nextConnection);
         // Auto-transaction is for writable sessions: on a read-only one there is nothing to roll back.
-        var auto = autoTransaction && !options.ReadOnly;
+        var auto = autoTransaction && !options.ReadOnly && p.HasTransactions; // none where every statement commits on its own
         var state = new ConnectionState(connId, p, conn) { SavedId = savedId, ReadOnly = options.ReadOnly, AutoTransaction = auto };
         _connections[connId] = state;
         if (conn.Locks is not null) EnsureLockWatch(); // who's blocking me (design section 14, F3)
-        Event(new { type = "connected", replyTo = id, connectionId = connId, savedId, readOnly = options.ReadOnly, autoTransaction = auto });
+        Event(new { type = "connected", replyTo = id, connectionId = connId, savedId, readOnly = options.ReadOnly, autoTransaction = auto, transactions = p.HasTransactions });
         await state.SessionLock.WaitAsync();
         try { await ObserveTransactionAsync(state, statement: false, rowsAffected: -1); }
         finally { state.SessionLock.Release(); }
@@ -337,7 +337,8 @@ public sealed partial class EngineHost : IAsyncDisposable
         var schema = await state.Connection.IntrospectAsync(CancellationToken.None);
         state.Schema = schema; // completions are answered from this cache, never by querying the database
         // With the names that must be written quoted, so the tree can drag and copy names exactly as SQL needs them (F13).
-        if (send) Event(new { type = "schema", replyTo = id, connectionId, schema, quoted = Quoted(state.Provider.Identifiers, NamesIn(schema)) });
+        if (send) Event(new { type = "schema", replyTo = id, connectionId, schema, quoted = Quoted(state.Provider.Identifiers, NamesIn(schema)),
+            writesSchemaNames = state.Provider.WritesSchemaNames });
         else Event(new { type = "ok", replyTo = id });
     }
 
@@ -363,7 +364,8 @@ public sealed partial class EngineHost : IAsyncDisposable
         var schema = state.Schema;
         var result = schema is null
             ? new CompletionResult(offset, offset, [])
-            : CompletionEngine.Complete(schema, StatementSplitter.For(state.Provider.Parser), state.Provider.Identifiers, text, offset);
+            : CompletionEngine.Complete(schema, StatementSplitter.For(state.Provider.Parser), state.Provider.Identifiers, text, offset,
+                state.Provider.WritesSchemaNames);
         Event(new { type = "completions", replyTo = id, start = result.Start, end = result.End, items = result.Items });
     }
 
