@@ -288,7 +288,8 @@
     .confirmbar .grow { flex: 1; }
     .confirmbar button { flex: none; }
 
-    .editor { height: 190px; min-height: 80px; overflow: hidden; flex: none; }
+    .editorarea { height: 190px; min-height: 80px; overflow: hidden; flex: none; display: flex; position: relative; }
+    .editor { flex: 1; min-width: 0; overflow: hidden; }
     /* Drag to give the editor or the results more room. The line is 1px; the hit area is wider. */
     .splitter { flex: none; height: 5px; margin: -2px 0; position: relative; z-index: 2; cursor: row-resize; touch-action: none; }
     .splitter::after { content: ""; position: absolute; left: 0; right: 0; top: 2px; height: 1px; background: var(--line); }
@@ -400,21 +401,28 @@
     /* Settings › About: Check for updates, Restart to update, and what the check found, on one line that wraps. */
     .updaterow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
     .updatestatus { color: var(--dim); }
-    /* The query mini-map (design section 14, F5): over the editor's top right, clear of its scrollbar. Small, and it scrolls
-       when a statement has more tables than fit. Red is only ever with ⚠, never the only signal. */
+    /* The query mini-map (design section 14, F5): a panel right of the editor, with a bar to drag between them. The map is
+       drawn at full size and the panel scrolls both ways, so a big statement is never shrunk or laid over the SQL. Red is
+       only ever with ⚠, never the only signal. */
     .sheet .editor { position: relative; }
-    .minimap { position: absolute; top: 4px; right: 18px; z-index: 5; max-width: min(45%, 460px); max-height: calc(100% - 8px); overflow: auto;
-               background: color-mix(in srgb, var(--bg) 94%, transparent); border: 1px solid var(--line); border-radius: 4px;
-               box-shadow: 0 2px 8px rgba(0,0,0,.12); font: 11px system-ui, sans-serif; color: var(--fg); }
-    .minimap.collapsed { background: transparent; border: none; box-shadow: none; overflow: visible; }
-    .minimap-head { display: flex; align-items: center; gap: 6px; padding: 1px 2px 1px 8px; color: var(--dim); border-bottom: 1px solid var(--line); }
+    .mmsplit { flex: none; width: 5px; margin: 0 -2px; position: relative; z-index: 2; cursor: col-resize; touch-action: none; }
+    .mmsplit::after { content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--line); }
+    .mmsplit:hover::after, .mmsplit:focus-visible::after, .mmsplit.dragging::after { background: var(--accent); left: 1px; width: 3px; }
+    .mmsplit:focus-visible { outline: none; }
+    .mmsplit[hidden], .querymap[hidden], .minimap-chip[hidden] { display: none; }
+    .querymap { flex: none; min-width: 160px; max-width: calc(100% - 240px); display: flex; flex-direction: column;
+               font: 12px system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+    .minimap-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 2px 2px 2px 8px; color: var(--dim); border-bottom: 1px solid var(--line); }
     .minimap-head > span { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .minimap .warn { color: var(--tx-failed); }
-    .minimap-toggle { border: none; background: transparent; color: var(--dim); padding: 0 6px; font: inherit; line-height: 16px; cursor: pointer; }
-    .minimap.collapsed .minimap-toggle { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 1px 8px; }
-    .minimap.collapsed .minimap-toggle.warn { color: var(--tx-failed); border-color: var(--tx-failed); }
-    .minimap svg { display: block; max-width: 100%; height: auto; }
-    .minimap.greyed svg { opacity: .45; }
+    .minimap-body { flex: 1; min-height: 0; overflow: auto; padding: 4px; }
+    .minimap-note { margin: 6px 4px; color: var(--dim); }
+    .querymap .warn { color: var(--tx-failed); }
+    .minimap-toggle { border: none; background: transparent; color: var(--dim); padding: 0 6px; font: inherit; line-height: 18px; cursor: pointer; }
+    .minimap-chip { position: absolute; top: 4px; right: 18px; z-index: 5; border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+                    color: var(--dim); padding: 1px 8px; font: 12px system-ui, sans-serif; line-height: 16px; cursor: pointer; }
+    .minimap-chip.warn { color: var(--tx-failed); border-color: var(--tx-failed); }
+    .querymap svg { display: block; }
+    .querymap.greyed svg { opacity: .45; }
     /* Kind colours: a categorical set validated for colour-blind separation in both themes (each theme has its own steps).
        Boxes: tables blue, views orange, CTEs and subqueries aqua; a function or an unknown name stays neutral. Lines: joins
        violet, a suggested join magenta. Red is the warning's alone. Each colour comes with an icon or text, never alone. */

@@ -87,7 +87,7 @@ const TEMPLATE = `
     <button class="confirmRun danger" title="Run it as it is">Run anyway</button>
     <button class="confirmCancel" title="Don't run it (Esc)">Cancel</button>
   </div>
-  <div class="editor"></div>
+  <div class="editorarea"><div class="editor"></div></div>
   <div class="splitter" role="separator" aria-orientation="horizontal" aria-label="Resize editor and results" tabindex="0" title="Drag to resize (or use the up and down arrow keys)"></div>
   <div class="msg" hidden role="status"><span class="msgIcon" aria-hidden="true"></span><span class="msgText"></span></div>
   <div class="resulttabs" role="tablist" aria-label="Results"></div>
@@ -138,7 +138,7 @@ export class Sheet {
     txBar: HTMLElement; txIcon: HTMLElement; txLabel: HTMLElement; txDetail: HTMLElement; txBlocking: HTMLElement; lockBar: HTMLElement;
     txEnd: HTMLButtonElement; txCommit: HTMLButtonElement; txRollback: HTMLButtonElement;
     confirmBar: HTMLElement; confirmText: HTMLElement; confirmDry: HTMLButtonElement; confirmRun: HTMLButtonElement; confirmCancel: HTMLButtonElement;
-    editor: HTMLElement; splitter: HTMLElement; msg: HTMLElement; msgIcon: HTMLElement; msgText: HTMLElement; tabs: HTMLElement; results: HTMLElement; empty: HTMLElement;
+    editorArea: HTMLElement; editor: HTMLElement; splitter: HTMLElement; msg: HTMLElement; msgIcon: HTMLElement; msgText: HTMLElement; tabs: HTMLElement; results: HTMLElement; empty: HTMLElement;
   };
   private readonly resultsCtx: ResultsContext;
   private readonly planCtx: PlanContext;
@@ -167,7 +167,7 @@ export class Sheet {
       txBar: $('.txbar'), txIcon: $('.txIcon'), txLabel: $('.txLabel'), txDetail: $('.txDetail'), txBlocking: $('.txBlocking'), lockBar: $('.lockbar'),
       txEnd: $('.txEnd'), txCommit: $('.txCommit'), txRollback: $('.txRollback'),
       confirmBar: $('.confirmbar'), confirmText: $('.confirmText'), confirmDry: $('.confirmDry'), confirmRun: $('.confirmRun'), confirmCancel: $('.confirmCancel'),
-      editor: $('.editor'), splitter: $('.splitter'), msg: $('.msg'), msgIcon: $('.msgIcon'), msgText: $('.msgText'), tabs: $('.resulttabs'), results: $('.results'), empty: $('.empty'),
+      editorArea: $('.editorarea'), editor: $('.editor'), splitter: $('.splitter'), msg: $('.msg'), msgIcon: $('.msgIcon'), msgText: $('.msgText'), tabs: $('.resulttabs'), results: $('.results'), empty: $('.empty'),
     };
     scrollTabsWithWheel(this.el.tabs);
     this.resultsCtx = {
@@ -207,8 +207,8 @@ export class Sheet {
       complete: this.complete,
     }, initialText);
     this.editor.setCursor(cursorLine);
-    // The query mini-map (design section 14, F5), in the editor's top right corner, following each analysis.
-    this.miniMap = new MiniMap(this.el.editor, {
+    // The query mini-map (design section 14, F5), in a panel right of the editor, following each analysis.
+    this.miniMap = new MiniMap(this.el.editorArea, {
       select: (start, end, version) => { if (this.editor.versionId() === version) this.editor.select(start, end); },
       highlight: (ranges) => this.editor.highlightRanges(ranges),
       insert: (version, at, text) => {
@@ -262,9 +262,9 @@ export class Sheet {
     this.updateButtons();
   }
 
-  /** The editor keeps the height it is given; the results take the rest. Dragging, or arrow keys on the focused bar. */
+  /** The editor (and the map beside it) keeps the height it is given; the results take the rest. Dragging, or arrow keys on the focused bar. */
   private initSplitter() {
-    const { splitter, editor: box } = this.el;
+    const { splitter, editorArea: box } = this.el;
     const MIN_EDITOR = 80, MIN_RESULTS = 140;
     const setHeight = (px: number) => {
       const room = this.root.clientHeight - box.offsetTop - MIN_RESULTS;

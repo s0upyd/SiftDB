@@ -53,6 +53,21 @@ export function toggleMiniMap() {
   maps.forEach((m) => m.redraw());
 }
 
+// ---- the panel's width: one for every sheet, kept between runs ---------------------------------------------------
+
+const WIDTH_KEY = 'siftdb.miniMapWidth';
+const DEFAULT_WIDTH = 320, MIN_WIDTH = 160, MIN_EDITOR = 240;
+let width = (() => { try { return Number(localStorage.getItem(WIDTH_KEY)) || DEFAULT_WIDTH; } catch { return DEFAULT_WIDTH; } })();
+
+function setWidth(px: number) {
+  width = Math.round(Math.max(MIN_WIDTH, px));
+  try { localStorage.setItem(WIDTH_KEY, String(width)); } catch { /* private window or blocked storage: this run only */ }
+  maps.forEach((m) => m.applyWidth());
+}
+
+/** The map is drawn larger than its layout units, so its text reads at the editor's size (13px) rather than 11px. */
+const SCALE = 13 / 11;
+
 // ---- layout ----------------------------------------------------------------------------------------------------
 
 const SVG = 'http://www.w3.org/2000/svg';
@@ -208,24 +223,71 @@ function edgePath(a: Box, b: Box): { d: string; mx: number; my: number } {
 }
 
 /**
- * One sheet's map, in a corner of its editor. It follows every analysis; while the statement does not parse it keeps the
- * last good map of that statement, greyed and not clickable (its offsets are from before the edit).
+ * One sheet's map, in a panel of its own right of the editor, with a bar between them to drag; both scroll on their own.
+ * It follows every analysis; while the statement does not parse it keeps the last good map of that statement, greyed and
+ * not clickable (its offsets are from before the edit). Hidden, the panel gives its room back to the editor and only a
+ * chip in the editor's corner is left.
  */
 export class MiniMap {
+  private readonly split = document.createElement('div');
   private readonly panel = document.createElement('div');
+  private readonly chip = document.createElement('button');
   private shown: { map: JoinMap; version: number; stale: boolean } | null = null;
   private lastGood: { map: JoinMap; version: number; statement: number } | null = null;
 
-  constructor(parent: HTMLElement, private host: MiniMapHost) {
-    this.panel.className = 'minimap';
-    this.panel.hidden = true;
-    parent.append(this.panel);
+  /** `area` holds the editor; the bar and the panel go after it. */
+  constructor(private area: HTMLElement, private host: MiniMapHost) {
+    this.split.className = 'mmsplit';
+    this.split.setAttribute('role', 'separator');
+    this.split.setAttribute('aria-orientation', 'vertical');
+    this.split.setAttribute('aria-label', 'Resize the editor and the query map');
+    this.split.tabIndex = 0;
+    this.split.title = 'Drag to resize (or use the left and right arrow keys)';
+    this.panel.className = 'querymap';
+    this.chip.type = 'button';
+    this.chip.className = 'minimap-chip';
+    this.chip.onclick = () => toggleMiniMap();
+    area.append(this.split, this.panel, this.chip);
+    this.initSplit();
     maps.add(this);
+    this.applyWidth();
+    this.redraw();
   }
 
   dispose() {
     maps.delete(this);
+    this.split.remove();
     this.panel.remove();
+    this.chip.remove();
+  }
+
+  /** The shared width. The stylesheet keeps the editor its minimum, so a narrow window shrinks the panel, not the editor. */
+  applyWidth() { this.panel.style.width = `${width}px`; }
+
+  /** Dragging widens the panel to the left; arrow keys move the bar; a double click puts it back. */
+  private initSplit() {
+    const s = this.split;
+    let startX = 0, startW = 0;
+    s.onpointerdown = (e) => {
+      s.setPointerCapture(e.pointerId);
+      s.classList.add('dragging');
+      startX = e.clientX; startW = this.panel.offsetWidth;
+      e.preventDefault();
+    };
+    s.onpointermove = (e) => {
+      if (s.hasPointerCapture(e.pointerId)) setWidth(Math.min(startW - (e.clientX - startX), this.area.clientWidth - MIN_EDITOR));
+    };
+    const end = (e: PointerEvent) => { s.classList.remove('dragging'); s.releasePointerCapture?.(e.pointerId); };
+    s.onpointerup = end;
+    s.onpointercancel = end;
+    s.ondblclick = () => setWidth(DEFAULT_WIDTH);
+    s.onkeydown = (e) => {
+      const step = e.shiftKey ? 80 : 20;
+      if (e.key === 'ArrowLeft') setWidth(Math.min(this.panel.offsetWidth + step, this.area.clientWidth - MIN_EDITOR));
+      else if (e.key === 'ArrowRight') setWidth(this.panel.offsetWidth - step);
+      else return;
+      e.preventDefault();
+    };
   }
 
   /** A new analysis. `statement`: where the statement it is for starts, to tell a different statement from an edited one. */
@@ -248,33 +310,30 @@ export class MiniMap {
   redraw() {
     this.host.highlight([]);
     const s = this.shown;
-    this.panel.hidden = !s;
-    if (!s) return;
-    const { map } = s;
-    const warned = map.nodes.filter((n) => n.warning).length;
-    const tables = `${map.nodes.length} tables`;
-    this.panel.classList.toggle('greyed', !map.parses || s.stale);
-    this.panel.classList.toggle('collapsed', !on);
+    const map = s?.map ?? null;
+    const warned = map ? map.nodes.filter((n) => n.warning).length : 0;
+    const tables = map ? `${map.nodes.length} tables` : '';
+    // Shown, the panel keeps its place even with no map, so the editor does not change width as tables come and go.
+    this.split.hidden = this.panel.hidden = !on;
+    this.chip.hidden = on || !map;
+    this.chip.classList.toggle('warn', warned > 0);
+    this.chip.textContent = warned ? `⚠ ${tables}` : tables;
+    this.chip.title = `Show the query map (Ctrl+Shift+M)${warned ? `\n${warned === 1 ? 'A table is' : `${warned} tables are`} not joined to the rest.` : ''}`;
+    if (!on) return;
+    this.applyWidth();
+    this.panel.classList.toggle('greyed', !!map && (!map.parses || !!s?.stale));
 
     const toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.className = 'minimap-toggle';
     toggle.onclick = () => toggleMiniMap();
-    if (!on) {
-      // Hidden: a small chip, which still says when a table is not joined.
-      toggle.textContent = warned ? `⚠ ${tables}` : tables;
-      toggle.title = `Show the query map (Ctrl+Shift+M)${warned ? `\n${warned === 1 ? 'A table is' : `${warned} tables are`} not joined to the rest.` : ''}`;
-      if (warned) toggle.classList.add('warn');
-      this.panel.replaceChildren(toggle);
-      return;
-    }
     toggle.textContent = '–';
     toggle.title = 'Hide the query map (Ctrl+Shift+M)';
     toggle.setAttribute('aria-label', 'Hide the query map');
     const head = document.createElement('div');
     head.className = 'minimap-head';
     const caption = document.createElement('span');
-    caption.textContent = !map.parses || s.stale ? `${tables} · as last read` : tables;
+    caption.textContent = !map ? 'Query map' : !map.parses || s!.stale ? `${tables} · as last read` : tables;
     if (warned) {
       const w = document.createElement('span');
       w.className = 'warn';
@@ -282,12 +341,21 @@ export class MiniMap {
       caption.append(w);
     }
     head.append(caption, toggle);
-    this.panel.replaceChildren(head, this.draw(s.map, s.version, !s.stale));
+    const body = document.createElement('div');
+    body.className = 'minimap-body';
+    if (s) body.append(this.draw(s.map, s.version, !s.stale));
+    else {
+      const note = document.createElement('p');
+      note.className = 'minimap-note';
+      note.textContent = 'The tables of the statement at the cursor, and how they are joined, show here when it has two or more.';
+      body.append(note);
+    }
+    this.panel.replaceChildren(head, body);
   }
 
   private draw(map: JoinMap, version: number, live: boolean): SVGSVGElement {
     const { boxes, groups, width, height } = layout(map);
-    const svg = el('svg', { viewBox: `0 0 ${width} ${height}`, width, height, role: 'group', 'aria-label': 'Tables of this statement and how they are joined' });
+    const svg = el('svg', { viewBox: `0 0 ${width} ${height}`, width: Math.ceil(width * SCALE), height: Math.ceil(height * SCALE), role: 'group', 'aria-label': 'Tables of this statement and how they are joined' });
 
     for (const g of groups) {
       svg.append(el('rect', { class: 'mm-group', x: g.x, y: g.y, width: g.w, height: g.h, rx: 4 }),
