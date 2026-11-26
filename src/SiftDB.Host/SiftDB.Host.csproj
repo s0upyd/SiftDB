@@ -23,8 +23,10 @@
   <ItemGroup>
     <ProjectReference Include="..\SiftDB.Engine\SiftDB.Engine.csproj" />
     <ProjectReference Include="..\SiftDB.Bridge\SiftDB.Bridge.csproj" />
-    <!-- Spike: referenced directly. Real plugin loading (AssemblyLoadContext) comes later. -->
-    <ProjectReference Include="..\SiftDB.Providers.Postgres\SiftDB.Providers.Postgres.csproj" />
+    <!-- Providers are plugins (design section 14, F18): built first, never referenced, and copied to providers\<id>\
+         next to the exe by build/SiftDB.Providers.targets. -->
+    <ProjectReference Include="..\SiftDB.Providers.Postgres\SiftDB.Providers.Postgres.csproj" ReferenceOutputAssembly="false" Private="false" />
+    <SiftDBProvider Include="..\SiftDB.Providers.Postgres\SiftDB.Providers.Postgres.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -57,5 +59,7 @@
       <Content Include="@(UiOutput)" Link="ui\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     </ItemGroup>
   </Target>
+
+  <Import Project="..\..\build\SiftDB.Providers.targets" />
 
 </Project>

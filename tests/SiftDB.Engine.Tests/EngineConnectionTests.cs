@@ -315,3 +315,52 @@ public sealed class EngineConnectionTests : IAsyncLifetime
         Assert.Contains("not available", _sink.Raw.Last());
     }
 }
+
+/// <summary>Saved connections of a provider that didn't load stay saved and say why they can't be used (F18).</summary>
+public sealed class MissingProviderConnectionTests : IDisposable
+{
+    private readonly DirectoryInfo _dir = Directory.CreateTempSubdirectory("siftdb-engine-missing-");
+
+    public void Dispose() => _dir.Delete(recursive: true);
+
+    [Fact]
+    public async Task A_connection_whose_provider_did_not_load_is_kept_and_says_why()
+    {
+        var path = Path.Combine(_dir.FullName, "connections.json");
+        new ConnectionStore(path, new MemorySecrets()).Save(
+            new SavedConnection("d1", "Orders table", "dynamodb", new Dictionary<string, string> { ["region"] = "eu-west-2" }, false, false), null);
+        var before = File.ReadAllText(path);
+        var events = new List<string>();
+        var reports = new[] { new ProviderReport("x", "dynamodb", "Amazon DynamoDB", "0.4.0", 14, 14, ProviderStatus.Incompatible, "Incompatible: needs contract v14 or later.") };
+        await using var engine = new EngineHost([], new ListOutput(events), new ConnectionStore(path, new MemorySecrets()), providerReports: reports);
+
+        await engine.HandleCommandAsync("""{"type":"listConnections","id":1}""");
+        var c = JsonDocument.Parse(events.Last()).RootElement.GetProperty("connections").EnumerateArray().Single();
+        Assert.Equal("Orders table", c.GetProperty("name").GetString());
+        Assert.Contains("needs the Amazon DynamoDB provider, which didn't load", c.GetProperty("unavailable").GetString());
+        Assert.Contains("v14", c.GetProperty("unavailable").GetString());
+
+        await engine.HandleCommandAsync("""{"type":"connect","id":2,"savedId":"d1"}""");
+        Assert.Contains("can't be opened", JsonDocument.Parse(events.Last()).RootElement.GetProperty("message").GetString());
+        Assert.Equal(before, File.ReadAllText(path)); // never deleted or rewritten
+    }
+
+    [Fact]
+    public async Task One_for_a_provider_never_found_says_it_is_not_installed()
+    {
+        var path = Path.Combine(_dir.FullName, "connections.json");
+        new ConnectionStore(path, new MemorySecrets()).Save(
+            new SavedConnection("m1", "Old", "mysql", new Dictionary<string, string>(), false, false), null);
+        var events = new List<string>();
+        await using var engine = new EngineHost([], new ListOutput(events), new ConnectionStore(path, new MemorySecrets()));
+        await engine.HandleCommandAsync("""{"type":"listConnections","id":1}""");
+        var c = JsonDocument.Parse(events.Last()).RootElement.GetProperty("connections").EnumerateArray().Single();
+        Assert.Contains("'mysql' provider, which isn't installed", c.GetProperty("unavailable").GetString());
+    }
+
+    private sealed class ListOutput(List<string> events) : IEngineOutput
+    {
+        public void SendEvent(string json) => events.Add(json);
+        public void SendBatch(int queryId, EncodedBatch batch) { }
+    }
+}

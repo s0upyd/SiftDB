@@ -12,7 +12,7 @@ public sealed partial class EngineHost
 
     /// <summary>Without a store (tests, a host that keeps none) the defaults apply and saving is refused.</summary>
     private void GetSettings(int id) =>
-        Event(new { type = "settings", replyTo = id, settings = SettingsOut(CurrentSettings), providers = ProviderSettingsOut(), error = _settings?.LoadError });
+        Event(new { type = "settings", replyTo = id, settings = SettingsOut(CurrentSettings), providers = ProviderSettingsOut(), providerReports = ProviderReportsOut(), error = _settings?.LoadError });
 
     /// <summary>A setting left out of the command keeps its current value. A rule that is not valid is refused with the reason.</summary>
     private void SaveSettings(int id, JsonElement root)
@@ -38,7 +38,7 @@ public sealed partial class EngineHost
         };
         var saved = _settings.Save(next);
         ApplyProviderSettings(saved);
-        Event(new { type = "settings", replyTo = id, settings = SettingsOut(saved), providers = ProviderSettingsOut(), error = (string?)null });
+        Event(new { type = "settings", replyTo = id, settings = SettingsOut(saved), providers = ProviderSettingsOut(), providerReports = ProviderReportsOut(), error = (string?)null });
     }
 
     /// <summary>Hands each loaded provider its values. At startup, and after every save, so open sessions follow at once.</summary>
@@ -83,6 +83,14 @@ public sealed partial class EngineHost
         }
         return result;
     }
+
+    /// <summary>Settings › Providers: every provider found, and whether it loaded (F18).</summary>
+    private object ProviderReportsOut() => _providerReports.Select(r => new
+    {
+        id = r.Id, name = r.Name ?? r.Id ?? (r.Folder is null ? "?" : Path.GetFileName(r.Folder)), version = r.Version,
+        contractMin = r.ContractMin, contractBuilt = r.ContractBuilt, folder = r.Folder,
+        status = r.Status.ToString().ToLowerInvariant(), reason = r.Reason,
+    });
 
     private object ProviderSettingsOut() => _providers.Values.Where(p => p.Settings.Count > 0).Select(p => new
     {

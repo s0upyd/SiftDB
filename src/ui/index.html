@@ -137,6 +137,10 @@
     .finline { display: flex; gap: 6px; padding: 0 !important; }
     .finline input { flex: 1; min-width: 0; padding: 4px 6px; }
     .fhelp { color: var(--dim); font-size: 12px; }
+    /* Settings › Providers: one row per provider found. A status other than Loaded is red and always says so in words. */
+    .provrow { display: flex; flex-direction: column; gap: 2px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+    .provstatus.warn { color: var(--tx-failed); }
+    .provfolder { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     /* An editable dropdown (the connection form's Database): an input with a list button inside its right edge. */
     .fcombo { position: relative; min-width: 0; }
     .fcombo > input { width: 100%; padding: 4px 28px 4px 6px; }

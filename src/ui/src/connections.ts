@@ -34,6 +34,8 @@ export interface SavedConnection {
   autoTransaction: boolean;
   /** A password is saved (never the password itself). */
   hasPassword: boolean;
+  /** Why it can't be used now: its provider didn't load (F18). It stays saved, untouched, and can't be opened or edited. */
+  unavailable?: string | null;
 }
 
 /** What the engine has saved, refreshed after every change. */

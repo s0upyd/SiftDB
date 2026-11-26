@@ -293,8 +293,9 @@ const savedIdOf = (choice: string) => (choice.startsWith('saved:') ? choice.slic
 /** At startup and for new sheets: the last connection used, else the first saved one, else a pasted string. */
 function defaultChoice(): string {
   const last = catalog?.lastUsed && catalog.byId(catalog.lastUsed);
-  if (last) return `saved:${last.id}`;
-  return catalog?.saved[0] ? `saved:${catalog.saved[0].id}` : STRING_CHOICE;
+  if (last && !last.unavailable) return `saved:${last.id}`;
+  const first = catalog?.saved.find((c) => !c.unavailable);
+  return first ? `saved:${first.id}` : STRING_CHOICE;
 }
 
 /** What Connect would open for this sheet, or null when there is nothing to open (an empty string). */
@@ -313,7 +314,12 @@ function renderPicker() {
   none.disabled = true;
   pickEl.replaceChildren(
     ...(choice === NONE_CHOICE ? [none] : []),
-    ...catalog.saved.map((c) => option(`saved:${c.id}`, `${c.name}${c.readOnly ? ' (read-only)' : ''} — ${catalog.describe(c)}`)),
+    ...catalog.saved.map((c) => {
+      // Its provider didn't load (F18): listed, greyed, and not pickable; one a sheet already shows stays shown.
+      const o = option(`saved:${c.id}`, `${c.name}${c.unavailable ? ' (unavailable)' : c.readOnly ? ' (read-only)' : ''} — ${catalog.describe(c)}`);
+      if (c.unavailable) { o.disabled = true; o.title = c.unavailable; }
+      return o;
+    }),
     option(STRING_CHOICE, 'Connection string…'));
 
   const id = savedIdOf(choice);
@@ -326,11 +332,13 @@ function renderPicker() {
   const isString = choice === STRING_CHOICE;
   connEl.hidden = !isString;
   saveAsBtn.hidden = !isString;
-  editBtn.disabled = isString || choice === NONE_CHOICE || !!catalog.error;
-  newConnBtn.disabled = !!catalog.error || catalog.providers.length === 0;
   const picked = id ? catalog.byId(id) : null;
-  pickEl.title = picked
-    ? `${picked.name}: ${catalog.provider(picked.provider)?.displayName ?? picked.provider}, ${catalog.describe(picked)}${picked.readOnly ? '. Read-only: the server refuses changes.' : picked.autoTransaction ? '. Auto-transaction: always inside a transaction; changes wait for Commit.' : ''}`
+  editBtn.disabled = isString || choice === NONE_CHOICE || !!catalog.error || !!picked?.unavailable;
+  newConnBtn.disabled = !!catalog.error || catalog.providers.length === 0;
+  pickEl.title = picked?.unavailable
+    ? `${picked.name}: ${picked.unavailable}`
+    : picked
+    ? `${picked.name}:${catalog.provider(picked.provider)?.displayName ?? picked.provider}, ${catalog.describe(picked)}${picked.readOnly ? '. Read-only: the server refuses changes.' : picked.autoTransaction ? '. Auto-transaction: always inside a transaction; changes wait for Commit.' : ''}`
     : 'Type a connection string, or save a connection to pick it here';
 }
 
@@ -893,7 +901,7 @@ async function connectTo() {
   if (!sheet) return;
   const current = sheet.target ? choiceFor(sheet.target) : null;
   const choices = [
-    ...catalog.saved.map((c) => ({
+    ...catalog.saved.filter((c) => !c.unavailable).map((c) => ({
       label: `${c.name}${c.readOnly ? ' (read-only)' : ''}`,
       description: [`saved:${c.id}` === current ? 'connected' : '', catalog.describe(c)].filter(Boolean).join(' · '),
       value: `saved:${c.id}`,

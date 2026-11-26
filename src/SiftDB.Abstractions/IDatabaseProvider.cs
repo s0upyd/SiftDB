@@ -15,6 +15,20 @@ public static class ProviderContract
     /// ColumnDetail.MaxLength and LengthCheck (a length check shown on its column).
     /// </summary>
     public const int CurrentVersion = 13;
+
+    /// <summary>
+    /// The oldest contract a provider can be built against and still load (design section 14, F18). It holds because of
+    /// one rule: <b>Abstractions only grows.</b> New members get default ("not supported") implementations; existing
+    /// members, records' constructors included, are never changed or removed. A change that breaks that rule raises this
+    /// number on purpose, and is a <c>!</c> commit. v13 is the floor: it added parameters to ColumnDetail's constructor.
+    /// </summary>
+    public const int MinimumVersion = 13;
+
+    /// <summary>
+    /// Whether a provider built against contract <paramref name="built"/>, which works with this app's contract from
+    /// <paramref name="min"/> on, can be loaded here.
+    /// </summary>
+    public static bool Accepts(int min, int built) => built >= MinimumVersion && min <= CurrentVersion && min <= built;
 }
 
 public interface IDatabaseProvider

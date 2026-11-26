@@ -30,7 +30,7 @@ public sealed partial class EngineHost
     {
         var saved = Store.Get(savedId);
         if (saved is null) { Error(id, "That connection is no longer saved. Pick another one."); return; }
-        if (!_providers.TryGetValue(saved.Provider, out var p)) { Error(id, $"No provider '{saved.Provider}' for '{saved.Name}'"); return; }
+        if (!_providers.TryGetValue(saved.Provider, out var p)) { Error(id, $"{saved.Name} can't be opened. {MissingProvider(saved.Provider)}"); return; }
 
         var password = typed ?? (saved.RememberPassword ? Store.GetPassword(savedId) : null) ?? _promptedPasswords.GetValueOrDefault(savedId);
         if (password is null && !saved.RememberPassword)
@@ -54,6 +54,15 @@ public sealed partial class EngineHost
         Store.SetLastUsed(savedId);
     }
 
+    /// <summary>Why a saved connection of <paramref name="providerId"/> can't be used: its provider isn't there, or didn't load.</summary>
+    private string MissingProvider(string providerId)
+    {
+        var r = _providerReports.LastOrDefault(r => string.Equals(r.Id, providerId, StringComparison.OrdinalIgnoreCase));
+        return r is null
+            ? $"It needs the '{providerId}' provider, which isn't installed."
+            : $"It needs the {r.Name ?? r.Id} provider, which didn't load. {r.Reason}";
+    }
+
     private void ListConnections(int id)
     {
         var store = Store;
@@ -68,6 +77,8 @@ public sealed partial class EngineHost
             {
                 id = c.Id, name = c.Name, provider = c.Provider, fields = c.Fields, rememberPassword = c.RememberPassword,
                 readOnly = c.ReadOnly, autoTransaction = c.AutoTransaction, hasPassword = c.RememberPassword && store.HasPassword(c.Id),
+                // Its provider didn't load: the connection stays saved, untouched, and can't be opened or edited until it does (F18).
+                unavailable = _providers.ContainsKey(c.Provider) ? null : MissingProvider(c.Provider),
             }),
             lastUsed = store.LastUsed,
         });

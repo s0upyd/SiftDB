@@ -23,6 +23,10 @@
     <ProjectReference Include="..\..\src\SiftDB.Providers.Postgres\SiftDB.Providers.Postgres.csproj" />
     <ProjectReference Include="..\..\src\SiftDB.Engine\SiftDB.Engine.csproj" />
     <ProjectReference Include="..\..\src\SiftDB.Bridge\SiftDB.Bridge.csproj" />
+    <!-- Also copied to providers\postgres\, so ProviderLoadingTests load it the way the app does (F18). -->
+    <SiftDBProvider Include="..\..\src\SiftDB.Providers.Postgres\SiftDB.Providers.Postgres.csproj" />
   </ItemGroup>
+
+  <Import Project="..\..\build\SiftDB.Providers.targets" />
 
 </Project>

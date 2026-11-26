@@ -7,7 +7,6 @@ using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Win32;
 using SiftDB.Engine;
-using SiftDB.Providers.Postgres;
 
 namespace SiftDB.Host;
 
@@ -34,7 +33,9 @@ public partial class MainWindow : Window, IEngineOutput
         var dir = ConnectionStore.DefaultDirectory;
         var store = new ConnectionStore(Path.Combine(dir, "connections.json"), new DpapiSecretStore(Path.Combine(dir, "secrets.json")));
         _settings = new SettingsStore(SettingsStore.DefaultPath);
-        _engine = new EngineHost([new PostgresProvider()], this, store, new SessionStore(SessionStore.DefaultDirectory), _settings);
+        // Providers are plugins in providers\<id>\ (design section 14, F18); one that doesn't fit is left out with a reason.
+        var providers = ProviderLoader.LoadAll(ProviderLoader.DefaultDirectory);
+        _engine = new EngineHost(providers.Providers, this, store, new SessionStore(SessionStore.DefaultDirectory), _settings, providers.Reports);
         SourceInitialized += (_, _) => ApplyTitleBarTheme(IsDarkTheme());
         Loaded += async (_, _) => await InitWebAsync();
         Closing += OnClosing;

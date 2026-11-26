@@ -1,0 +1,49 @@
+<Project>
+  <!--
+    Imported by projects that ship providers: the host, and the tests that load providers as the app does (design
+    section 14, F18). Each SiftDBProvider item names a provider project; its whole output is copied to providers\<id>\
+    next to this project's output, and next to its publish output, which is what the Velopack package holds, so
+    first-party providers ship and update with the app.
+
+    The provider must also be a ProjectReference, so it is built first. The host doesn't use its code, so it references
+    it without its assembly:
+      <ProjectReference Include="..\SiftDB.Providers.Postgres\SiftDB.Providers.Postgres.csproj" ReferenceOutputAssembly="false" Private="false" />
+      <SiftDBProvider Include="..\SiftDB.Providers.Postgres\SiftDB.Providers.Postgres.csproj" />
+  -->
+  <Target Name="_FindSiftDBProviders">
+    <!-- Providers are RID-agnostic libraries: asked without this project's RID, so a publish for win-x64 finds the
+         output the reference was built into. Only asked where it is, never built here. -->
+    <MSBuild Projects="@(SiftDBProvider)" Targets="GetSiftDBProvider" Properties="Configuration=$(Configuration)"
+             RemoveProperties="RuntimeIdentifier;SelfContained;PublishDir;TargetFramework;_IsPublishing">
+      <Output TaskParameter="TargetOutputs" ItemName="_SiftDBProviderDir" />
+    </MSBuild>
+    <!-- Two steps: %(RecursiveDir) can't be read in an Include that batches over the providers, so each file's folder
+         below its provider's output (Rel: "" or "runtimes\win-x64\native\") is worked out afterwards. -->
+    <ItemGroup>
+      <_SiftDBProviderFound Include="%(_SiftDBProviderDir.Identity)**\*" Folder="%(_SiftDBProviderDir.Id)" Base="%(_SiftDBProviderDir.Identity)" />
+      <_SiftDBProviderFile Include="@(_SiftDBProviderFound)" Rel="$([MSBuild]::EnsureTrailingSlash($([MSBuild]::MakeRelative('%(Base)', '%(RootDir)%(Directory)'))))" />
+    </ItemGroup>
+    <Error Condition="'@(SiftDBProvider)' != '' and !Exists('%(_SiftDBProviderDir.Identity)siftdb-provider.json')"
+           Text="%(_SiftDBProviderDir.Id): no siftdb-provider.json in %(_SiftDBProviderDir.Identity). Is the provider a ProjectReference too, so it is built first?" />
+  </Target>
+
+  <Target Name="CopySiftDBProviders" AfterTargets="Build" DependsOnTargets="_FindSiftDBProviders" Condition="'@(SiftDBProvider)' != ''">
+    <Copy SourceFiles="@(_SiftDBProviderFile)" SkipUnchangedFiles="true"
+          DestinationFiles="@(_SiftDBProviderFile->'$(OutDir)providers\%(Folder)\%(Rel)%(Filename)%(Extension)')" />
+  </Target>
+
+  <!-- A publish for one runtime (the release: win-x64) keeps only that runtime's native libraries (runtimes\win-x64\,
+       and runtimes\win\ for the family), as the app's own publish does; the others are megabytes nobody can use. -->
+  <Target Name="PublishSiftDBProviders" AfterTargets="Publish" DependsOnTargets="_FindSiftDBProviders" Condition="'@(SiftDBProvider)' != ''">
+    <PropertyGroup>
+      <_SiftDBRidFamily>$(RuntimeIdentifier)</_SiftDBRidFamily>
+      <_SiftDBRidFamily Condition="$(RuntimeIdentifier.Contains('-'))">$(RuntimeIdentifier.Substring(0, $(RuntimeIdentifier.IndexOf('-'))))</_SiftDBRidFamily>
+    </PropertyGroup>
+    <ItemGroup>
+      <_SiftDBPublishFile Include="@(_SiftDBProviderFile)"
+        Condition="'$(RuntimeIdentifier)' == '' or !$([System.Text.RegularExpressions.Regex]::IsMatch('%(Rel)', '^runtimes[\\/]')) or $([System.Text.RegularExpressions.Regex]::IsMatch('%(Rel)', '^runtimes[\\/]($(RuntimeIdentifier)|$(_SiftDBRidFamily))[\\/]'))" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_SiftDBPublishFile)" SkipUnchangedFiles="true"
+          DestinationFiles="@(_SiftDBPublishFile->'$(PublishDir)providers\%(Folder)\%(Rel)%(Filename)%(Extension)')" />
+  </Target>
+</Project>

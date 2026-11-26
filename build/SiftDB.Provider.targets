@@ -1,0 +1,40 @@
+<Project>
+  <!--
+    Imported by every provider project (design section 14, F18). It makes the project a plugin: its dependencies are
+    copied next to it with a .deps.json, so its own AssemblyLoadContext resolves them, native libraries included. It
+    also writes siftdb-provider.json, the manifest the app reads before loading any of the provider's code.
+
+    The project sets SiftDBProviderId and SiftDBProviderName, and references SiftDB.Abstractions with
+    Private="false" ExcludeAssets="runtime": Abstractions is always the app's, never the provider's own copy
+    (otherwise IDatabaseProvider would exist twice).
+  -->
+  <PropertyGroup>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <!-- The contract this provider is built against; ProviderBuildTests checks it matches ProviderContract.CurrentVersion.
+         SiftDBContractMin, the oldest contract it works with, defaults to the same. -->
+    <SiftDBContractVersion>13</SiftDBContractVersion>
+    <SiftDBContractMin Condition="'$(SiftDBContractMin)' == ''">$(SiftDBContractVersion)</SiftDBContractMin>
+  </PropertyGroup>
+
+  <Target Name="WriteSiftDBProviderManifest" AfterTargets="Build">
+    <PropertyGroup>
+      <!-- Read here, not above: the SDK sets Version after the project's own properties. -->
+      <_SiftDBVersion>$(Version)</_SiftDBVersion>
+      <_SiftDBManifest>{
+  "id": "$(SiftDBProviderId)",
+  "name": "$(SiftDBProviderName)",
+  "version": "$(_SiftDBVersion)",
+  "entry": "$(TargetFileName)",
+  "contract": { "min": $(SiftDBContractMin), "built": $(SiftDBContractVersion) }
+}</_SiftDBManifest>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(TargetDir)siftdb-provider.json" Lines="$(_SiftDBManifest)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+  </Target>
+
+  <!-- For projects that ship this provider (build/SiftDB.Providers.targets): where its output is, and its folder name. -->
+  <Target Name="GetSiftDBProvider" Returns="@(_SiftDBProviderOutput)">
+    <ItemGroup>
+      <_SiftDBProviderOutput Include="$(TargetDir)" Id="$(SiftDBProviderId)" />
+    </ItemGroup>
+  </Target>
+</Project>

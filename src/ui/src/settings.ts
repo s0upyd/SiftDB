@@ -47,6 +47,12 @@ export interface ProviderSettingInfo {
 /** A provider with settings of its own: one category in the editor. */
 export interface ProviderSettingsInfo { id: string; displayName: string; settings: ProviderSettingInfo[] }
 
+/** A provider the app found at startup (design section 14, F18): loaded, or left out with the reason. */
+export interface ProviderReport {
+  id: string | null; name: string; version: string | null; contractMin: number | null; contractBuilt: number | null;
+  folder: string | null; status: 'loaded' | 'incompatible' | 'failed' | 'duplicate'; reason: string | null;
+}
+
 /** Until the engine answers. Its defaults hold the presets; the page never invents them. */
 const DEFAULTS: UserSettings = {
   newSheetMode: 'assisted', zoom: 100, warnAllRows: true, format: { ...FORMAT_DEFAULTS }, whatsNew: 'majorMinor', resultRules: [], providerSettings: {},
@@ -57,6 +63,8 @@ export class Settings {
   values: UserSettings = { ...DEFAULTS };
   /** The providers that have settings of their own, as the engine describes them. */
   providers: ProviderSettingsInfo[] = [];
+  /** Every provider the app found, and whether it loaded (Settings › Providers). */
+  providerReports: ProviderReport[] = [];
   /** The zoom sizes offered, in percent, as the engine lists them. */
   zoomChoices: number[] = [100];
   /** Format SQL's indent sizes, in spaces, and the line width's bounds, as the engine gives them. */
@@ -71,6 +79,7 @@ export class Settings {
     const r = await this.bridge.request({ type: 'getSettings' });
     if (r.type === 'error') { this.error = r.message; return; }
     this.take(r.settings, r.providers);
+    if (Array.isArray(r.providerReports)) this.providerReports = r.providerReports;
     this.error = r.error ?? null;
   }
 
@@ -79,6 +88,7 @@ export class Settings {
     const r = await this.bridge.request({ type: 'saveSettings', settings: values });
     if (r.type === 'error') return r.message;
     this.take(r.settings, r.providers);
+    if (Array.isArray(r.providerReports)) this.providerReports = r.providerReports;
     return null;
   }
 
@@ -257,6 +267,35 @@ function providerCategory(p: ProviderSettingsInfo): Category {
   };
 }
 
+/**
+ * Providers (design section 14, F18): every provider found at startup, with its version and contract, and whether it
+ * loaded. One that didn't says why; its saved connections stay, greyed out in the picker until it loads.
+ */
+function providersCategory(settings: Settings): Category {
+  const STATUS: Record<ProviderReport['status'], string> = {
+    loaded: 'Loaded', incompatible: 'Not loaded', failed: 'Failed to load', duplicate: 'Not loaded (a duplicate)',
+  };
+  return {
+    id: 'providers',
+    label: 'Providers',
+    build() {
+      const reports = settings.providerReports;
+      const rows = reports.map((r) => {
+        const facts = [r.version ? `version ${r.version}` : '', r.contractBuilt !== null ? `contract v${r.contractBuilt}` : ''].filter(Boolean).join(' · ');
+        const status = el('span', { className: r.status === 'loaded' ? 'provstatus' : 'provstatus warn', textContent: STATUS[r.status] });
+        return el('div', { className: 'provrow' },
+          el('div', {}, el('strong', { textContent: r.name }), ...(facts ? [el('span', { className: 'dim', textContent: ` · ${facts}` })] : []), el('span', { textContent: ' · ' }), status),
+          ...(r.reason ? [el('p', { className: 'fhelp', textContent: r.reason })] : []),
+          ...(r.folder ? [el('p', { className: 'fhelp provfolder', textContent: r.folder, title: r.folder })] : []));
+      });
+      const page = el('div', { className: 'fgroup' },
+        ...(rows.length ? rows : [el('p', { className: 'fhelp', textContent: 'No database providers were found. Reinstalling SiftDB puts them back.' })]),
+        el('p', { className: 'fhelp', textContent: 'Each kind of database is a provider, in its own folder next to SiftDB. One that doesn’t load is left out; its saved connections are kept, untouched, until it loads again.' }));
+      return { page, apply: () => {}, focus: () => {} };
+    },
+  };
+}
+
 /** How a check for updates went (the host's "updateCheck"). */
 export interface UpdateCheckResult {
   status: 'notInstalled' | 'upToDate' | 'ready' | 'failed';
@@ -350,7 +389,7 @@ function aboutCategory(hooks: SettingsHooks | undefined, close: () => void): Cat
 
 /** In the order they are listed: the app's own, then one per database that has settings of its own, then About. */
 const categories = (settings: Settings, hooks: SettingsHooks | undefined, close: () => void): Category[] =>
-  [appearanceCategory(settings), sqlCategory(settings), resultsCategory, ...settings.providers.map(providerCategory), aboutCategory(hooks, close)];
+  [appearanceCategory(settings), sqlCategory(settings), resultsCategory, ...settings.providers.map(providerCategory), providersCategory(settings), aboutCategory(hooks, close)];
 
 /** The category last looked at, for this run of the app: reopening the editor goes back to it. */
 let lastCategory = 'appearance';

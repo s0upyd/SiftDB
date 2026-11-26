@@ -32,22 +32,45 @@ public sealed partial class EngineHost : IAsyncDisposable
     /// <param name="store">Saved connections. Without one, only pasted connection strings can be used.</param>
     /// <param name="session">Autosave and restore of the open sheets. Without one, the session is not kept.</param>
     /// <param name="settings">User settings. Without one, the defaults apply.</param>
+    /// <param name="providerReports">
+    /// What <see cref="ProviderLoader"/> found, the providers that did not load included (Settings › Providers, and saved
+    /// connections whose provider is missing). Providers passed in without one are reported as loaded.
+    /// </param>
     public EngineHost(IEnumerable<IDatabaseProvider> providers, IEngineOutput output, ConnectionStore? store = null, SessionStore? session = null,
-        SettingsStore? settings = null)
+        SettingsStore? settings = null, IEnumerable<ProviderReport>? providerReports = null)
     {
         _store = store;
         _session = session;
         _settings = settings;
+        _providerReports.AddRange(providerReports ?? []);
+        // A provider that doesn't fit is left out with a reason; the rest of the app starts as normal (F18).
         foreach (var p in providers)
         {
-            if (p.ContractVersion != ProviderContract.CurrentVersion)
-                throw new InvalidOperationException(
-                    $"Provider '{p.Id}' targets contract v{p.ContractVersion}; this app supports v{ProviderContract.CurrentVersion}.");
-            _providers[p.Id] = p;
+            var known = _providerReports.Any(r => r.Status == ProviderStatus.Loaded && r.Id == p.Id);
+            string? reason = null;
+            if (!ProviderContract.Accepts(p.ContractVersion, p.ContractVersion))
+                reason = $"Incompatible: built for contract v{p.ContractVersion}; this version of SiftDB takes v{ProviderContract.MinimumVersion} to v{ProviderContract.CurrentVersion}.";
+            else if (_providers.ContainsKey(p.Id))
+                reason = $"Another provider with the id '{p.Id}' is already loaded.";
+            if (reason is null)
+            {
+                _providers[p.Id] = p;
+                if (!known) _providerReports.Add(new ProviderReport(null, p.Id, p.DisplayName, null, p.ContractVersion, p.ContractVersion, ProviderStatus.Loaded, null));
+            }
+            else
+            {
+                _providerReports.Add(new ProviderReport(null, p.Id, p.DisplayName, null, p.ContractVersion, p.ContractVersion,
+                    _providers.ContainsKey(p.Id) ? ProviderStatus.Duplicate : ProviderStatus.Incompatible, reason));
+            }
         }
         _out = output;
         ApplyProviderSettings(CurrentSettings);
     }
+
+    private readonly List<ProviderReport> _providerReports = [];
+
+    /// <summary>Every provider found, loaded or not, in the order found.</summary>
+    public IReadOnlyList<ProviderReport> ProviderReports => _providerReports;
 
     public async Task HandleCommandAsync(string commandJson)
     {
@@ -204,10 +227,24 @@ public sealed partial class EngineHost : IAsyncDisposable
                     break;
             }
         }
+        catch (Exception ex) when (ex is TypeLoadException or MissingMemberException)
+        {
+            // A provider built against a different SiftDB.Abstractions (F18): this command fails, the app carries on.
+            var name = ProviderOf(root)?.DisplayName;
+            Error(id, $"{(name is null ? "A database provider" : $"The {name} provider")} doesn't fit this version of SiftDB ({ex.GetType().Name}: {ex.Message}). An update of SiftDB or of the provider may help.");
+        }
         catch (Exception ex)
         {
             Error(id, ex.Message);
         }
+    }
+
+    /// <summary>The provider a command is for, when it says (a connection, or a provider id), for naming it in an error.</summary>
+    private IDatabaseProvider? ProviderOf(JsonElement root)
+    {
+        if (root.TryGetProperty("connectionId", out var c) && c.ValueKind == JsonValueKind.Number && _connections.TryGetValue(c.GetInt32(), out var state))
+            return state.Provider;
+        return OptionalString(root, "provider") is { } p ? _providers.GetValueOrDefault(p) : null;
     }
 
     /// <summary>Opens a session. <paramref name="savedId"/> is the saved connection it came from, or null for a pasted string.</summary>

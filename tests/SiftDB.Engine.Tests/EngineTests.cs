@@ -213,18 +213,37 @@ public class EngineTests
     }
 
     [Fact]
-    public async Task Rejects_provider_with_wrong_contract_version()
+    public async Task A_provider_with_a_contract_out_of_range_is_left_out_and_the_engine_starts()
     {
-        var bad = new BadProvider();
-        Assert.Throws<InvalidOperationException>(() => new EngineHost([bad], new Capture()));
-        await Task.CompletedTask;
+        var cap = new Capture();
+        await using var engine = new EngineHost([new BadProvider(), new FakeProvider(1)], cap);
+        var bad = engine.ProviderReports.Single(r => r.Id == "bad");
+        Assert.Equal(ProviderStatus.Incompatible, bad.Status);
+        Assert.Contains("v99", bad.Reason);
+        Assert.Equal(ProviderStatus.Loaded, engine.ProviderReports.Single(r => r.Id != "bad").Status);
+        // Asking for it is an error, not a crash.
+        await engine.HandleCommandAsync("""{"type":"connect","id":1,"provider":"bad","connectionString":"x"}""");
+        Assert.Contains("No provider", cap.Events.Last());
     }
 
-    private sealed class BadProvider : IDatabaseProvider
+    [Fact]
+    public async Task A_provider_built_against_another_contract_fails_the_command_and_is_named()
+    {
+        // What a provider built against a different SiftDB.Abstractions looks like at run time: a member is missing.
+        var cap = new Capture();
+        await using var engine = new EngineHost([new BadProvider(ProviderContract.CurrentVersion)], cap);
+        await engine.HandleCommandAsync("""{"type":"connect","id":1,"provider":"bad","connectionString":"x"}""");
+        var message = JsonDocument.Parse(cap.Events.Last()).RootElement.GetProperty("message").GetString();
+        Assert.Contains("The Bad DB provider doesn't fit this version of SiftDB", message);
+        await engine.HandleCommandAsync("""{"type":"getSettings","id":2}"""); // and the engine carries on
+        Assert.Contains("\"replyTo\":2", cap.Events.Last());
+    }
+
+    private sealed class BadProvider(int contract = 99) : IDatabaseProvider
     {
         public string Id => "bad";
-        public int ContractVersion => 99;
-        public string DisplayName => Id;
+        public int ContractVersion => contract;
+        public string DisplayName => "Bad DB";
         public IReadOnlyList<ConnectionField> ConnectionFields => [];
         public string BuildConnectionString(IReadOnlyDictionary<string, string> fields, string? password) => throw new NotSupportedException();
         public ParsedConnection ParseConnectionString(string connectionString) => throw new NotSupportedException();
@@ -235,7 +254,7 @@ public class EngineTests
         public ISqlParser Parser => throw new NotSupportedException();
         public IIdentifierPolicy Identifiers { get; } = new AsStored(); // the schema event lists names that need quoting
 
-        public Task<IProviderConnection> OpenAsync(string c, ConnectionOptions options, CancellationToken ct) => throw new NotSupportedException();
+        public Task<IProviderConnection> OpenAsync(string c, ConnectionOptions options, CancellationToken ct) => throw new MissingMethodException("SiftDB.Abstractions.ConnectionOptions", "get_Timeout");
     }
 }
 

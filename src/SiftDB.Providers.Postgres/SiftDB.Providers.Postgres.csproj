@@ -1,7 +1,17 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- A plugin (design section 14, F18): loaded from providers\postgres\ into a load context of its own. -->
+    <SiftDBProviderId>postgres</SiftDBProviderId>
+    <SiftDBProviderName>PostgreSQL</SiftDBProviderName>
+  </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\SiftDB.Abstractions\SiftDB.Abstractions.csproj" />
+    <!-- The app's own copy is used, never one next to the provider. -->
+    <ProjectReference Include="..\SiftDB.Abstractions\SiftDB.Abstractions.csproj" Private="false" ExcludeAssets="runtime" />
   </ItemGroup>
 
   <ItemGroup>
@@ -9,14 +19,10 @@
     <PackageReference Include="pgsqlparser" Version="2.1.0" />
   </ItemGroup>
 
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
-
   <ItemGroup>
     <InternalsVisibleTo Include="SiftDB.Providers.Postgres.Tests" />
   </ItemGroup>
+
+  <Import Project="..\..\build\SiftDB.Provider.targets" />
 
 </Project>
